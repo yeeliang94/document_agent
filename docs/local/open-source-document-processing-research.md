@@ -1,0 +1,41 @@
+# Open-source references for document-to-template agents
+
+Researched 17 October 2026 against official repositories and documentation. Scope: a folder of mixed documents, extraction and reconciliation into structured records, human review, then population of a team-supplied template. This is a source review, not an installation, benchmark, Windows certification, or security audit.
+
+## Findings
+
+There are credible building blocks for almost every layer. The closest architectural references are LlamaAgents for document-centric workflow orchestration, DocETL for configurable LLM data processing, and LangExtract for extraction with evidence. Parsers such as Docling solve a separate, necessary problem. None of the reviewed documentation establishes a complete product that accepts arbitrary team templates and reliably resolves their business meaning, reconciles all source transactions, and fills the templates without configuration. That last conclusion is an assessment of the documented scope, not a proof that no such implementation exists.
+
+| Project and license | Verified capabilities | Fit and remaining work for this project |
+| --- | --- | --- |
+| [Docling](https://github.com/docling-project/docling), MIT code; separate model licenses | Parses PDF, DOCX, XLSX, PPTX, email and images; OCR, table/layout understanding, a unified document representation and JSON/Markdown export. Documents local execution and macOS/Linux/Windows support. | Strong ingestion candidate. Retain structured document output for evidence instead of keeping only flattened Markdown. Business extraction, cross-document matching, approval rules and template population remain application work. |
+| [LlamaAgents / Agent Workflows](https://github.com/run-llama/llama-agents), MIT | Event-driven Python workflow steps can branch, loop, parallelize, persist state and recover. The server package documents streaming, persistence and human-in-the-loop support. The old `run-llama/workflows-py` URL currently redirects here. | Closest orchestration reference to the proposed document agent. It provides control flow rather than the team's transaction rules or finished review screens. Its LlamaParse integration is a separate service dependency; open workflow code does not imply all extraction services are local/open-source. |
+| [DocETL](https://github.com/ucbepic/docetl), MIT | UC Berkeley project for LLM processing of structured/unstructured collections; natural-language map/reduce/filter operations, Python/YAML pipelines, output schemas and table-oriented results. Documents automatic pipeline optimization and a DocWrangler UI. | Useful reference for reusable task profiles and batch extraction/transformation. Does not establish preservation/filling of arbitrary Office templates. Treat optimizer quality/cost claims as project claims until measured on this workload. [Official overview](https://ucbepic.github.io/docetl/). |
+| [Google LangExtract](https://github.com/google/langextract), Apache-2.0 | Instruction/example-driven text extraction, source character spans, multiple extraction passes, JSONL output and interactive HTML evidence visualization. Documents Gemini, OpenAI-compatible endpoints and local Ollama integration. | Especially relevant to showing why a value was extracted. PDF/Office parsing still belongs upstream. Missing `char_interval` can occur, and the README explicitly explains filtering ungrounded extractions. Character grounding does not itself establish factual correctness or approval. The repository says it is not an officially supported Google product. |
+| [Unstructured](https://github.com/Unstructured-IO/unstructured), Apache-2.0 | Local library for document ingestion/partitioning and preprocessing across PDF, Word, HTML, images and more. Provides format-specific extras and Windows installation references. | Alternative broad ingestion layer. Review required native dependencies per selected format: its README lists libmagic, Poppler, Tesseract and LibreOffice. Distinguish OSS library from the vendor's newer paid API/platform features. |
+| [Microsoft MarkItDown](https://github.com/microsoft/markitdown), MIT | Converts Word, Excel, PowerPoint, PDF, images and other formats to Markdown; ZIP conversion iterates contents. Optional dependencies select formats and cloud integrations. | Lightweight baseline for document reading, useful when text structure is enough. The README explicitly positions it for text analysis and cautions against assuming high-fidelity document conversion. Not an Excel/Word template writer. Keep native workbook access for cell/formula semantics. |
+| [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), Apache-2.0 | PDF/image OCR and document parsing into JSON/Markdown; PP-StructureV3 documents fine-grained coordinates including table cells/text; multilingual OCR. | Evaluate for scanned, multilingual and table-heavy sources. Does not replace business transaction modeling, reference-data reconciliation or output-template mapping. Hardware/runtime/model installation must be validated on the intended Windows machine; advertised benchmarks do not establish accuracy on the user's documents. |
+
+## Practical shortlist
+
+My recommendation is a narrow comparison using the team's actual folder and blank output template:
+
+1. Use **Docling** as the first parser candidate; compare **PaddleOCR** on difficult scans and **MarkItDown** on ordinary digital Office files. Do not add all three as mandatory dependencies before measuring their benefit.
+2. Evaluate **LangExtract** for evidence-linked extraction, or implement equivalent source references in the approved model stack. Keep original file/page/cell references alongside any extracted text offsets.
+3. Study **LlamaAgents** for recoverable workflows and review pauses, and **DocETL** for configurable bulk operations. Choose one main execution approach rather than combining frameworks automatically.
+4. Build a dedicated output adapter that opens a copy of the supplied template, writes only mapped fields, preserves the required formulas/structure, and independently validates the resulting file. Schema-constrained JSON is an intermediate record; it is not proof that the destination workbook is correct.
+
+These recommendations are engineering judgments, not capabilities promised by the linked projects.
+
+## Enterprise Windows considerations
+
+The local [environment handoff](document-intelligence-environment-handoff.md) records gateway restrictions, certificate handling and uncertain download permissions. It does not establish that Docker, WSL, local GPUs or arbitrary model downloads are available.
+
+- Docling's [advanced options](https://docling-project.github.io/docling/usage/advanced_options/) explicitly document that models download at first use, provide a prefetch/offline path, and distinguish remote-service opt-in from downloading model weights. Plan approved artifact provisioning separately from document processing.
+- LangExtract's [README](https://github.com/google/langextract) documents a configurable OpenAI-compatible endpoint. This is a potential integration path, not evidence that it supports the enterprise gateway's exact model aliases, protocol and structured-output behavior. Its provider must pass the same gateway acceptance checks as the rest of the app.
+- Unstructured's [installation instructions](https://github.com/Unstructured-IO/unstructured#installing-the-library) show that supporting all formats can require multiple native utilities. Prefer format-specific dependencies and test a small Windows installation before committing to the stack.
+- All projects' published licenses apply to the relevant code; model weights, transitive dependencies and optional services can have separate terms. Pin and inspect the exact components selected for distribution.
+
+## What a pilot should measure
+
+Use a hand-checked sample and measure record completeness as well as field accuracy, source-reference correctness, cross-document conflict handling, template/formula preservation, rerun behavior, exception-review effort, latency/cost and native Windows operation. The decisive test is a correct, reviewable completed team template from a real submission; a good-looking Markdown conversion is only an intermediate milestone.

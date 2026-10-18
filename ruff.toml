@@ -1,0 +1,19 @@
+line-length = 120
+target-version = "py312"
+extend-exclude = ["docs", "prototype", "data", "output"]
+
+[format]
+quote-style = "single"
+
+[lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501", "B008"]  # B008: FastAPI declares parameters with File()/Form() defaults
+
+[lint.per-file-ignores]
+# OS certificate trust must be injected before network libraries are imported.
+"app/main.py" = ["E402"]
+"scripts/check_openai.py" = ["E402"]
+"scripts/live_smoke.py" = ["E402"]
+
+[lint.isort]
+known-local-folder = ["helpers"]
