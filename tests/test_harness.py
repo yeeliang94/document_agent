@@ -995,3 +995,117 @@ def test_worker_reads_do_not_establish_document_coverage_for_the_main_agent(tmp_
         assert state.get('read', 'worker:' + path)['complete']
         state.record_read(path, 1, 1, 0, 10, 10)
         assert state.get('read', path)['complete']
+
+
+def test_invalidated_dataset_can_be_rebuilt_from_the_same_region(tmp_path):
+    _, _, deps, state = fixture_job(tmp_path)
+    dataset = extract(state)
+    state.instruction('Amounts were corrected at source')
+    state.apply_instructions([1], 'Amounts changed', invalidate=[dataset['id']])
+    rebuilt = extract(state)
+    assert rebuilt['id'] != dataset['id'] and not rebuilt.get('stale')
+    path = output_copy(deps)
+    assert populate_template(state, rebuilt['id'], path, destination(), 'rebuilt')['records_written'] == 3
+
+
+def test_reset_rejects_transforms_built_on_superseded_datasets(tmp_path):
+    _, _, deps, state = fixture_job(tmp_path)
+    dataset = extract(state)
+    state.instruction('Use a different month')
+    state.apply_instructions([1], 'Everything changes', reset_all=True)
+    with pytest.raises(ValueError, match='Instructions changed'):
+        transform_dataset(state, dataset['id'], [Transformation(operation='select', fields=['id', 'amount'])])
+
+
+def test_equality_filters_compare_decimal_amounts_as_numbers(tmp_path):
+    _, _, _, state = fixture_job(tmp_path)
+    dataset = extract(state)
+    kept = transform_dataset(
+        state,
+        dataset['id'],
+        [
+            Transformation(
+                operation='filter', predicate={'field': 'amount', 'operator': 'eq', 'value': 20}, reason='Other rows'
+            )
+        ],
+    )
+    _, rows = dataset_rows(state, kept['id'])
+    assert [row['values']['amount'] for row in rows] == ['20']
+    # Identifiers keep exact text matching, so leading zeros still matter.
+    by_id = transform_dataset(
+        state,
+        dataset['id'],
+        [Transformation(operation='filter', predicate={'field': 'id', 'operator': 'eq', 'value': 1}, reason='Other')],
+    )
+    assert by_id['rows'] == 0
+
+
+def test_blank_optional_amounts_validate_as_unchanged(tmp_path):
+    store, job, deps, state = fixture_job(tmp_path)
+    dataset = extract(state)
+    blanked = transform_dataset(
+        state, dataset['id'], [Transformation(operation='arithmetic', field='amount', target='bonus', operand=0)]
+    )
+    _, rows = dataset_rows(state, blanked['id'])
+    for row in rows:
+        row['values']['bonus'] = None
+    state.put('rows', blanked['id'], rows)
+    path = output_copy(deps)
+    target = destination()
+    target.columns.append(DestinationColumn(field='bonus', column=5))
+    populate_template(state, blanked['id'], path, target, 'blank')
+    run_tool(store, job['id'], 'validate_output', {'path': path})
+    assert validate_job(deps, path)['passed'], validate_job(deps, path)['failures']
+
+
+def test_shared_join_source_is_not_excluded_while_a_surviving_row_uses_it(tmp_path):
+    _, _, _, state = fixture_job(tmp_path)
+    dataset = extract(state)
+    grouped = transform_dataset(state, dataset['id'], [Transformation(operation='select', fields=['amount'])])
+    rates = state.get('rows', grouped['id'])[:1]
+    rates[0]['values'] = {'code': 'all', 'rate': '1'}
+    state.put('rows', 'rates', rates)
+    state.put(
+        'dataset', 'rates', {'id': 'rates', 'kinds': {'code': 'raw', 'rate': 'decimal'}, 'instruction_revision': 0}
+    )
+    shared = rates[0]['sources'][0]
+    joined = transform_dataset(
+        state,
+        dataset['id'],
+        [
+            Transformation(
+                operation='lookup',
+                field='id',
+                target='code',
+                lookup={'000001': 'all', '000002': 'all', '000003': 'all'},
+            ),
+            Transformation(operation='join', fields=['code'], right_keys=['code'], dataset='rates', target='r_'),
+            Transformation(
+                operation='filter', predicate={'field': 'id', 'operator': 'ne', 'value': '000002'}, reason='Leaver'
+            ),
+        ],
+    )
+    excluded = {source for source, _ in state.get('exclusions', joined['id'])}
+    assert shared not in excluded
+    assert excluded
+
+
+def test_editing_one_cell_keeps_provenance_for_the_rest_of_the_row(tmp_path):
+    store, job, deps, state = fixture_job(tmp_path)
+    dataset = extract(state)
+    path = output_copy(deps)
+    populate_template(state, dataset['id'], path, destination(), 'bulk')
+    observation = next(key for key, item in state.all('observation') if item.get('row') == 2)
+    run_tool(
+        store,
+        job['id'],
+        'write_cells',
+        {'path': path, 'changes': [{'sheet': 'Output', 'cell': 'B2', 'value': 10, 'record': observation}]},
+    )
+    assignment = state.get('assignment', next(key for key, item in state.all('assignment') if item['row'] == 2))
+    assert assignment['provenance']['id']['dataset'] == dataset['id']
+    assert assignment['provenance']['amount']['dataset'] is None
+    state.instruction('Identifiers changed')
+    state.apply_instructions([1], 'IDs are wrong', invalidate=[dataset['id']])
+    run_tool(store, job['id'], 'validate_output', {'path': path})
+    assert any('invalidated' in failure for failure in validate_job(deps, path)['failures'])

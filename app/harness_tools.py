@@ -18,6 +18,7 @@ from .datasets import (
     convert,
     dataset_rows,
     extract_dataset,
+    fresh_id,
     matches,
     populate_template,
     recover_operation,
@@ -57,6 +58,13 @@ class DocumentObservation(BaseModel):
     evidence: str = Field(min_length=1)
 
 
+def assignment_datasets(assignment):
+    """Every dataset whose values an assignment still holds."""
+    if 'provenance' in assignment:
+        return sorted({cell['dataset'] for cell in assignment['provenance'].values() if cell['dataset']})
+    return [assignment['dataset']] if assignment.get('dataset') else []
+
+
 def observed_kind(values):
     present = [value for value in values if value is not None]
     numeric = all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in present)
@@ -94,12 +102,18 @@ def validate_job(deps, path):
             ):
                 failures.append('Output mapping predates current instructions')
                 continue
-            if assignment.get('dataset'):
-                try:
-                    require_current(state, assignment['dataset'])
-                except ValueError as error:
-                    failures.append(str(error))
-                    continue
+            if any(
+                cell['instruction_revision'] != state.revision('instruction_revision')
+                for cell in assignment.get('provenance', {}).values()
+            ):
+                failures.append('Output cells predate current instructions')
+                continue
+            try:
+                for dataset in assignment_datasets(assignment):
+                    require_current(state, dataset)
+            except ValueError as error:
+                failures.append(str(error))
+                continue
             destination = mapping['destination']
             if assignment['sheet'] not in workbook.sheetnames:
                 failures.append('Missing assignment sheet')
@@ -113,7 +127,7 @@ def validate_job(deps, path):
                         cell.data_type == 'n'
                         and not isinstance(actual, bool)
                         and Decimal(str(actual)) == Decimal(str(expected))
-                        if column['field'] in assignment.get('numeric_fields', [])
+                        if column['field'] in assignment.get('numeric_fields', []) and expected is not None
                         else actual == expected
                     )
                 except InvalidOperation:
@@ -220,7 +234,8 @@ def register_harness_tools(agent, delegation=None, readonly=False):
             selected = [
                 row
                 for row in rows
-                if (not predicate or matches(row['values'], predicate)) and (not exceptions_only or row['issues'])
+                if (not predicate or matches(row['values'], predicate, info.get('kinds')))
+                and (not exceptions_only or row['issues'])
             ]
             page = paginate(selected, offset, limit)
             return {'dataset': info['id'], 'rows': page.pop('items'), **page}
@@ -359,8 +374,11 @@ def register_harness_tools(agent, delegation=None, readonly=False):
                         'issues': issues,
                     }
                 )
-            dataset = identity(
-                source_id, [item.model_dump() for item in observations], state.revision('instruction_revision')
+            dataset = fresh_id(
+                state,
+                identity(
+                    source_id, [item.model_dump() for item in observations], state.revision('instruction_revision')
+                ),
             )
             info = {
                 'id': dataset,
@@ -402,7 +420,10 @@ def register_harness_tools(agent, delegation=None, readonly=False):
                 row['issues'] = [issue for issue in row['issues'] if issue not in resolution.resolved_issues]
                 row['sources'] = sorted(set(row['sources'] + resolution.supporting_records))
                 row.setdefault('resolutions', []).append(resolution.model_dump())
-            key = identity(dataset, [item.model_dump() for item in resolutions], state.revision('instruction_revision'))
+            key = fresh_id(
+                state,
+                identity(dataset, [item.model_dump() for item in resolutions], state.revision('instruction_revision')),
+            )
             updated = info | {
                 'id': key,
                 'parent': dataset,

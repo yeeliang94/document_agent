@@ -155,7 +155,7 @@ class CellChange(BaseModel):
 
 
 def assign_cells(state, path, changes):
-    """Track source-backed cell writes as output assignments, merging with any assignment already on the row."""
+    """Track source-backed cell writes as output assignments, keeping each retained cell's own provenance."""
     rows = {}
     for change in changes:
         if change.get('record'):
@@ -168,15 +168,21 @@ def assign_cells(state, path, changes):
         old = state.get('assignment', key) or {}
         old_mapping = mappings.get(old.get('operation'), {})
         fields = {column['column']: column['field'] for column in old_mapping.get('destination', {}).get('columns', [])}
+        # A bulk-written row carries one provenance for all its cells; split it so edits replace only their cell.
+        inherited = {
+            'sources': old.get('sources', []),
+            'dataset': old.get('dataset'),
+            'instruction_revision': old_mapping.get('instruction_revision'),
+        }
+        provenance = old.get('provenance') or {field_name: inherited for field_name in fields.values()}
         values = dict(old.get('values', {}))
         numeric = set(old.get('numeric_fields', []))
-        sources = set(old.get('sources', []))
         for column, change in items:
             field_name = fields.setdefault(column, get_column_letter(column))
             values[field_name] = change['value']
             is_number = isinstance(change['value'], (int, float)) and not isinstance(change['value'], bool)
             (numeric.add if is_number else numeric.discard)(field_name)
-            sources.add(change['record'])
+            provenance[field_name] = {'sources': [change['record']], 'dataset': None, 'instruction_revision': revision}
         operation = 'cells:' + key
         destination = {'sheet': sheet, 'columns': [{'field': f, 'column': c} for c, f in sorted(fields.items())]}
         state.put('mapping', operation, {'path': path, 'destination': destination, 'instruction_revision': revision})
@@ -188,8 +194,10 @@ def assign_cells(state, path, changes):
                 'path': path,
                 'sheet': sheet,
                 'row': row,
-                'sources': sorted(sources),
+                # Only sources that still back a cell count as included.
+                'sources': sorted({source for cell in provenance.values() for source in cell['sources']}),
                 'dataset': None,
+                'provenance': provenance,
                 'operation': operation,
                 'values': values,
                 'numeric_fields': sorted(numeric),

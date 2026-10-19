@@ -109,10 +109,22 @@ def lineage(state, dataset):
 
 def require_current(state, dataset):
     """Refuse a dataset that user instructions have invalidated, directly or through its sources."""
+    revision = state.revision('instruction_revision')
     for key in lineage(state, dataset):
-        reason = (state.get('dataset', key) or {}).get('stale')
-        if reason:
-            raise ValueError(f'Dataset {key} was invalidated by a user instruction ({reason}); rebuild it')
+        info = state.get('dataset', key) or {}
+        if info.get('instruction_revision', revision) != revision:
+            raise ValueError('Instructions changed; re-extract/re-transform the dataset before writing')
+        if info.get('stale'):
+            raise ValueError(f'Dataset {key} was invalidated by a user instruction ({info["stale"]}); rebuild it')
+
+
+def fresh_id(state, key):
+    """The dataset ID for these inputs, skipping earlier builds that an instruction invalidated."""
+    candidate, attempt = key, 0
+    while (state.get('dataset', candidate) or {}).get('stale'):
+        attempt += 1
+        candidate = identity(key, attempt)
+    return candidate
 
 
 def settle(state, operation_id, journal):
@@ -162,14 +174,17 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
         raise ValueError('Complete inspect_source for this sheet before extracting records')
     if hashlib.sha256(within(state.root, path).read_bytes()).hexdigest() != entry['sha256']:
         raise ValueError('Source changed since intake; submit a new input version')
-    dataset = identity(
-        file_id,
-        sheet,
-        start_row,
-        end_row,
-        [c.model_dump() for c in columns],
-        header_rows,
-        state.revision('instruction_revision'),
+    dataset = fresh_id(
+        state,
+        identity(
+            file_id,
+            sheet,
+            start_row,
+            end_row,
+            [c.model_dump() for c in columns],
+            header_rows,
+            state.revision('instruction_revision'),
+        ),
     )
     if state.get('dataset', dataset):
         return state.get('dataset', dataset)
@@ -257,16 +272,27 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
     return info
 
 
-def matches(values, predicate):
+def same_value(value, expected, kind):
+    # Decimal fields are stored as text, so 4200 must equal '4200'. Identifiers keep exact text.
+    if kind == 'decimal' and value is not None and expected is not None and not isinstance(expected, bool):
+        try:
+            return Decimal(str(value)) == Decimal(str(expected))
+        except InvalidOperation:
+            pass
+    return value == expected
+
+
+def matches(values, predicate, kinds=None):
     value, expected = values.get(predicate.field), predicate.value
+    kind = (kinds or {}).get(predicate.field)
     if predicate.operator == 'blank':
         return value is None or value == ''
     if predicate.operator == 'contains':
         return str(expected) in str(value) if value is not None else False
     if predicate.operator == 'eq':
-        return value == expected
+        return same_value(value, expected, kind)
     if predicate.operator == 'ne':
-        return value != expected
+        return not same_value(value, expected, kind)
     if value is None or expected is None:
         return False
     try:
@@ -288,7 +314,7 @@ def transform_dataset(state, dataset, operations, stop=lambda: None):
         if op.operation == 'join':
             require_current(state, op.dataset)
     revision = state.revision('instruction_revision')
-    result_id = identity(dataset, [op.model_dump() for op in operations], revision)
+    result_id = fresh_id(state, identity(dataset, [op.model_dump() for op in operations], revision))
     if state.get('dataset', result_id):
         return state.get('dataset', result_id)
     rows = copy.deepcopy(original)
@@ -318,7 +344,7 @@ def transform_dataset(state, dataset, operations, stop=lambda: None):
                 raise ValueError('Filtering requires a predicate and an exclusion reason')
             kept = []
             for row in rows:
-                if matches(row['values'], op.predicate):
+                if matches(row['values'], op.predicate, kinds):
                     kept.append(row)
                 else:
                     exclusions.extend((source, op.reason) for source in row['sources'])
@@ -418,6 +444,9 @@ def transform_dataset(state, dataset, operations, stop=lambda: None):
                         values[op.target or op.field] = str(value)
                 except (KeyError, ValueError, TypeError, ArithmeticError) as error:
                     row['issues'].append(f'{op.operation}: {error}')
+    # A many-to-one join shares right-hand sources; one that still backs a surviving row is not excluded.
+    surviving = {source for row in rows for source in row['sources']}
+    exclusions = [(source, reason) for source, reason in exclusions if source not in surviving]
     state.put('rows', result_id, rows)
     result = {
         **info,
@@ -442,8 +471,6 @@ def transform_dataset(state, dataset, operations, stop=lambda: None):
 
 def populate_template(state, dataset, path, destination, operation_id, stop=lambda: None):
     info, rows = dataset_rows(state, dataset)
-    if info['instruction_revision'] != state.revision('instruction_revision'):
-        raise ValueError('Instructions changed; re-extract/re-transform the dataset before writing')
     require_current(state, dataset)
     target = within(state.root, path)
     if not target.is_relative_to(state.root / 'outputs'):
