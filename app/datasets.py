@@ -142,11 +142,56 @@ def fresh_id(state, key):
     return candidate
 
 
+def settle_output_records(state, operation_id, journal):
+    """Restore per-row obligations from the committed journal, including journals saved before this ledger existed."""
+    mapping = journal['mapping']
+    destination = mapping['destination']
+    rows = state.get('rows', mapping['dataset'])
+    if rows is None:
+        raise ValueError('Cannot recover output records without the saved dataset; reconcile this journal')
+    assigned = {item['row'] for item in journal['assignments']}
+    rejected = {item['id']: item['issues'] for item in journal.get('rejected', [])}
+    output_records = []
+    for index, row in enumerate(rows):
+        number = destination['start_row'] + index
+        output_records.append(
+            (
+                identity(mapping['path'], destination['sheet'], number),
+                {
+                    'path': mapping['path'],
+                    'sheet': destination['sheet'],
+                    'row': number,
+                    'columns': [column['column'] for column in destination['columns']],
+                    'record': row['id'],
+                    'dataset': mapping['dataset'],
+                    'operation': operation_id,
+                    'issues': [] if number in assigned else rejected[row['id']],
+                },
+            )
+        )
+    retained = {key for key, _ in output_records}
+    state.delete_many(
+        'output_record',
+        [
+            key
+            for key, item in state.all('output_record')
+            if item['path'] == mapping['path']
+            and item['sheet'] == destination['sheet']
+            and destination['start_row'] <= item['row'] <= destination['end_row']
+            and key not in retained
+        ],
+    )
+    state.put_many('output_record', output_records)
+    # This survives an intentionally empty replacement and prevents older journals from reviving rejected rows.
+    state.put('output_accounting', mapping['path'], {'version': 1})
+
+
 def settle(state, operation_id, journal):
     """Record a written journal's assignments and dispositions. Retries and recovery share this."""
     mapping = journal['mapping']
     state.delete_many('assignment', journal.get('removed_assignments', []))
     state.put_many('assignment', [(item['id'], item) for item in journal['assignments']])
+    settle_output_records(state, operation_id, journal)
     origins = lineage(state, mapping['dataset'])
     state.delete_many(
         'decision',
@@ -611,6 +656,9 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
         raise ValueError('Operation ID was already used with different arguments')
     if old and old.get('sha256') == current_hash:
         if old['status'] == 'completed':
+            # Restore obligations for a matching saved output without replaying its assignments or decisions.
+            if not state.get('output_accounting', path):
+                settle_output_records(state, operation_id, old)
             return old['result']
         # Also closes the crash window after file replacement but before assignment persistence.
         settle(state, operation_id, old)
@@ -636,6 +684,13 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
         and item['sheet'] == destination.sheet
         and destination.start_row <= item['row'] <= destination.end_row
     ]
+    previous_output_records = [
+        (key, item)
+        for key, item in state.all('output_record')
+        if item['path'] == path
+        and item['sheet'] == destination.sheet
+        and destination.start_row <= item['row'] <= destination.end_row
+    ]
     old_mappings = dict(state.all('mapping'))
     for _, assignment in previous_assignments:
         old_columns = {column['column'] for column in old_mappings[assignment['operation']]['destination']['columns']}
@@ -643,10 +698,13 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
             raise ValueError(
                 'Partial-column overwrite would discard tracked cells; include all previously mapped columns'
             )
+    if any(not set(item['columns']).issubset(columns) for _, item in previous_output_records):
+        raise ValueError('Partial-column overwrite would discard output records; include all previously mapped columns')
     try:
         sh = workbook[destination.sheet]
         affected_rows = set(range(destination.start_row, destination.start_row + len(rows)))
         affected_rows.update(item['row'] for _, item in previous_assignments)
+        affected_rows.update(item['row'] for _, item in previous_output_records)
         for number in affected_rows:
             for column in destination.columns:
                 cell = sh.cell(number, column.column)
@@ -665,10 +723,10 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
             if destination.unique and (key in seen or any(value in (None, '') for value in key)):
                 issues.append('Duplicate or missing destination key')
             seen.add(key)
+            number = destination.start_row + index
             if issues:
                 rejected.append({'id': row['id'], 'sources': row['sources'], 'issues': issues})
                 continue
-            number = destination.start_row + index
             for column in destination.columns:
                 if column.field not in values:
                     raise ValueError(f'Missing mapped field: {column.field}')

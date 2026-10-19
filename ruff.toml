@@ -17,4 +17,4 @@ ignore = ["E501", "B008"]  # B008: FastAPI declares parameters with File()/Form(
 "scripts/harness_acceptance.py" = ["E402"]
 
 [lint.isort]
-known-local-folder = ["helpers"]
+known-local-folder = ["goal_helpers", "helpers"]

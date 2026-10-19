@@ -102,7 +102,7 @@ def check_requirements(state, path):
     if not template_sheets or any(not state.get('inventory', key).get('scan_complete') for key in template_sheets):
         failures.append('Destination-wide discovery has not completed')
     for _, region in state.all('region'):
-        if region['source'] not in template_sheets:
+        if region.get('superseded') or region['source'] not in template_sheets:
             continue
         if not any(
             area['sheet'] == region['sheet']

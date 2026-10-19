@@ -15,7 +15,7 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_bo
 from pydantic import BaseModel, Field
 
 from .files import atomic_bytes, within
-from .state import identity, paginate
+from .state import check_page, identity, page_result
 
 INDEX_VERSION = 1
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
@@ -345,31 +345,37 @@ def discover(state, path, sheet=None, start_row=1, max_cells=1_000_000, seconds=
 
 
 def search(state, path, query, sheet=None, offset=0, limit=25):
+    check_page(offset, limit)
     if not query.strip() or len(query) > 200:
         raise ValueError('Provide a text query of 1 to 200 characters')
     file_id, entry = state.file_entry(path)
     if not entry:
         raise ValueError('Unknown source')
-    matches = []
-    for key, source in state.all('inventory'):
+    inventory = state.all('inventory')
+    query = query.casefold().strip()
+    matches, total = [], 0
+    for key, source in inventory:
         if source.get('parent') != file_id or (sheet and source['sheet'] != sheet):
             continue
         cells = indexed_cells(state, key)
+        selected = []
         for cell in cells:
-            if query.casefold().strip() in (str(cell['value']) + ' ' + (cell.get('note') or '')).casefold():
-                matches.append(
-                    {
-                        'sheet': source['sheet'],
-                        **cell,
-                        'nearby': [
-                            c
-                            for c in cells
-                            if abs(c['row'] - cell['row']) <= 1 and abs(c['column'] - cell['column']) <= 2
-                        ][:15],
-                    }
-                )
-    return paginate(matches, offset, limit) | {
-        'complete_index': all(s.get('scan_complete') for _, s in state.all('inventory') if s.get('parent') == file_id)
+            if query in (str(cell['value']) + ' ' + (cell.get('note') or '')).casefold():
+                if offset <= total < offset + limit:
+                    selected.append(cell)
+                total += 1
+        if selected:
+            coordinates = {(c['row'], c['column']): c for c in cells}
+            for cell in selected:
+                nearby = [
+                    coordinates[row, column]
+                    for row in range(cell['row'] - 1, cell['row'] + 2)
+                    for column in range(cell['column'] - 2, cell['column'] + 3)
+                    if (row, column) in coordinates
+                ]
+                matches.append({'sheet': source['sheet'], **cell, 'nearby': nearby})
+    return page_result(matches, offset, total) | {
+        'complete_index': all(s.get('scan_complete') for _, s in inventory if s.get('parent') == file_id)
     }
 
 
@@ -479,6 +485,7 @@ def region_coverage(state):
     inventory = dict(state.all('inventory'))
     regions = dict(state.all('region'))
     roles = dict(state.all('region_role'))
+    mappings = dict(state.all('region_mapping'))
     evidence = dict(state.all('evidence'))
     files = {item['path']: (key, item) for key, item in inventory.items() if item['kind'] == 'file'}
     parents = {source.get('parent') for source in inventory.values()}
@@ -492,9 +499,29 @@ def region_coverage(state):
         and source.get('instruction_revision') == revision
     }
     excluded_sheets = {key for key, source in inventory.items() if key in excluded or source.get('parent') in excluded}
-    extracted = {
-        item.get('region') for _, item in observations if item.get('region') and not item.get('reference_only')
-    }
+    current = []
+    for key, item in observations:
+        region_id = item.get('region')
+        if region_id:
+            region, role, mapping = regions.get(region_id, {}), roles.get(region_id, {}), mappings.get(region_id, {})
+            active = (
+                region
+                and not region.get('superseded')
+                and role.get('role') in ('records', 'reference')
+                and not role.get('stale')
+                and role.get('instruction_revision') == revision
+                and mapping.get('role') == role.get('role')
+                and not mapping.get('stale')
+                and mapping.get('instruction_revision') == revision
+                and item.get('mapping_version') == mapping.get('hash')
+                and bool(item.get('reference_only')) == (role['role'] == 'reference')
+            )
+            if not active:
+                if key in assignments:
+                    issues.append({'id': key, 'reason': 'Output contribution uses an obsolete region interpretation'})
+                continue
+        current.append((key, item))
+    extracted = {item['region'] for _, item in current if item.get('region') and not item.get('reference_only')}
     for key, region in regions.items():
         if region['source'] in excluded_sheets:
             continue
@@ -512,10 +539,8 @@ def region_coverage(state):
         if role.get('role') == 'records' and key not in extracted:
             issues.append({'id': key, 'reason': 'Applicable region has not been extracted'})
     record_counts = {'pending': 0, 'included': 0, 'excluded': 0, 'unresolved': 0}
-    for key, item in observations:
-        if regions.get(item.get('region'), {}).get('superseded') and key not in assignments:
-            continue
-        if item.get('reference_only') or roles.get(item.get('region'), {}).get('role') == 'reference':
+    for key, item in current:
+        if item.get('reference_only'):
             continue
         if item.get('source') in excluded_sheets or item.get('file') in excluded:
             record_counts['excluded'] += 1
@@ -575,7 +600,7 @@ def region_coverage(state):
                 issues.append({'id': source_id, 'reason': 'Unclassified occupied source area: ' + cell['cell']})
                 break
     contributions = {}
-    for key, item in observations:
+    for key, item in current:
         if key not in assignments or item.get('reference_only'):
             continue
         source = files[item['path']][1]

@@ -359,6 +359,12 @@ class JobState:
             # Region accounting replaces legacy row obligations, while user instructions still block.
             issues = [issue for issue in issues if issue['id'].startswith('instruction:')] + scoped['issues']
             counts, region_counts = scoped['records'], scoped['regions']
+        # A source can back several output rows; one successful sibling cannot settle a rejected row.
+        issues.extend(
+            {'id': key, 'reason': 'Unresolved output record: ' + '; '.join(item['issues'])}
+            for key, item in self.all('output_record')
+            if item['issues']
+        )
         return {
             'accounting_version': accounting_version(self),
             'regions': region_counts,

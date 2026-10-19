@@ -23,7 +23,8 @@ def observe(deps, name, args, result):
         if entry:
             key = identity(deps.actor, args, entry['sha256'])
             state.put('evidence', key, {'source_hash': entry['sha256'], 'location': args, 'actor': deps.actor})
-            emit('evidence_inspected', key, entry['sha256'])
+            # Workers investigate an explicitly assigned source scope and have no interpretation tools.
+            emit('evidence_inspected', key, entry['sha256'], linked=deps.actor != 'main')
             result['evidence_id'] = key
     if name == 'inspect_source':
         for sheet in result.get('sheets', []):

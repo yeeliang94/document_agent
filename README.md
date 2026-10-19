@@ -116,6 +116,8 @@ The script checks every output value, numeric types, six-digit identifiers, the 
 
 ## Goal-oriented workbook processing
 
+Coverage tracks each attempted output row, including rows expanded from one source record. Rejected rows remain completion blockers until a corrected or explicitly filtered dataset rewrites their destination. Saved journals retain these obligations through interruption and recovery; settled retries preserve later replacements. Region corrections retire obsolete observations while retaining checks on existing output contributions and current reference joins.
+
 New uploads use accounting version 2. Existing saved jobs stay on version 1; opening or resuming them does not reinterpret earlier observations or discard outputs, instructions, decisions or journals.
 
 The owning agent keeps a bounded work plan with its objective, focus, dependencies, evidence, blockers and next actions. Tool outcomes attach saved results and compact attempted-approach records. Continuation snapshots retain the current plan, source/region/evidence references, requirements and validation; detailed facts stay queryable. Plan prose, memory edits and repeated identical writes do not establish processing progress. If every work item is settled and current application checks pass, the application can finalize the verified result without further model bookkeeping. File hashes, requirements, source coverage and journals are still checked at finalization.

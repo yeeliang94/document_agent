@@ -265,7 +265,7 @@ def register_harness_tools(agent, delegation=None, readonly=False):
     async def populate_template_tool(
         ctx: RunContext[JobDeps], dataset: str, path: str, destination: Destination, operation_id: str
     ) -> dict:
-        """Bulk write a stored dataset into explicit writable template bounds. Stable operation IDs make retries recoverable."""
+        """Bulk write a stored dataset into explicit writable template bounds. Stable operation IDs make retries recoverable. Rejected output rows remain completion blockers until corrected/excluded in a dataset and their destination rewritten."""
 
         def populate():
             ctx.deps.resolve(path, output=True)
@@ -501,6 +501,7 @@ def register_harness_tools(agent, delegation=None, readonly=False):
             'dataset',
             'decision',
             'observation',
+            'output_record',
             'exceptions',
             'task',
             'operation',
