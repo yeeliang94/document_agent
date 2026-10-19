@@ -1,22 +1,18 @@
 """Application-issued progress from verified tool outcomes; workbook-specific adapter."""
 
 from .state import identity
-from .supervisor import CapabilityResult, Supervisor
+from .supervisor import Supervisor
 
 
 def observe(deps, name, args, result):
     state = deps.state
-    supervisor = Supervisor(state, deps.actor)
-    events = []
+    candidates = []
 
     def emit(kind, key, version, linked=False):
-        if supervisor.accept(
-            CapabilityResult(progress=[{'kind': kind, 'key': key, 'version': version, 'linked': linked}])
-        ):
-            events.append({'kind': kind, 'key': key, 'version': version})
+        candidates.append({'kind': kind, 'key': key, 'version': version, 'linked': linked})
 
     if not isinstance(result, dict) or result.get('error'):
-        return events
+        return []
     if name in ('read_sheet', 'read_document', 'inspect_workbook', 'search_cells', 'inspect_regions', 'view_page'):
         entry = state.file_entry(args.get('path'))[1]
         if not entry and name == 'view_page':
@@ -68,6 +64,8 @@ def observe(deps, name, args, result):
         for instruction in state.instructions():
             if instruction['seq'] in result['applied'] and instruction['kind'] == 'answer':
                 emit('question_resolved', str(instruction['seq']), identity(instruction['text']), True)
+    credited = Supervisor(state, deps.actor).accept_many(candidates)
+    events = [{key: event[key] for key in ('kind', 'key', 'version')} for event in credited]
     if events:
         message = name.replace('_', ' ') + ': saved useful change'
         if name in ('extract_dataset', 'extract_region'):

@@ -89,32 +89,41 @@ class Supervisor:
         self.stall_turns, self.recovery_turns, self.evidence_window = stall_turns, recovery_turns, evidence_window
 
     def accept(self, result: CapabilityResult):
-        credited = []
-        for event in result.progress:
-            if self.event(event['kind'], event['key'], event['version'], event.get('linked', False)):
-                credited.append(event)
-        return credited
+        return self.accept_many(result.progress)
 
     def event(self, kind: str, key: str, version: str, linked=False):
-        if kind not in PROGRESS_EVENTS:
+        return bool(self.accept_many([{'kind': kind, 'key': key, 'version': version, 'linked': linked}]))
+
+    def accept_many(self, events):
+        """Credit events not seen before, with one lookup and one write however many records a tool touched."""
+        if any(event['kind'] not in PROGRESS_EVENTS for event in events):
             raise ValueError('Unknown application progress event')
-        token = identity(self.actor, kind, key, version)
-        if self.state.get('progress_event', token):
-            return False
-        clock = self.state.get('supervision', self.actor, {'turn': 0})
-        self.state.put(
+        tokens = {}
+        for event in events:
+            tokens.setdefault(identity(self.actor, event['kind'], event['key'], event['version']), event)
+        if not tokens:
+            return []
+        known = self.state.existing('progress_event', tokens)
+        turn = self.state.get('supervision', self.actor, {'turn': 0})['turn']
+        credited = [(token, event) for token, event in tokens.items() if token not in known]
+        self.state.put_many(
             'progress_event',
-            token,
-            {
-                'actor': self.actor,
-                'kind': kind,
-                'key': key,
-                'version': version,
-                'turn': clock['turn'],
-                'linked': linked or kind != 'evidence_inspected',
-            },
+            [
+                (
+                    token,
+                    {
+                        'actor': self.actor,
+                        'kind': event['kind'],
+                        'key': event['key'],
+                        'version': event['version'],
+                        'turn': turn,
+                        'linked': event.get('linked', False) or event['kind'] != 'evidence_inspected',
+                    },
+                )
+                for token, event in credited
+            ],
         )
-        return True
+        return [event for _, event in credited]
 
     def link(self, evidence):
         for key, event in self.state.all('progress_event'):

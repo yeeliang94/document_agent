@@ -252,6 +252,7 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
     rows, errors = [], []
     profiles = {column.name: {'types': {}, 'missing': 0} for column in columns}
     header_signatures = set()
+    region_observations = []
     try:
         left, right = min(c.column for c in columns), max(c.column for c in columns)
         raw_rows = formulas[sheet].iter_rows(min_row=start_row, max_row=end_row, min_col=left, max_col=right)
@@ -273,20 +274,21 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
                 header_signatures.add(tuple(str(cell.value) for cell in raw))
                 continue
             if region_id:
-                state.put(
-                    'observation',
-                    source_record,
-                    {
-                        'source': source_id,
-                        'file': file_id,
-                        'path': path,
-                        'sheet': sheet,
-                        'row': number,
-                        'region': region_id,
-                        'reference_only': role['role'] == 'reference',
-                        'mapping_version': region_mapping,
-                        'cells': [raw[c.column - left].coordinate for c in columns],
-                    },
+                region_observations.append(
+                    (
+                        source_record,
+                        {
+                            'source': source_id,
+                            'file': file_id,
+                            'path': path,
+                            'sheet': sheet,
+                            'row': number,
+                            'region': region_id,
+                            'reference_only': role['role'] == 'reference',
+                            'mapping_version': region_mapping,
+                            'cells': [raw[c.column - left].coordinate for c in columns],
+                        },
+                    )
                 )
             record = {'id': source_record, 'sources': [source_record], 'values': {}, 'evidence': {}, 'issues': []}
             if tuple(str(cell.value) for cell in raw) in header_signatures:
@@ -322,6 +324,8 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
     finally:
         formulas.close()
         values.close()
+    # One transaction for the whole region; an interrupted extraction leaves no partial records.
+    state.put_many('observation', region_observations)
     state.put('rows', dataset, rows)
     info = {
         'id': dataset,

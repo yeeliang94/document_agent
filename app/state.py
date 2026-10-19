@@ -109,6 +109,17 @@ class JobState:
             row = db.execute('SELECT data FROM facts WHERE kind=? AND id=?', (kind, key)).fetchone()
         return json.loads(row[0]) if row else default
 
+    def existing(self, kind, keys):
+        """The subset of keys already stored for kind, in one connection."""
+        keys, found = list(keys), set()
+        with self.connect() as db:
+            for start in range(0, len(keys), 500):
+                chunk = keys[start : start + 500]
+                marks = ','.join('?' * len(chunk))
+                query = f'SELECT id FROM facts WHERE kind=? AND id IN ({marks})'
+                found.update(row[0] for row in db.execute(query, (kind, *chunk)))
+        return found
+
     def has_reference(self, key):
         """Opaque durable references for the format-independent work plan."""
         with self.connect() as db:
