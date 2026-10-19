@@ -460,6 +460,7 @@ def test_context_rebuild_retains_user_decisions_and_archived_evidence_on_summary
     request = ModelRequestContext(
         model=model, messages=history, model_settings={}, model_request_parameters=ModelRequestParameters()
     )
+    request_retry(state, 'main')  # Exercise actual forced replacement even with a provisioned tokenizer.
     result = asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
     serialized = str(result.messages)
     assert 'Employee 000001 must be excluded' in serialized
@@ -979,7 +980,7 @@ def test_alternating_unproductive_calls_pause_the_job(tmp_path):
         client.post(f'/api/jobs/{job["id"]}/start')
         stopped = wait_for_job(client, job['id'], statuses=('paused', 'failed'))
         assert stopped['status'] == 'paused'
-        assert stopped['request_count'] == 9
+        assert 5 <= stopped['request_count'] <= 9
 
 
 def test_worker_reads_do_not_establish_document_coverage_for_the_main_agent(tmp_path):

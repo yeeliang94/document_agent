@@ -125,6 +125,20 @@ def main() -> int:
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / '.env')
+    from provision_tokenizer import provision
+
+    from app.context import estimate_text
+
+    offline_asset = os.getenv('DI_TOKENIZER_FILE')
+    if offline_asset:
+        provision(source=offline_asset)
+    method = estimate_text('startup capability check')[1]
+    print('Context estimation: ' + method + ' (o200k estimate; verify model budget).', flush=True)
+    if method == 'conservative_byte_estimate':
+        print(
+            'Tokenizer assets unavailable. Provision an approved DI_TOKENIZER_FILE or run scripts/provision_tokenizer.py --download during setup.',
+            flush=True,
+        )
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')

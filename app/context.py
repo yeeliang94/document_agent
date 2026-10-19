@@ -261,11 +261,21 @@ class ContextPolicy(AbstractCapability):
             )
             return tokens + images * settings.image_tokens, method
 
+        fixed_tokens, fixed_method = estimate_text(fixed)
+        if fixed_tokens > usable:
+            raise ContextBudgetError(
+                'Fixed instructions and tool schemas exceed DI_CONTEXT_TOKEN_LIMIT; increase the configured budget or reduce enabled capabilities.'
+            )
         before, method = await asyncio.to_thread(count, history)
-        if before > usable:
-            # A single fresh tool batch can exceed the budget before it becomes "old" history.
+        if before > usable * 0.8:
+            # Archive cheap payloads before considering a rebuild. A single fresh tool batch can exceed the budget before it becomes "old" history.
             history, _ = await asyncio.to_thread(archive_payloads, deps, history, False)
-        if before > usable * 0.7 or force:
+        archived_estimate, _ = await asyncio.to_thread(count, history)
+        previous = deps.state.get('context', deps.actor + ':usage', {})
+        # Rebuild hysteresis: a high fixed floor must not cause repeated ineffective summaries.
+        trigger = max(usable * 0.8, previous.get('rebuild_high_water', 0) + usable * 0.1)
+        rebuilt = False
+        if archived_estimate > min(trigger, usable * 0.95) or force:
             cut = safe_cut(history)
             # If the newest complete exchanges alone are too large, retain only the last coherent group.
             if cut == 0:
@@ -277,6 +287,7 @@ class ContextPolicy(AbstractCapability):
                     if summary:
                         continuation['unverified_narrative'] = summary
                 history = [ModelRequest(parts=[UserPromptPart(encode(continuation))]), *history[cut:]]
+                rebuilt = True
 
                 def shrink(history):
                     # Keep shrinking only at coherent completed exchanges, never by slicing protocol parts.
@@ -311,7 +322,15 @@ class ContextPolicy(AbstractCapability):
             deps.state.put(
                 'context',
                 deps.actor + ':usage',
-                {'estimated_tokens': after, 'budget': usable, 'method': method, 'measured': False},
+                {
+                    'estimated_tokens': after,
+                    'budget': usable,
+                    'method': method,
+                    'fixed_tokens': fixed_tokens,
+                    'fixed_method': fixed_method,
+                    'measured': False,
+                    'rebuild_high_water': max(before, after) if rebuilt else previous.get('rebuild_high_water', 0),
+                },
             )
             path = 'working/history.json' if deps.actor == 'main' else f'working/tasks/{deps.actor}/history.json'
             atomic_bytes(deps.root / path, ModelMessagesTypeAdapter.dump_json(history))

@@ -1,14 +1,16 @@
 import asyncio
+import functools
 import hashlib
 import io
 import json
+import os
 import re
 import threading
 import time
 import uuid
 import zipfile
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -23,8 +25,11 @@ from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolRetu
 
 from .config import Settings
 from .files import SUPPORTED, atomic_bytes, relative_name, within
+from .regions import sheet_layout
 from .state import JobState, encode, identity
 from .store import Store
+from .supervisor import CapabilityResult, failure, normalized, repetition
+from .workplan import record_outcome
 
 # Package parts openpyxl cannot carry through a load/save round trip.
 DROPPED_PARTS = {
@@ -154,7 +159,7 @@ class CellChange(BaseModel):
     record: str | None = None
 
 
-def assign_cells(state, path, changes):
+def assign_cells(state, path, changes, instruction_revision=None):
     """Track source-backed cell writes as output assignments, keeping each retained cell's own provenance."""
     rows = {}
     for change in changes:
@@ -162,7 +167,7 @@ def assign_cells(state, path, changes):
             letters, row = coordinate_from_string(change['cell'])
             rows.setdefault((change['sheet'], row), []).append((column_index_from_string(letters), change))
     mappings = dict(state.all('mapping'))
-    revision = state.revision('instruction_revision')
+    revision = state.revision('instruction_revision') if instruction_revision is None else instruction_revision
     for (sheet, row), items in rows.items():
         key = identity(path, sheet, row)
         old = state.get('assignment', key) or {}
@@ -288,7 +293,40 @@ class JobDeps:
                     except Exception:
                         break
                 raise
+            from .progress import observe
+
             logged = result.return_value if isinstance(result, ToolReturn) else result
+            progress_events = observe(self, name, args, logged)
+            record_outcome(self.state, self.actor, name, args, logged, progress_events)
+            if isinstance(logged, dict):
+                logged['capability'] = asdict(
+                    CapabilityResult(
+                        artifacts=[{'path': logged['path'], 'version': logged.get('sha256')}]
+                        if 'path' in logged
+                        else [],
+                        evidence=[{'id': logged['evidence_id']}] if logged.get('evidence_id') else [],
+                        cursor={
+                            'next_row': s.get('next_row'),
+                            'sheet': s.get('sheet'),
+                            'reason': s.get('continuation_reason'),
+                        }
+                        if (s := next((s for s in logged.get('sheets', []) if s.get('next_row')), None))
+                        else None,
+                        validation={'passed': logged['passed'], 'version': logged.get('sha256')}
+                        if 'passed' in logged
+                        else None,
+                        progress=progress_events[:20],
+                    )
+                )
+            if progress_events:
+                self.store.event(
+                    self.job_id,
+                    'progress.changed',
+                    name.replace('_', ' ') + ': saved useful change',
+                    type='job',
+                    actor=self.actor,
+                    progress=progress_events[:20],
+                )
             self.store.event(
                 self.job_id,
                 name,
@@ -311,19 +349,13 @@ class JobDeps:
                 type='tool',
                 arguments=args,
                 error_type=type(e).__name__,
+                error_class=failure(e)['error_class'],
                 duration_ms=round((time.monotonic() - started) * 1000),
                 span_id=span,
                 status='failed',
             )
-            return self.prepare_result(
-                name,
-                args,
-                {
-                    'error': str(e),
-                    'error_type': type(e).__name__,
-                    'instruction': 'Investigate or use another tool; continue independent work.',
-                },
-            )
+            record_outcome(self.state, self.actor, name, args, failure(e), [])
+            return self.prepare_result(name, args, failure(e))
 
     async def async_action(self, name, args, work):
         """Run event-loop work (delegation) and report its errors to the model instead of failing the job."""
@@ -340,16 +372,24 @@ class JobDeps:
         return await self.action(name, args, report)
 
     def prepare_result(self, name, args, result):
+        if isinstance(result, ToolReturn):
+            result.return_value = self.prepare_result(name, args, result.return_value)
+            return result
         if not isinstance(result, ToolReturn):
-            fingerprint = identity(name, args, result)
-            # A window, not a streak, so alternating between two unproductive calls is also caught.
-            recent = [*self.state.get('activity', self.actor, {}).get('recent', []), fingerprint][-ACTIVITY_WINDOW:]
-            self.state.put('activity', self.actor, {'recent': recent})
-            count = recent.count(fingerprint)
+            instruction_epoch = max((item['seq'] for item in self.state.instructions()), default=0)
+            fingerprint = identity(name, normalized(args), normalized(result), instruction_epoch)
+            recent, warning, stalled = repetition(
+                self.state.get('activity', self.actor, {}).get('recent', []), fingerprint
+            )
+            actions = [
+                *self.state.get('activity', self.actor, {}).get('actions', []),
+                {'tool': name, 'arguments': normalized(args)},
+            ][-10:]
+            self.state.put('activity', self.actor, {'recent': recent, 'actions': actions})
             waiting = (
                 name == 'get_task_status' and isinstance(result, dict) and result.get('status') in ('queued', 'running')
             )
-            if count == 3 and not waiting:
+            if warning and not waiting:
                 self.store.event(
                     self.job_id,
                     'progress.warning',
@@ -358,7 +398,7 @@ class JobDeps:
                     level='WARN',
                     actor=self.actor,
                 )
-            if count >= 5 and not waiting:
+            if stalled and not waiting:
                 if self.actor == 'main':
                     self.store.update(self.job_id, status='pausing')
                 else:
@@ -374,6 +414,10 @@ class JobDeps:
                         task_id=self.actor,
                         level='WARN',
                     )
+            if warning and not waiting and isinstance(result, dict):
+                result = result | {
+                    'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, link evidence to the current work item, or identify a specific blocker.'
+                }
             payload = encode(result).encode()
             limit = (self.settings or Settings()).tool_result_bytes
             if len(payload) > limit:
@@ -396,6 +440,32 @@ def registrar(agent: Agent, readonly, worker_tools):
         name = fn.__name__.removesuffix('_tool')
         if readonly and name not in worker_tools:
             return fn
+        if name != 'ask_user' and os.getenv('DI_OPERATION_WORKER') != '1':
+            from .execution import ISOLATED_TOOLS, execute_tool
+
+            if name in ISOLATED_TOOLS:
+
+                @functools.wraps(fn)
+                async def isolated(ctx, **kwargs):
+                    try:
+                        return await execute_tool(ctx, name, kwargs)
+                    except InterruptedError:
+                        raise
+                    except Exception as error:
+                        result = failure(error)
+                        ctx.deps.store.event(
+                            ctx.deps.job_id,
+                            name,
+                            result['error'],
+                            type='tool',
+                            level='WARN',
+                            status='failed',
+                            actor=ctx.deps.actor,
+                            error_class=result['error_class'],
+                        )
+                        return ctx.deps.prepare_result(name, kwargs, result)
+
+                return agent.tool(name=name, sequential=True)(isolated)
         return agent.tool(name=name, sequential=True)(fn)
 
     return tool
@@ -493,16 +563,24 @@ def register_tools(agent: Agent, readonly=False):
                 or (end_row - start_row + 1) * (end_column - start_column + 1) > 10000
             ):
                 raise ValueError('Use a valid range of at most 10000 cells')
-            w = load_workbook(ctx.deps.resolve(path), read_only=True, data_only=not formulas)
+            source = ctx.deps.resolve(path)
+            w = load_workbook(source, read_only=True, data_only=not formulas)
             try:
                 sh = unsized(w[sheet])
+                notes, merges = sheet_layout(source, sheet)
                 return {
                     'sheet': sheet,
                     'rows': [
                         [
                             {
-                                'cell': f'{get_column_letter(start_column + column_index)}{start_row + row_index}',
+                                'cell': (
+                                    coordinate
+                                    := f'{get_column_letter(start_column + column_index)}{start_row + row_index}'
+                                ),
                                 'value': c.value.isoformat() if hasattr(c.value, 'isoformat') else c.value,
+                                'data_type': c.data_type,
+                                'number_format': c.number_format or 'General',
+                                'note': (notes.get(coordinate) or '')[:1000] or None,
                             }
                             for column_index, c in enumerate(row)
                         ]
@@ -515,6 +593,7 @@ def register_tools(agent: Agent, readonly=False):
                             )
                         )
                     ],
+                    'merged_ranges': merges[:200],
                     'last_row': min(end_row, sh.max_row),
                     'sheet_rows': sh.max_row,
                     'more_rows': end_row < sh.max_row,
@@ -695,6 +774,17 @@ def register_tools(agent: Agent, readonly=False):
             }
             if unknown:
                 raise ValueError('Unknown source record: ' + sorted(unknown)[0])
+            from .requirements import check_write_scope
+
+            for change in changes:
+                letters, row = coordinate_from_string(change['cell'])
+                check_write_scope(ctx.deps.state, path, change['sheet'], row, row, [column_index_from_string(letters)])
+            before_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+            operation_id = 'cells:' + identity(
+                path, changes, before_hash, ctx.deps.state.revision('instruction_revision')
+            )
+            if any(j.get('status') == 'prepared' for _, j in ctx.deps.state.all('operation')):
+                raise ValueError('Recover prepared output journals before writing')
             w = load_workbook(p)
             try:
                 for ch in changes:
@@ -713,10 +803,22 @@ def register_tools(agent: Agent, readonly=False):
                         cell.number_format = ch['number_format']
                 out = io.BytesIO()
                 w.save(out)
-                atomic_bytes(p, out.getvalue())
+                payload = out.getvalue()
+                journal = {
+                    'kind': 'cells',
+                    'status': 'prepared',
+                    'before_sha256': before_hash,
+                    'sha256': hashlib.sha256(payload).hexdigest(),
+                    'changes': changes,
+                    'instruction_revision': ctx.deps.state.revision('instruction_revision'),
+                    'result': {'path': path},
+                }
+                ctx.deps.state.put('operation', operation_id, journal)
+                atomic_bytes(p, payload)
             finally:
                 w.close()
             assign_cells(ctx.deps.state, p.relative_to(ctx.deps.root).as_posix(), changes)
+            ctx.deps.state.put('operation', operation_id, journal | {'status': 'completed'})
             return {'path': path, 'cells_written': len(changes)}
 
         return await ctx.deps.action('write_cells', {'path': path, 'changes': changes}, write)

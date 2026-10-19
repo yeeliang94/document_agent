@@ -294,6 +294,7 @@ function activity() {
         <strong>${esc(state.job ? state.job.id : 'Ready')}</strong>
         <span class="live">${isActive() ? 'LIVE UPDATES' : ''}</span>
       </div>
+      ${state.job?.work_plan ? `<div class="work-focus" aria-label="Current work"><strong>${esc(state.job.work_plan.focus)}</strong>${state.job.progress_checkpoint?.message ? `<p>${esc(state.job.progress_checkpoint.message)}</p>` : ''}${state.job.work_plan.items.filter(item => item.status === 'blocked').map(item => `<p class="error-message">${esc(item.blocker || item.objective)}</p>`).join('')}</div>` : ''}
       <div class="activity-body" id="activity-scroll" role="log" aria-label="Agent activity" aria-live="polite">
         ${body}${question ? questionForm(question) : ''}
       </div>
@@ -308,6 +309,11 @@ const detailRow = ([label, value]) =>
 function harnessDetails(job) {
   if (!job?.coverage) return '';
   return [
+    ['Accounting version', job.coverage.accounting_version ?? 1],
+    ['Discovered regions', Object.values(job.coverage.regions || {}).reduce((total, count) => total + count, 0)],
+    ['Context estimate method', job.context_usage?.method ?? '—'],
+    ['Fixed context cost', job.context_usage?.fixed_tokens ?? '—'],
+    ['Recovery turn', job.supervision?.recovery ?? '—'],
     ['Source observations', job.coverage.source_observations],
     ['Rows included', job.coverage.records.included],
     ['Open coverage items', job.coverage.open_items],

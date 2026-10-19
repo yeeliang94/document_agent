@@ -102,7 +102,7 @@ Inventory and row coverage live in job-local SQLite, separate from model history
 
 Ordinary tool results are bounded to 16 KB and larger results remain retrievable as artifacts. Context is estimated before requests, including instructions, tool definitions, images and response space. The default application budget is 64,000 estimated tokens; it is not a claim about the configured model's capacity. A locally available cached `o200k_base` tokenizer is used when available, otherwise a conservative byte estimate is used. Runtime does not intentionally download tokenizer assets. Older payloads are archived first, then history can be rebuilt from durable facts and recent coherent exchanges. Optional narrative summarization uses the configured model and shared budget; failure retains a deterministic continuation note. Essential instructions that cannot fit cause a recoverable pause.
 
-Configure `DI_CONTEXT_TOKEN_LIMIT`, `DI_RESPONSE_TOKEN_RESERVE`, `DI_TOOL_RESULT_BYTES`, `DI_IMAGE_TOKEN_ESTIMATE`, `DI_INSPECTION_CELLS`, `DI_INSPECTION_SECONDS`, `DI_MAX_SUBAGENTS` and `DI_SUBAGENT_REQUESTS` in `.env`. The existing character limit remains an additional archive trigger. Model request allowances apply per start/resume session, including workers and narrative summaries; cumulative usage remains visible. Five identical actions with identical results within the last ten pause the job, including alternating between two calls. Inspection time budgets start before the workbook opens, but opening and indexing a workbook can still require substantial memory/time before the budget is checked.
+Configure `DI_CONTEXT_TOKEN_LIMIT`, `DI_RESPONSE_TOKEN_RESERVE`, `DI_TOOL_RESULT_BYTES`, `DI_IMAGE_TOKEN_ESTIMATE`, `DI_INSPECTION_CELLS`, `DI_INSPECTION_SECONDS`, `DI_MAX_SUBAGENTS` and `DI_SUBAGENT_REQUESTS` in `.env`. The existing character limit remains an additional archive trigger. Model request allowances apply per start/resume session, including workers and narrative summaries; cumulative usage remains visible. Repeat detection ignores volatile counters, warns the model after repeated results, and detects cycles of up to five actions. A durable supervisor gives an unproductive run one bounded recovery episode before pausing. Parsing, rendering, extraction, transformations and workbook writes run in killable subprocesses; the application reaps a cancelled operation before releasing its mutation lock. Interrupted writes retain recovery journals. New jobs use sparse XML indexing with bounded scan units; existing jobs retain their original discovery/accounting version.
 
 Authenticated inventory, coverage and task pages are available at `/api/jobs/{id}/inventory`, `/coverage` and `/tasks`. Run details and Diagnostics show coverage, estimated context use, delegation, recovery and validation events. Existing jobs initialize missing coverage as unknown when resumed; their existing files/history remain intact.
 
@@ -113,6 +113,42 @@ Run the synthetic 5,000 × 30 acceptance without model calls:
 ```
 
 The script checks every output value, numeric types, six-digit identifiers, the template formula and hidden sheet, discovery of a hidden source sheet, source formulas without cached results remaining exceptions, and coverage; results are stored under `data/harness-tests/`. To explicitly run the configured agent through the running application (paid), add `--live`. Live results, usage and exceptions are saved for inspection. Synthetic checks do not establish accuracy on real payroll submissions or native Excel compatibility.
+
+## Goal-oriented workbook processing
+
+New uploads use accounting version 2. Existing saved jobs stay on version 1; opening or resuming them does not reinterpret earlier observations or discard outputs, instructions, decisions or journals.
+
+The owning agent keeps a bounded work plan with its objective, focus, dependencies, evidence, blockers and next actions. Tool outcomes attach saved results and compact attempted-approach records. Continuation snapshots retain the current plan, source/region/evidence references, requirements and validation; detailed facts stay queryable. Plan prose, memory edits and repeated identical writes do not establish processing progress. If every work item is settled and current application checks pass, the application can finalize the verified result without further model bookkeeping. File hashes, requirements, source coverage and journals are still checked at finalization.
+
+`inspect_source` creates a sparse structural index, including hidden sheets, declared tables, merges, cell comments, formula distinctions, validation guidance and embedded drawings. Its cache is keyed by source content hash and index version. A bounded scan returns its saved cursor and stop reason; an incomplete index cannot pass completion. Repeating complete inspection leaves the index unchanged. Candidate regions are suggestions and may require splitting, resizing or merging with `revise_region`.
+
+Use `search_cells` to find labels below introductory rows and `inspect_regions` to query coordinates and boundary samples. Inspect relevant content, then save an evidence-backed role with `save_interpretation`: records, reference, instructions, outside scope, unresolved or unsupported. Filename matches alone do not establish period/entity or authorize exclusions. `extract_region` creates records within the accepted region/mapping identity; reference extraction supports joins without creating separate payment obligations. Adjacent tables can share worksheet rows. Typed `unpivot` complements existing joins/grouping for one-to-many and many-to-one mappings. Repeated headers, totals and absent formula caches remain explicit exceptions requiring resolution or supported filtering.
+
+Create the output copy and use `save_output_requirements` to establish writable areas, preserved/reference areas, field meanings/types, required values, allowed values, uniqueness and expected totals. Classify every discovered destination area. Writers enforce those input areas. `validate_output` and `validate_job` check current output bytes, source accounting, destination requirements, overlap/duplicate contributions and unsettled operations. Unknown material source scope, unsupported relevant visuals and unresolved required values block completion. They can still leave a downloadable partial draft. Every declared output specification must have current validation.
+
+Evidence inspection receives provisional progress credit for six turns; it must be linked to an actual work item or interpretation. Unrelated new reads cannot renew this allowance indefinitely. The initial policy is four turns without useful change, followed by two recovery turns. Progress/recovery state persists across restart and resume. A new user instruction grants a bounded attempt under its new task revision; resuming the same stalled work alone does not reset history. Workers use the same supervision within their assigned scope. Configure `DI_STALL_TURNS`, `DI_RECOVERY_TURNS`, `DI_EVIDENCE_WINDOW` and `DI_TOOL_TIMEOUT_SECONDS` as needed; requests and total job time remain shared final limits.
+
+Current focus and the latest useful result appear in Activity; region/accounting, context-method/fixed-cost and recovery details appear in Diagnostics. `/api/jobs/{id}/plan` and `/regions` expose bounded saved state. Diagnostic events include application/index/accounting versions, safe configuration settings, actor, work focus and estimated/reported input usage.
+
+Provision tokenizer data explicitly during setup (the runtime never downloads it):
+
+```bash
+.venv/bin/python scripts/provision_tokenizer.py --download
+# Offline enterprise setup: verify and copy an approved encoding asset.
+.venv/bin/python scripts/provision_tokenizer.py --from-file /approved/o200k_base.tiktoken
+```
+
+Set `TIKTOKEN_CACHE_DIR` consistently if using a custom cache. `DI_TOKENIZER_FILE` can point the launcher at an approved offline asset. Checksums are verified before installation. Startup/readiness diagnostics report the active estimation method; `o200k_base` remains an estimate for enterprise aliases. Fixed schema/instruction cost is measured separately; payload archiving precedes history replacement and rebuild hysteresis avoids repeated ineffective summaries.
+
+Embedded raster images are extracted as local artifacts with sheet/anchor metadata and can be inspected through `view_page`. Relevant native drawings/charts without a supported reader remain explicit limitations. A local LibreOffice conversion spike rendered the synthetic fixture, but clipped a header and omitted hidden-sheet presentation; it is not enabled as a deployment dependency. Windows provisioning/fidelity and representative enterprise acceptance remain external acceptance work. Native Excel recalculation and universal advanced-feature preservation remain unsupported.
+
+Run the region, supervision, interruption and actual-runtime fixture tests without model calls:
+
+```bash
+.venv/bin/python -m pytest tests/test_goal_harness.py
+```
+
+The conservative pilot defaults are: reconcile all potentially material source scope; treat required destination fields/checks and unresolved material questions as completion blockers; support embedded raster evidence and explicitly account for other visual features. These defaults do not establish production accuracy on arbitrary workbooks or replace representative, hand-checked Windows acceptance.
 
 ## Azure App Service container preparation
 

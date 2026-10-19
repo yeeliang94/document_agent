@@ -28,6 +28,10 @@ def inspect_source(state, path, sheet=None, start_row=1, max_cells=1_000_000, se
         }
         state.put('inventory', file_id, result)
         return {'id': file_id, **result}
+    from .regions import accounting_version, discover
+
+    if accounting_version(state) == 2:
+        return discover(state, path, sheet, start_row, max_cells, seconds, stop)
     # Reuse complete native discovery for identical content, retaining each occurrence's identity.
     if sheet is None and start_row == 1:
         inventory = state.all('inventory')
@@ -64,6 +68,13 @@ def inspect_source(state, path, sheet=None, start_row=1, max_cells=1_000_000, se
                 sheets.append({'id': key, **mapped})
             state.put('inventory', file_id, entry | {'status': 'inspected'})
             return {'file_id': file_id, 'sheets': sheets, 'reused_content_hash': entry['sha256']}
+    cached = [
+        dict(id=key, **item)
+        for key, item in state.all('inventory')
+        if item.get('parent') == file_id and (sheet is None or item.get('sheet') == sheet)
+    ]
+    if cached and all(item.get('scan_complete') for item in cached):
+        return {'file_id': file_id, 'sheets': cached}
     started = time.monotonic()
     workbook = load_workbook(source, read_only=False, data_only=False)
     try:

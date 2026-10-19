@@ -86,6 +86,11 @@ def validate_job(deps, path):
     structural = json.loads(template_validation.read_text()) if template_validation.exists() else {}
     if not structural.get('passed') or structural.get('sha256') != digest:
         failures.append('Run validate_output on the current workbook revision first')
+    from .regions import accounting_version
+    from .requirements import check_requirements
+
+    if accounting_version(state) == 2:
+        failures.extend(check_requirements(state, path))
     workbook = load_workbook(output, data_only=False)
     mappings = dict(state.all('mapping'))
     decisions = dict(state.all('decision'))
@@ -155,12 +160,17 @@ def validate_job(deps, path):
         'instruction_revision': state.revision('instruction_revision'),
         'coverage': {key: value for key, value in coverage.items() if key != 'issues'},
         'limitation': 'No native Excel recalculation; semantic correctness still requires source-backed rules.',
+        'next_action': 'If passed and no material work remains, return final_result now. Do not repeat discovery or rewrite notes.',
     }
     state.put('validation', 'current', result)
+    state.put('validation', identity(path), result)
     return result
 
 
 def register_harness_tools(agent, delegation=None, readonly=False):
+    from .goal_tools import register_goal_tools
+
+    register_goal_tools(agent, readonly)
     tool = registrar(agent, readonly, {'inspect_source', 'query_inventory'})
 
     @tool
@@ -288,6 +298,26 @@ def register_harness_tools(agent, delegation=None, readonly=False):
                         and not source.get('scan_complete')
                     ):
                         raise ValueError('An incompletely discovered sheet cannot be marked reviewed')
+                    from .regions import accounting_version
+
+                    if accounting_version(ctx.deps.state) == 2 and decision.status == 'excluded':
+                        evidence = ctx.deps.state.get('evidence', decision.evidence, {})
+                        file_entry = ctx.deps.state.file_entry(source['path'])[1]
+                        if (
+                            evidence.get('source_hash') != file_entry['sha256']
+                            or evidence.get('actor', 'main') != ctx.deps.actor
+                        ):
+                            raise ValueError('Cite an inspected source evidence_id for a broad exclusion')
+                        relevant = {
+                            key
+                            for key, item in ctx.deps.state.all('region')
+                            if item['path'] == source['path']
+                            and (source['kind'] == 'file' or item['sheet'] == source.get('sheet'))
+                        }
+                        if any(ctx.deps.state.get('region_role', key, {}).get('role') == 'records' for key in relevant):
+                            raise ValueError(
+                                'Broad exclusion conflicts with an applicable records region; reconcile its mapping first'
+                            )
                     ctx.deps.state.put(
                         'inventory',
                         decision.id,
@@ -465,7 +495,28 @@ def register_harness_tools(agent, delegation=None, readonly=False):
     async def read_job_state(
         ctx: RunContext[JobDeps],
         kind: Literal[
-            'snapshot', 'memory', 'mapping', 'dataset', 'decision', 'observation', 'exceptions', 'task', 'operation'
+            'snapshot',
+            'memory',
+            'mapping',
+            'dataset',
+            'decision',
+            'observation',
+            'exceptions',
+            'task',
+            'operation',
+            'plan',
+            'region',
+            'region_role',
+            'region_mapping',
+            'requirement',
+            'visual',
+            'evidence',
+            'checkpoint',
+            'supervision',
+            'approach',
+            'plan_history',
+            'requirement_history',
+            'validation',
         ] = 'snapshot',
         key: str | None = None,
         offset: int = 0,
