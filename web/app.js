@@ -301,6 +301,23 @@ function activity() {
     </section>`;
 }
 
+const detailRow = ([label, value]) =>
+  `<div class="session-row"><span>${label}</span><strong>${esc(value)}</strong></div>`;
+
+// Coverage and context figures belong with the trace, not on the task screen.
+function harnessDetails(job) {
+  if (!job?.coverage) return '';
+  return [
+    ['Source observations', job.coverage.source_observations],
+    ['Rows included', job.coverage.records.included],
+    ['Open coverage items', job.coverage.open_items],
+    ['Context estimate', job.context_usage?.estimated_tokens ?? '—'],
+    ['Context input budget', job.context_usage?.budget ?? '—'],
+  ]
+    .map(detailRow)
+    .join('');
+}
+
 function output() {
   const job = state.job;
   const usage = job?.usage || {};
@@ -317,8 +334,9 @@ function output() {
     ['Model calls', usage.requests ?? '—'],
     ['Input tokens', usage.input_tokens ?? '—'],
     ['Output tokens', usage.output_tokens ?? '—'],
+    ['Rows to resolve', job?.coverage ? job.coverage.records.pending + job.coverage.records.unresolved : '—'],
   ]
-    .map(([label, value]) => `<div class="session-row"><span>${label}</span><strong>${esc(value)}</strong></div>`)
+    .map(detailRow)
     .join('');
   return `
     <aside class="right-stack">
@@ -377,6 +395,7 @@ function diagnostics() {
         <input type="search" id="log-search" aria-label="Search diagnostics" placeholder="Search events…"
           value="${esc(state.search)}">
       </div>
+      ${harnessDetails(state.job)}
       <div class="preview-table-wrap">
         <table class="trace-table">
           <thead><tr><th>Time</th><th>Operation</th><th>Level</th><th>Duration</th></tr></thead>

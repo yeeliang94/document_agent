@@ -1,7 +1,7 @@
 # Single-agent Document Intelligence: product and implementation plan
 
 Date: 17 October 2026  
-Status: Architecture plan with a local MVP implemented (18 October 2026)
+Status: Local MVP with harness hardening and optional delegated scouting implemented (18 October 2026)
 
 Updated with nested-folder payroll requirements, a reliability-first operating policy, LLM vision for scans, Azure App Service hosting, and a proposed PydanticAI runtime. Sections 15–16 describe processing and memory. The local implementation now lives in `app/` and `web/`; `start.sh` and `start.bat` launch it. Azure deployment remains a future acceptance step.
 
@@ -32,6 +32,8 @@ The harness is the application code responsible for running the model/tool loop,
 Document readers, extraction utilities, spreadsheet tools, skills, and validators are capabilities available to the agent. They are not mandatory stages in a fixed workflow. The agent may inspect a template before reading the source files, revisit a document after finding a conflict, or create a script to transform unfamiliar data.
 
 One agent can make many model calls, invoke tools repeatedly, and work across several context windows. A separate planner, extractor, reviewer, or critic agent is not required for the initial design.
+
+The implemented harness now permits the owning agent to delegate bounded read-only scouting, investigation, or review on demand. Each worker has a separate persisted context, explicit file scope, no output-writing or recursive-delegation capability, and shares the job's time/request allowance. The default concurrency limit is two workers. The main agent continues to own reconciliation and completion; this does not introduce a mandatory planner/extractor/reviewer graph.
 
 ```mermaid
 flowchart TD

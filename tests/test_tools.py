@@ -20,6 +20,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import FunctionModel
 
 from app.files import add_file
+from app.harness_tools import register_harness_tools
 from app.store import Store
 from app.tools import JobDeps, job_lock, register_tools
 
@@ -130,6 +131,7 @@ def test_registered_tools_have_concrete_openai_parameter_schemas():
 
     agent = Agent(FunctionModel(capture), deps_type=JobDeps)
     register_tools(agent)
+    register_harness_tools(agent)
     asyncio.run(agent.run('Inspect schemas only.'))
 
     def check(schema, path):

@@ -14,6 +14,7 @@ ignore = ["E501", "B008"]  # B008: FastAPI declares parameters with File()/Form(
 "app/main.py" = ["E402"]
 "scripts/check_openai.py" = ["E402"]
 "scripts/live_smoke.py" = ["E402"]
+"scripts/harness_acceptance.py" = ["E402"]
 
 [lint.isort]
 known-local-folder = ["helpers"]

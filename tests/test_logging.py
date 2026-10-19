@@ -30,7 +30,9 @@ def test_model_events_log_only_new_messages(tmp_path):
 
 def test_compaction_reuses_checkpoint_instead_of_new_copies(tmp_path):
     source = ('Synthetic payroll source row. ' * 300).encode()
-    model, _ = scripted([('read_document', {'path': 'inputs/large.txt'})] * 8 + [final('partial', ['test'])])
+    model, _ = scripted(
+        [('read_document', {'path': 'inputs/large.txt', 'offset': i}) for i in range(8)] + [final('partial', ['test'])]
+    )
     settings = Settings(data_dir=tmp_path, api_key='k', context_chars=3000)
     with TestClient(create_app(settings, model_override=model), base_url=LOCAL) as client:
         job = create_job(client, files=[('files', ('large.txt', source, 'text/plain'))])

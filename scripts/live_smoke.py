@@ -96,7 +96,7 @@ def run_scenario(client, base, packet, instructions, folder, question=False):
     assert any(e['name'] == 'view_page' and e.get('status') == 'completed' for e in events), (
         'Agent did not inspect the scan'
     )
-    assert any(e['name'] == 'write_cells' and e.get('status') == 'completed' for e in events)
+    assert any(e['name'] in ('write_cells', 'populate_template') and e.get('status') == 'completed' for e in events)
     assert any(e['name'] == 'validate_output' and e.get('result', {}).get('passed') for e in events)
     artifact = next(a for a in job['artifacts'] if a['name'].endswith('.xlsx'))
     response = client.get(f'{base}/api/jobs/{job_id}/artifacts/{artifact["name"]}')

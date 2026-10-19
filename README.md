@@ -1,6 +1,6 @@
 # Document Intelligence MVP
 
-One PydanticAI agent prepares a monthly payroll workbook from a nested submission folder and an Excel template. The web app shows progress and inspectable tool activity. OpenAI is the only model provider in this MVP.
+One coordinating PydanticAI agent prepares a monthly payroll workbook from a nested submission folder and an Excel template. The web app shows progress and inspectable tool activity. OpenAI is the only model provider in this MVP.
 
 ## Run locally
 
@@ -91,6 +91,28 @@ This is a local MVP: one server process, one local SQLite store, no enterprise s
 Requests whose host name is not loopback are refused unless `DI_ACCESS_TOKEN` is set or the name is listed in `DI_ALLOWED_HOSTS`; this stops malicious web pages from reaching a token-less local instance through DNS rebinding. Behind an HTTPS reverse proxy, add the public address to `DI_ALLOWED_ORIGINS` (for example `https://payroll.example.com`) and set uvicorn's `FORWARDED_ALLOW_IPS` to the proxy address so browser requests are not rejected as cross-origin.
 
 Workbook outputs are saved with openpyxl, which can drop shapes, pivot tables, slicers, macros and some charts or images. `validate_output` reports any of these that the template had and the output lost, and the run is then marked partial.
+
+## Harness, scouting and large workbooks
+
+The main agent can delegate scoped scouting, investigation or review to read-only workers. Workers have separate histories, share the job's request/time allowance, cannot write the deliverable or create further workers, and return persisted handovers. They may record structural discovery (inventory and row observations), but their document reads do not count toward the main agent's coverage. Pausing a job marks running workers interrupted; a worker that repeats unproductive actions is cancelled. Two workers may run concurrently by default. The main agent owns reconciliation and completion; delegation is optional and chosen by the model.
+
+Native `.xlsx` regions can be extracted into durable job datasets, queried in bounded pages, transformed with typed operations, and written directly into declared template regions. Built-in operations include filtering, selection, rename, conversion, code lookup, keyed joins, grouping, deduplication and decimal arithmetic. There is no arbitrary Python or SQL execution. Ambiguous matches and missing formula caches remain exceptions. Records extracted from documents/images can also be saved as source-backed datasets; fields whose values are all numbers are treated as decimals unless a kind is declared. Individual `write_cells` changes that name their source record count as output assignments. Semantic corrections create new dataset revisions. Interrupted output journals can be settled or explicitly aborted without changing workbook bytes, including after new instructions arrive; retries, restarts and explicit recovery settle a journal the same way. A bulk overwrite must include all previously mapped columns in affected rows; this prevents losing validation of retained cells.
+
+Inventory and row coverage live in job-local SQLite, separate from model history. Document reads track chunk/page coverage; a preview alone cannot establish a reviewed disposition. Completion requires both current workbook validation and source/assignment coverage, with no unsettled delegated tasks. User instructions are retained separately. Each one blocks completion until the agent applies it, naming the datasets, mappings, decisions, sources or tasks it affects (datasets derived from an invalidated one are refused too); only an explicit reset invalidates all earlier results. Originals remain unchanged; unresolved records can be returned in a partial draft.
+
+Ordinary tool results are bounded to 16 KB and larger results remain retrievable as artifacts. Context is estimated before requests, including instructions, tool definitions, images and response space. The default application budget is 64,000 estimated tokens; it is not a claim about the configured model's capacity. A locally available cached `o200k_base` tokenizer is used when available, otherwise a conservative byte estimate is used. Runtime does not intentionally download tokenizer assets. Older payloads are archived first, then history can be rebuilt from durable facts and recent coherent exchanges. Optional narrative summarization uses the configured model and shared budget; failure retains a deterministic continuation note. Essential instructions that cannot fit cause a recoverable pause.
+
+Configure `DI_CONTEXT_TOKEN_LIMIT`, `DI_RESPONSE_TOKEN_RESERVE`, `DI_TOOL_RESULT_BYTES`, `DI_IMAGE_TOKEN_ESTIMATE`, `DI_INSPECTION_CELLS`, `DI_INSPECTION_SECONDS`, `DI_MAX_SUBAGENTS` and `DI_SUBAGENT_REQUESTS` in `.env`. The existing character limit remains an additional archive trigger. Model request allowances apply per start/resume session, including workers and narrative summaries; cumulative usage remains visible. Five identical actions with identical results within the last ten pause the job, including alternating between two calls. Inspection time budgets start before the workbook opens, but opening and indexing a workbook can still require substantial memory/time before the budget is checked.
+
+Authenticated inventory, coverage and task pages are available at `/api/jobs/{id}/inventory`, `/coverage` and `/tasks`. Run details and Diagnostics show coverage, estimated context use, delegation, recovery and validation events. Existing jobs initialize missing coverage as unknown when resumed; their existing files/history remain intact.
+
+Run the synthetic 5,000 × 30 acceptance without model calls:
+
+```bash
+.venv/bin/python scripts/harness_acceptance.py
+```
+
+The script checks every output value, numeric types, six-digit identifiers, the template formula and hidden sheet, discovery of a hidden source sheet, source formulas without cached results remaining exceptions, and coverage; results are stored under `data/harness-tests/`. To explicitly run the configured agent through the running application (paid), add `--live`. Live results, usage and exceptions are saved for inspection. Synthetic checks do not establish accuracy on real payroll submissions or native Excel compatibility.
 
 ## Azure App Service container preparation
 
