@@ -1,6 +1,7 @@
 """Shared fixtures: synthetic workbooks, job creation, polling and scripted models."""
 
 import asyncio
+import hashlib
 import io
 import time
 
@@ -16,6 +17,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 
+from app.harness_tools import register_harness_tools
+from app.state import identity
 from app.tools import JobDeps, register_tools
 
 LOCAL = 'http://127.0.0.1'
@@ -87,6 +90,35 @@ def final(status='complete', unresolved=()):
     return ('final_result', {'summary': 'Done.', 'status': status, 'unresolved': list(unresolved)})
 
 
+def apply_step(*seqs):
+    """The scripted agent settling user instructions that affect no earlier work."""
+    return ('apply_instructions', {'instructions': list(seqs), 'reason': 'Applies to remaining work only'})
+
+
+def completion_checks(path):
+    source = identity(
+        'inputs/HR/Reports/employees.txt', hashlib.sha256(b'EMP001, Alex Example, 4200, 2026-10-01').hexdigest()
+    )
+    return [
+        ('read_document', {'path': 'inputs/HR/Reports/employees.txt'}),
+        (
+            'record_decisions',
+            {
+                'decisions': [
+                    {
+                        'id': source,
+                        'scope': 'source',
+                        'status': 'reviewed',
+                        'reason': 'Synthetic source reviewed for this test',
+                        'evidence': 'inputs/HR/Reports/employees.txt',
+                    }
+                ]
+            },
+        ),
+        ('validate_job', {'path': path}),
+    ]
+
+
 def run_tool(store, job_id, name, args):
     results = []
 
@@ -100,5 +132,6 @@ def run_tool(store, job_id, name, args):
 
     agent = Agent(FunctionModel(respond), deps_type=JobDeps)
     register_tools(agent)
+    register_harness_tools(agent)
     asyncio.run(agent.run('go', deps=JobDeps(store, job_id)))
     return results[0]

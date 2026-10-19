@@ -29,6 +29,14 @@ class Settings:
     max_upload_mb: int = int(os.getenv('DI_MAX_UPLOAD_MB', '200'))
     max_files: int = int(os.getenv('DI_MAX_FILES', '2000'))
     context_chars: int = int(os.getenv('DI_CONTEXT_CHAR_LIMIT', '160000'))
+    context_tokens: int = int(os.getenv('DI_CONTEXT_TOKEN_LIMIT', '64000'))
+    response_tokens: int = int(os.getenv('DI_RESPONSE_TOKEN_RESERVE', '4096'))
+    tool_result_bytes: int = int(os.getenv('DI_TOOL_RESULT_BYTES', '16000'))
+    image_tokens: int = int(os.getenv('DI_IMAGE_TOKEN_ESTIMATE', '8192'))
+    inspection_cells: int = int(os.getenv('DI_INSPECTION_CELLS', '1000000'))
+    inspection_seconds: int = int(os.getenv('DI_INSPECTION_SECONDS', '30'))
+    max_subagents: int = int(os.getenv('DI_MAX_SUBAGENTS', '2'))
+    subagent_requests: int = int(os.getenv('DI_SUBAGENT_REQUESTS', '12'))
     access_token: str = os.getenv('DI_ACCESS_TOKEN', '')
     # Host names the browser may use to reach the app. Blank: loopback names only,
     # or any name when an access token protects the API.
@@ -37,6 +45,10 @@ class Settings:
     allowed_origins: tuple[str, ...] = _list('DI_ALLOWED_ORIGINS')
 
     def validate(self):
+        if self.context_tokens <= 2 * self.response_tokens or self.tool_result_bytes < 1024:
+            raise ValueError('Context budget must leave input space; tool results need at least 1024 bytes')
+        if self.max_subagents < 0 or self.inspection_cells < 1 or self.inspection_seconds < 1:
+            raise ValueError('Invalid harness limits')
         if self.host not in LOOPBACK and not self.access_token:
             raise ValueError('Set DI_ACCESS_TOKEN before exposing the app beyond loopback.')
         url = urlparse(self.base_url)

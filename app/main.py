@@ -120,6 +120,11 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 for module in DEFAULT_CONTEXT
             ],
             'statuses': jobstatus.as_json(),
+            'harness': {
+                'max_subagents': conf.max_subagents,
+                'context_token_budget': conf.context_tokens,
+                'tool_result_bytes': conf.tool_result_bytes,
+            },
         }
 
     @api.get('/api/modules/{module}')
@@ -163,6 +168,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             manifest = await save_uploads(store.path(job_id), template, files)
             mark_duplicates(manifest)
             store.update(job_id, files=manifest)
+            store.state(job_id).inventory(manifest)
             store.event(
                 job_id, 'files.received', f'{len(manifest) - 1} source files received', type='job', files=manifest
             )
@@ -232,7 +238,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         j = get(job_id)
         if j['status'] not in jobstatus.PAUSABLE:
             raise HTTPException(409, 'Job is not running')
-        store.update(job_id, status='pausing' if j['status'] == 'running' else 'paused')
+        store.mutate(job_id, lambda job: job.update(status='pausing' if job['status'] == 'running' else 'paused'))
         store.event(job_id, 'job.pause_requested', 'Pause requested; completing current operation.', type='job')
         return get(job_id)
 
@@ -253,6 +259,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if not body.answer.strip():
             raise HTTPException(400, 'Enter an answer')
         store.update(job_id, answer=body.answer)
+        store.state(job_id).instruction(body.answer, 'answer')
         store.event(job_id, 'user.answer', body.answer, type='user')
         await runner.submit(job_id)
         return get(job_id)
@@ -265,9 +272,32 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if not body.message.strip():
             raise HTTPException(400, 'Enter an instruction')
         # Delivered once into the conversation; also adding it to the task would repeat it.
-        store.update(job_id, pending_messages=j.get('pending_messages', []) + [body.message])
+        store.mutate(job_id, lambda job: job.update(pending_messages=job.get('pending_messages', []) + [body.message]))
+        store.state(job_id).instruction(body.message)
         store.event(job_id, 'user.instruction', body.message, type='user')
         return get(job_id)
+
+    # Synchronous handlers run in the threadpool, so SQLite waits never block the event loop.
+    @api.get('/api/jobs/{job_id}/inventory')
+    def inventory(job_id, offset: int = 0, limit: int = 25):
+        get(job_id)
+        try:
+            return store.state(job_id).page('inventory', offset, limit)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+
+    @api.get('/api/jobs/{job_id}/coverage')
+    def coverage(job_id):
+        get(job_id)
+        return store.state(job_id).coverage()
+
+    @api.get('/api/jobs/{job_id}/tasks')
+    def tasks(job_id, offset: int = 0, limit: int = 25):
+        get(job_id)
+        try:
+            return store.state(job_id).page('task', offset, limit)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
 
     @api.get('/api/jobs/{job_id}/events')
     async def events(job_id, after: int = 0):

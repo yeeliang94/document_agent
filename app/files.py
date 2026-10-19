@@ -68,7 +68,10 @@ def add_file(root, role, name, data, manifest):
     )
 
 
-def add_zip(root, name, data, manifest, max_files, remaining_bytes):
+def add_zip(root, name, data, manifest, max_files, remaining_bytes, depth=0):
+    if depth > 5:
+        raise ValueError('Archive nesting exceeds five levels')
+    initial_size = sum(item['size'] for item in manifest)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         entries = [i for i in z.infolist() if not i.is_dir() and not is_junk(i.filename)]
         if len(manifest) + len(entries) > max_files:
@@ -80,4 +83,11 @@ def add_zip(root, name, data, manifest, max_files, remaining_bytes):
             if (info.external_attr >> 16) & 0o170000 == 0o120000:
                 raise ValueError('Archive links are unsupported')
             rel = relative_name(info.filename)
-            add_file(root, 'inputs', (prefix / rel).as_posix(), z.read(info), manifest)
+            payload = z.read(info)
+            if rel.suffix.lower() == '.zip':
+                remaining = remaining_bytes - (sum(item['size'] for item in manifest) - initial_size)
+                add_zip(root, (prefix / rel).as_posix(), payload, manifest, max_files, remaining, depth + 1)
+            else:
+                add_file(root, 'inputs', (prefix / rel).as_posix(), payload, manifest)
+            if len(manifest) > max_files or sum(item['size'] for item in manifest) - initial_size > remaining_bytes:
+                raise ValueError('Nested archive exceeds expanded job limits')

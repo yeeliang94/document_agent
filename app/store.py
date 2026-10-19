@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .state import JobState
+
 DEFAULT_CONTEXT = {
     'payroll': 'Prepare the monthly payroll ingestion workbook from the supplied files. Match employee IDs; reconcile joiners, changes, allowances, one-time payments and resignations. Read template instructions and lookup tabs. Preserve formulas. Investigate conflicts and ask when material facts are missing. Continue independent records.',
     'ap': 'Prepare the accounts payable upload. Match supplier IDs and invoice numbers, identify duplicates, reconcile amounts, and preserve the supplied template. Ask about material unresolved conflicts.',
@@ -90,6 +92,10 @@ class Store:
             raise ValueError('Invalid job ID')
         return self.root / 'jobs' / job_id
 
+    def state(self, job_id):
+        """The job's durable facts (inventory, coverage, datasets, tasks)."""
+        return JobState(self.path(job_id))
+
     def save(self, job):
         job['updated_at'] = now()
         with self.connect() as c:
@@ -106,9 +112,19 @@ class Store:
         return json.loads(r[0])
 
     def update(self, job_id, **values):
-        job = self.get(job_id)
-        job.update(values)
-        self.save(job)
+        return self.mutate(job_id, lambda job: job.update(values))
+
+    def mutate(self, job_id, change):
+        """Read, change and save one job in a single write transaction, so concurrent writers never lose fields."""
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            r = c.execute('SELECT data FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if not r:
+                raise KeyError(job_id)
+            job = json.loads(r[0])
+            change(job)
+            job['updated_at'] = now()
+            c.execute('UPDATE jobs SET data=? WHERE id=?', (json.dumps(job, default=str), job_id))
         return job
 
     def jobs(self):

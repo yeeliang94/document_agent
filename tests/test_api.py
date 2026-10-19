@@ -13,7 +13,7 @@ from pydantic_ai.models.function import FunctionModel
 from app.config import Settings
 from app.main import create_app
 
-from helpers import LOCAL, create_job, wait_for_job, workbook_bytes
+from helpers import LOCAL, apply_step, completion_checks, create_job, wait_for_job, workbook_bytes
 
 
 def test_upload_nested_inputs_persists_job_and_serves_frontend(tmp_path):
@@ -85,6 +85,7 @@ def payroll_model():
         ('create_output', {'filename': 'payroll_completed.xlsx'}),
         ('write_cells', {'path': 'outputs/payroll_completed.xlsx', 'changes': changes}),
         ('validate_output', {'path': 'outputs/payroll_completed.xlsx'}),
+        *completion_checks('outputs/payroll_completed.xlsx'),
         (
             'final_result',
             {'summary': 'Prepared one employee; formula preserved.', 'status': 'complete', 'unresolved': []},
@@ -116,6 +117,9 @@ def test_real_agent_tools_write_validate_download_and_log(tmp_path):
             'create_output',
             'write_cells',
             'validate_output',
+            'read_document',
+            'record_decisions',
+            'validate_job',
             'final_result',
         ]
         output = tmp_path / 'jobs' / job['id'] / 'outputs/payroll_completed.xlsx'
@@ -136,8 +140,10 @@ def test_answer_resumes_deferred_tool_and_keeps_answer_in_history(tmp_path):
 
     steps = [
         ('ask_user', {'question': 'Confirm salary currency?'}),
+        apply_step(1),
         ('create_output', {'filename': 'confirmed.xlsx'}),
         ('validate_output', {'path': 'outputs/confirmed.xlsx'}),
+        *completion_checks('outputs/confirmed.xlsx'),
         ('final_result', {'summary': 'Currency confirmed.', 'status': 'complete', 'unresolved': []}),
     ]
     calls = []
@@ -186,6 +192,7 @@ def test_pause_checkpoints_at_tool_boundary_and_resume_completes(tmp_path):
             {'path': 'outputs/resumed.xlsx', 'changes': [{'sheet': 'Employees', 'cell': 'A2', 'value': 'EMP001'}]},
         ),
         ('validate_output', {'path': 'outputs/resumed.xlsx'}),
+        *completion_checks('outputs/resumed.xlsx'),
         ('final_result', {'summary': 'Resumed output complete.', 'status': 'complete', 'unresolved': []}),
     ]
 
@@ -242,7 +249,11 @@ def test_compaction_keeps_tool_pairs_and_archives_full_content(tmp_path):
         if len(calls) <= 8:
             return ModelResponse(
                 parts=[
-                    ToolCallPart('read_document', {'path': 'inputs/large.txt'}, tool_call_id=f'compact-{len(calls)}')
+                    ToolCallPart(
+                        'read_document',
+                        {'path': 'inputs/large.txt', 'offset': len(calls) - 1},
+                        tool_call_id=f'compact-{len(calls)}',
+                    )
                 ]
             )
         return ModelResponse(

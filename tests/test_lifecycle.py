@@ -17,15 +17,17 @@ from pydantic_ai.models.function import FunctionModel
 from app.config import Settings
 from app.main import create_app
 
-from helpers import LOCAL, create_job, final, scripted, wait_for_job
+from helpers import LOCAL, apply_step, completion_checks, create_job, final, scripted, wait_for_job
 
 
 def test_partial_job_can_continue_with_new_instruction(tmp_path):
     model, seen = scripted(
         [
             final('partial', ['Need October allowances']),
+            apply_step(1),
             ('create_output', {'filename': 'out.xlsx'}),
             ('validate_output', {'path': 'outputs/out.xlsx'}),
+            *completion_checks('outputs/out.xlsx'),
             final(),
         ]
     )
@@ -98,6 +100,7 @@ def test_completion_uses_the_validated_workbook_among_several(tmp_path):
             ('create_output', {'filename': 'a_draft.xlsx'}),
             ('create_output', {'filename': 'z_final.xlsx'}),
             ('validate_output', {'path': './outputs/z_final.xlsx'}),
+            *completion_checks('outputs/z_final.xlsx'),
             final(),
         ]
     )

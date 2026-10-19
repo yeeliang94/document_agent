@@ -8,7 +8,7 @@ import time
 import uuid
 import zipfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -17,10 +17,13 @@ from xml.etree import ElementTree
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 from pydantic import BaseModel
 from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolReturn
 
-from .files import atomic_bytes, relative_name, within
+from .config import Settings
+from .files import SUPPORTED, atomic_bytes, relative_name, within
+from .state import JobState, encode, identity
 from .store import Store
 
 # Package parts openpyxl cannot carry through a load/save round trip.
@@ -32,6 +35,8 @@ DROPPED_PARTS = {
     'xl/slicers/': 'slicers',
     'xl/vbaProject.bin': 'macros',
 }
+# Identical calls with identical results within this many recent actions count as no progress.
+ACTIVITY_WINDOW = 10
 _job_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
@@ -73,7 +78,7 @@ def unsized(sh):
     return sh
 
 
-def read_email(p, root):
+def read_email(p, root, max_files=2000, max_bytes=200 * 1024 * 1024):
     msg = BytesParser(policy=policy.default).parsebytes(p.read_bytes())
     headers = '\n'.join(f'{k}: {msg[k]}' for k in ('From', 'To', 'Cc', 'Date', 'Subject') if msg[k])
     body = msg.get_body(preferencelist=('plain', 'html'))
@@ -83,8 +88,12 @@ def read_email(p, root):
     source_id = hashlib.sha256(p.relative_to(root).as_posix().encode()).hexdigest()
     folder = Path('working/attachments') / source_id
     attachments = []
+    if len(p.relative_to(root).parts) > 24:
+        raise ValueError('Email attachment nesting limit reached')
     for i, part in enumerate(msg.iter_attachments(), 1):
         data = part.get_payload(decode=True) or b''
+        if len(attachments) >= max_files or sum(item['size'] for item in attachments) + len(data) > max_bytes:
+            raise ValueError('Email attachments exceed the remaining job limits')
         try:
             name = relative_name(Path(part.get_filename() or '').name).as_posix()
         except ValueError:
@@ -96,27 +105,147 @@ def read_email(p, root):
     return headers + '\n\n' + text, {'attachments': attachments} if attachments else {}
 
 
+def validate_workbook(deps, path):
+    output = deps.resolve(path, output=True)
+    template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
+    failures = [
+        f'Template {x} were lost when saving; edit this workbook in Excel instead.'
+        for x in sorted(package_features(template) - package_features(output))
+    ]
+    original = load_workbook(template)
+    w = load_workbook(output)
+    formula_count = 0
+    try:
+        for sh in original:
+            if sh.title not in w.sheetnames:
+                failures.append('Missing sheet: ' + sh.title)
+                continue
+            if sh.sheet_state != w[sh.title].sheet_state:
+                failures.append('Visibility changed: ' + sh.title)
+            for row in sh:
+                for c in row:
+                    if c.data_type == 'f':
+                        formula_count += 1
+                        if w[sh.title][c.coordinate].value != c.value:
+                            failures.append('Formula changed: ' + sh.title + '!' + c.coordinate)
+
+        result = {
+            'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
+            'path': output.relative_to(deps.root).as_posix(),
+            'reopened': True,
+            'formulas_preserved': formula_count,
+            'failures': failures,
+            'passed': not failures,
+            'limitation': 'No formula recalculation; source accounting and business rules need separate checks.',
+        }
+        atomic_bytes(deps.root / 'working/validation.json', json.dumps(result).encode())
+        return result
+    finally:
+        original.close()
+        w.close()
+
+
 class CellChange(BaseModel):
     sheet: str
     cell: str
     value: str | int | float | bool | None
     number_format: str | None = None
+    # The source observation this value accounts for; recording it makes the cell an output assignment.
+    record: str | None = None
+
+
+def assign_cells(state, path, changes):
+    """Track source-backed cell writes as output assignments, keeping each retained cell's own provenance."""
+    rows = {}
+    for change in changes:
+        if change.get('record'):
+            letters, row = coordinate_from_string(change['cell'])
+            rows.setdefault((change['sheet'], row), []).append((column_index_from_string(letters), change))
+    mappings = dict(state.all('mapping'))
+    revision = state.revision('instruction_revision')
+    for (sheet, row), items in rows.items():
+        key = identity(path, sheet, row)
+        old = state.get('assignment', key) or {}
+        old_mapping = mappings.get(old.get('operation'), {})
+        fields = {column['column']: column['field'] for column in old_mapping.get('destination', {}).get('columns', [])}
+        # A bulk-written row carries one provenance for all its cells; split it so edits replace only their cell.
+        inherited = {
+            'sources': old.get('sources', []),
+            'dataset': old.get('dataset'),
+            'instruction_revision': old_mapping.get('instruction_revision'),
+        }
+        provenance = old.get('provenance') or {field_name: inherited for field_name in fields.values()}
+        values = dict(old.get('values', {}))
+        numeric = set(old.get('numeric_fields', []))
+        for column, change in items:
+            field_name = fields.setdefault(column, get_column_letter(column))
+            values[field_name] = change['value']
+            is_number = isinstance(change['value'], (int, float)) and not isinstance(change['value'], bool)
+            (numeric.add if is_number else numeric.discard)(field_name)
+            provenance[field_name] = {'sources': [change['record']], 'dataset': None, 'instruction_revision': revision}
+        operation = 'cells:' + key
+        destination = {'sheet': sheet, 'columns': [{'field': f, 'column': c} for c, f in sorted(fields.items())]}
+        state.put('mapping', operation, {'path': path, 'destination': destination, 'instruction_revision': revision})
+        state.put(
+            'assignment',
+            key,
+            {
+                'id': key,
+                'path': path,
+                'sheet': sheet,
+                'row': row,
+                # Only sources that still back a cell count as included.
+                'sources': sorted({source for cell in provenance.values() for source in cell['sources']}),
+                'dataset': None,
+                'provenance': provenance,
+                'operation': operation,
+                'values': values,
+                'numeric_fields': sorted(numeric),
+            },
+        )
 
 
 @dataclass
 class JobDeps:
     store: Store
     job_id: str
+    settings: Settings | None = None
+    actor: str = 'main'
+    scope: tuple[str, ...] = ()
+    _state: JobState | None = field(default=None, init=False, repr=False)
+
+    @property
+    def state(self):
+        if self._state is None:
+            self._state = JobState(self.root)
+            self._state.inventory(self.current()['files'])
+        return self._state
+
+    def check_stop(self):
+        status = self.current()['status']
+        if status in ('pausing', 'paused', 'cancelled'):
+            raise InterruptedError('Job stopped; saved work is retained')
+        if self.actor != 'main' and self.state.get('task', self.actor, {}).get('status') == 'cancelled':
+            raise InterruptedError('Delegated task cancelled')
 
     @property
     def root(self):
         return self.store.path(self.job_id)
+
+    def allow_artifact(self, path):
+        if self.actor != 'main':
+            task = self.state.get('task', self.actor)
+            self.state.patch('task', self.actor, {'artifacts': sorted(set(task.get('artifacts', []) + [path]))})
 
     def current(self):
         return self.store.get(self.job_id)
 
     def resolve(self, path, output=False):
         p = within(self.root, path)
+        if self.actor != 'main':
+            artifacts = self.state.get('task', self.actor, {}).get('artifacts', [])
+            if output or not any(p == within(self.root, item) for item in (*self.scope, *artifacts)):
+                raise ValueError('Scout access is limited to its assigned source files')
         if output and not p.is_relative_to(self.root / 'outputs'):
             raise ValueError('Only output copies can be edited')
         return p
@@ -129,6 +258,7 @@ class JobDeps:
             name.replace('_', ' '),
             type='tool',
             arguments=args,
+            actor=self.actor,
             span_id=span,
             status='running',
         )
@@ -140,9 +270,24 @@ class JobDeps:
 
             def locked():
                 with lock:
+                    # A pause requested during a model call takes effect at the next tool boundary.
+                    if self.current()['status'] != 'pausing':
+                        self.check_stop()
                     return fn()
 
-            result = await asyncio.to_thread(locked)
+            worker = asyncio.create_task(asyncio.to_thread(locked))
+            try:
+                result = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Do not release the job worker while a timed-out thread can still mutate artifacts.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                raise
             logged = result.return_value if isinstance(result, ToolReturn) else result
             self.store.event(
                 self.job_id,
@@ -154,8 +299,9 @@ class JobDeps:
                 duration_ms=round((time.monotonic() - started) * 1000),
                 span_id=span,
                 status='completed',
+                actor=self.actor,
             )
-            return result
+            return self.prepare_result(name, args, result)
         except Exception as e:
             self.store.event(
                 self.job_id,
@@ -169,27 +315,117 @@ class JobDeps:
                 span_id=span,
                 status='failed',
             )
-            return {
-                'error': str(e),
-                'error_type': type(e).__name__,
-                'instruction': 'Investigate or use another tool; continue independent work.',
-            }
+            return self.prepare_result(
+                name,
+                args,
+                {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'instruction': 'Investigate or use another tool; continue independent work.',
+                },
+            )
+
+    async def async_action(self, name, args, work):
+        """Run event-loop work (delegation) and report its errors to the model instead of failing the job."""
+        try:
+            outcome = await work
+        except Exception as error:
+            outcome = error
+
+        def report():
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        return await self.action(name, args, report)
+
+    def prepare_result(self, name, args, result):
+        if not isinstance(result, ToolReturn):
+            fingerprint = identity(name, args, result)
+            # A window, not a streak, so alternating between two unproductive calls is also caught.
+            recent = [*self.state.get('activity', self.actor, {}).get('recent', []), fingerprint][-ACTIVITY_WINDOW:]
+            self.state.put('activity', self.actor, {'recent': recent})
+            count = recent.count(fingerprint)
+            waiting = (
+                name == 'get_task_status' and isinstance(result, dict) and result.get('status') in ('queued', 'running')
+            )
+            if count == 3 and not waiting:
+                self.store.event(
+                    self.job_id,
+                    'progress.warning',
+                    'Repeated action produced no new information.',
+                    type='job',
+                    level='WARN',
+                    actor=self.actor,
+                )
+            if count >= 5 and not waiting:
+                if self.actor == 'main':
+                    self.store.update(self.job_id, status='pausing')
+                else:
+                    # A looping worker stops at its next step; its history and findings remain.
+                    self.state.patch(
+                        'task', self.actor, {'status': 'cancelled', 'error': 'Repeated actions without progress'}
+                    )
+                    self.store.event(
+                        self.job_id,
+                        'task.cancelled',
+                        'Delegated task repeated actions without progress.',
+                        type='task',
+                        task_id=self.actor,
+                        level='WARN',
+                    )
+            payload = encode(result).encode()
+            limit = (self.settings or Settings()).tool_result_bytes
+            if len(payload) > limit:
+                artifact = self.state.artifact('tool-results', result)
+                self.allow_artifact(artifact)
+                return {
+                    'artifact': artifact,
+                    'truncated': True,
+                    'bytes': len(payload),
+                    'preview': payload[: min(1000, limit // 2)].decode('utf-8', errors='ignore'),
+                    'instruction': 'Use read_document with offsets to retrieve the stored result.',
+                }
+        return result
 
 
-def register_tools(agent: Agent):
-    @agent.tool(sequential=True)
+def registrar(agent: Agent, readonly, worker_tools):
+    """Register tools sequentially; read-only workers receive only the named subset."""
+
+    def tool(fn):
+        name = fn.__name__.removesuffix('_tool')
+        if readonly and name not in worker_tools:
+            return fn
+        return agent.tool(name=name, sequential=True)(fn)
+
+    return tool
+
+
+def register_tools(agent: Agent, readonly=False):
+    tool = registrar(agent, readonly, {'list_files', 'inspect_workbook', 'read_sheet', 'read_document', 'view_page'})
+
+    @tool
     async def list_files(ctx: RunContext[JobDeps]) -> dict:
         """List all submitted files with relative paths, hashes and duplicate links, plus outputs and saved working memory."""
-        j = ctx.deps.current()
-        return {
-            'files': j['files'],
-            'artifacts': j['artifacts'],
-            'memory': json.loads((ctx.deps.root / 'working/memory.json').read_text())
-            if (ctx.deps.root / 'working/memory.json').exists()
-            else {},
-        }
 
-    @agent.tool(sequential=True)
+        def listing():
+            j = ctx.deps.current()
+            memory = ctx.deps.root / 'working/memory.json'
+            if ctx.deps.actor != 'main':
+                return {
+                    'files': [item for item in j['files'] if item['path'] in ctx.deps.scope],
+                    'artifacts': [],
+                    'memory': {},
+                }
+            return {
+                'files': j['files'],
+                'artifacts': j['artifacts'],
+                'memory': json.loads(memory.read_text()) if memory.exists() else {},
+            }
+
+        return await ctx.deps.action('list_files', {}, listing)
+
+    @tool
     async def inspect_workbook(ctx: RunContext[JobDeps], path: str) -> Any:
         """Inspect every sheet, visibility, dimensions, first populated rows, comments, formulas and validation lists. Previews do not establish completeness."""
 
@@ -235,7 +471,7 @@ def register_tools(agent: Agent):
 
         return await ctx.deps.action('inspect_workbook', {'path': path}, read)
 
-    @agent.tool(sequential=True)
+    @tool
     async def read_sheet(
         ctx: RunContext[JobDeps],
         path: str,
@@ -298,7 +534,7 @@ def register_tools(agent: Agent):
             read,
         )
 
-    @agent.tool(sequential=True)
+    @tool
     async def read_document(ctx: RunContext[JobDeps], path: str, page: int = 1, offset: int = 0) -> Any:
         """Read a PDF page, Word document, CSV, JSON, UTF-8 text or email. Email attachments are saved under working/attachments and listed for reading. Read scans with view_page. Large text pages through offset, 16000 characters per read."""
 
@@ -322,7 +558,34 @@ def register_tools(agent: Agent):
                 )
                 meta = {}
             elif p.suffix.lower() == '.eml':
-                text, meta = read_email(p, ctx.deps.root)
+                settings = ctx.deps.settings or Settings()
+                parent = path
+                existing = [entry for entry in ctx.deps.current()['files'] if entry.get('parent') != parent]
+                text, meta = read_email(
+                    p,
+                    ctx.deps.root,
+                    settings.max_files - len(existing),
+                    settings.max_upload_mb * 1024 * 1024 - sum(entry['size'] for entry in existing),
+                )
+                derived = [
+                    {
+                        'path': item['path'],
+                        'size': item['size'],
+                        'sha256': hashlib.sha256((ctx.deps.root / item['path']).read_bytes()).hexdigest(),
+                        'role': 'inputs',
+                        'parent': parent,
+                        'supported': Path(item['path']).suffix.lower() in SUPPORTED,
+                    }
+                    for item in meta.get('attachments', [])
+                ]
+
+                def attach(job):
+                    # Merge into the latest manifest, so a concurrent reader or a status change is never lost.
+                    job['files'] = [entry for entry in job['files'] if entry.get('parent') != parent] + derived
+
+                ctx.deps.state.inventory(ctx.deps.store.mutate(ctx.deps.job_id, attach)['files'])
+                for entry in derived:
+                    ctx.deps.allow_artifact(entry['path'])
             elif p.suffix.lower() in ('.txt', '.csv', '.json'):
                 text = p.read_text(encoding='utf-8-sig', errors='replace')
                 meta = {}
@@ -330,16 +593,37 @@ def register_tools(agent: Agent):
                 raise ValueError('Use view_page for images; this file type is unsupported by the text reader')
             if offset < 0:
                 raise ValueError('Offset must be nonnegative')
-            return {
-                'text': text[offset : offset + 16000],
+            limit = (ctx.deps.settings or Settings()).tool_result_bytes
+            if len(encode(meta).encode()) > limit // 2:
+                meta = {
+                    'attachment_count': len(meta.get('attachments', [])),
+                    'instruction': 'Use query_inventory for attachment paths.',
+                }
+            chunk = text[offset : offset + min(16000, max(1, limit // 2))]
+            result = {
+                'text': chunk,
                 'offset': offset,
-                'next_offset': offset + 16000 if len(text) > offset + 16000 else None,
+                'next_offset': offset + len(chunk) if offset + len(chunk) < len(text) else None,
                 **meta,
             }
+            while len(encode(result).encode()) > limit:
+                chunk = chunk[: len(chunk) // 2]
+                result.update(text=chunk, next_offset=offset + len(chunk) if offset + len(chunk) < len(text) else None)
+            ctx.deps.state.record_read(
+                path,
+                page if p.suffix.lower() == '.pdf' else 1,
+                meta.get('pages', 1),
+                offset,
+                len(chunk),
+                len(text),
+                needs_vision=meta.get('needs_vision', False),
+                actor=ctx.deps.actor,
+            )
+            return result
 
         return await ctx.deps.action('read_document', {'path': path, 'page': page, 'offset': offset}, read)
 
-    @agent.tool(sequential=True)
+    @tool
     async def view_page(ctx: RunContext[JobDeps], path: str, page: int = 1) -> Any:
         """Return actual pixels of a PDF page or image to this vision-capable model. PDF pages are 1-based. No external OCR service; image payload is not logged."""
 
@@ -347,10 +631,12 @@ def register_tools(agent: Agent):
             from PIL import Image, ImageOps
 
             p = ctx.deps.resolve(path)
+            pages = 1
             if p.suffix.lower() == '.pdf':
                 import pypdfium2 as pdfium
 
                 with pdfium.PdfDocument(p) as doc:
+                    pages = len(doc)
                     if page < 1 or page > len(doc):
                         raise ValueError('Invalid page')
                     pg = doc[page - 1]
@@ -365,13 +651,14 @@ def register_tools(agent: Agent):
             else:
                 with Image.open(p) as original:
                     image = ImageOps.exif_transpose(original).convert('RGB')
-            # The model downsizes anything larger than 2048px, so bigger images only cost upload time.
+            # Bound transport size; callers may inspect source crops separately when needed.
             image.thumbnail((2048, 2048))
             buf = io.BytesIO()
             image.save(buf, format='PNG')
             payload = buf.getvalue()
-            image_id = uuid.uuid4().hex + '.png'
+            image_id = hashlib.sha256(payload).hexdigest() + '.png'
             atomic_bytes(ctx.deps.root / 'working' / image_id, payload)
+            ctx.deps.state.record_read(path, page, pages, vision=True, actor=ctx.deps.actor)
             return ToolReturn(
                 {'path': path, 'page': page, 'image_artifact': 'working/' + image_id},
                 content=[BinaryContent(data=payload, media_type='image/png')],
@@ -379,7 +666,7 @@ def register_tools(agent: Agent):
 
         return await ctx.deps.action('view_page', {'path': path, 'page': page}, render)
 
-    @agent.tool(sequential=True)
+    @tool
     async def create_output(ctx: RunContext[JobDeps], filename: str = 'payroll_completed.xlsx') -> Any:
         """Create an output copy of the uploaded template. Existing output is retained, so resume never resets previous edits."""
 
@@ -394,15 +681,20 @@ def register_tools(agent: Agent):
 
         return await ctx.deps.action('create_output', {'filename': filename}, create)
 
-    @agent.tool(sequential=True)
+    @tool
     async def write_cells(ctx: RunContext[JobDeps], path: str, changes: list[CellChange]) -> Any:
-        """Write explicit {sheet,cell,value} changes to an output workbook copy, preserving existing formulas. Dates should be Excel dates or ISO text with a suitable number_format. Optional number_format per change. No row appending: explicit coordinates make retries idempotent."""
+        """Write explicit {sheet,cell,value} changes to an output workbook copy, preserving existing formulas. Dates should be Excel dates or ISO text with a suitable number_format. Optional number_format per change. Set record to the source observation ID a value accounts for, so the row counts as an output assignment. No row appending: explicit coordinates make retries idempotent."""
         changes = [change.model_dump() for change in changes]
 
         def write():
             if len(changes) > 2000:
                 raise ValueError('Write at most 2000 cells per call')
             p = ctx.deps.resolve(path, output=True)
+            unknown = {ch['record'] for ch in changes if ch.get('record')} - {
+                key for key, _ in ctx.deps.state.all('observation')
+            }
+            if unknown:
+                raise ValueError('Unknown source record: ' + sorted(unknown)[0])
             w = load_workbook(p)
             try:
                 for ch in changes:
@@ -424,56 +716,18 @@ def register_tools(agent: Agent):
                 atomic_bytes(p, out.getvalue())
             finally:
                 w.close()
+            assign_cells(ctx.deps.state, p.relative_to(ctx.deps.root).as_posix(), changes)
             return {'path': path, 'cells_written': len(changes)}
 
         return await ctx.deps.action('write_cells', {'path': path, 'changes': changes}, write)
 
-    @agent.tool(sequential=True)
+    @tool
     async def validate_output(ctx: RunContext[JobDeps], path: str) -> Any:
         """Reopen output and check template sheets and existing formulas. This does not prove record completeness or recalculate Excel formulas; reconcile the actual source rows separately."""
 
-        def validate():
-            output = ctx.deps.resolve(path, output=True)
-            template = ctx.deps.resolve(next(f['path'] for f in ctx.deps.current()['files'] if f['role'] == 'template'))
-            failures = [
-                f'Template {x} were lost when saving; edit this workbook in Excel instead.'
-                for x in sorted(package_features(template) - package_features(output))
-            ]
-            original = load_workbook(template)
-            w = load_workbook(output)
-            formula_count = 0
-            try:
-                for sh in original:
-                    if sh.title not in w.sheetnames:
-                        failures.append('Missing sheet: ' + sh.title)
-                        continue
-                    if sh.sheet_state != w[sh.title].sheet_state:
-                        failures.append('Visibility changed: ' + sh.title)
-                    for row in sh:
-                        for c in row:
-                            if c.data_type == 'f':
-                                formula_count += 1
-                                if w[sh.title][c.coordinate].value != c.value:
-                                    failures.append('Formula changed: ' + sh.title + '!' + c.coordinate)
+        return await ctx.deps.action('validate_output', {'path': path}, lambda: validate_workbook(ctx.deps, path))
 
-                result = {
-                    'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
-                    'path': output.relative_to(ctx.deps.root).as_posix(),
-                    'reopened': True,
-                    'formulas_preserved': formula_count,
-                    'failures': failures,
-                    'passed': not failures,
-                    'limitation': 'No formula recalculation; source accounting and business rules need separate checks.',
-                }
-                atomic_bytes(ctx.deps.root / 'working/validation.json', json.dumps(result).encode())
-                return result
-            finally:
-                original.close()
-                w.close()
-
-        return await ctx.deps.action('validate_output', {'path': path}, validate)
-
-    @agent.tool(sequential=True)
+    @tool
     async def save_memory(ctx: RunContext[JobDeps], key: str, value: str) -> Any:
         """Save findings, source accounting, mappings and progress outside context. Pass value as plain text or a JSON-encoded string (not a raw object). Read back via list_files. Save before large operations or compaction."""
 
@@ -485,11 +739,12 @@ def register_tools(agent: Agent):
             except (ValueError, TypeError):
                 memory[key] = value
             atomic_bytes(p, json.dumps(memory, default=str, ensure_ascii=False).encode())
+            ctx.deps.state.put('memory', key, {'value': memory[key]})
             return {'saved': key}
 
         return await ctx.deps.action('save_memory', {'key': key, 'value': value}, save)
 
-    @agent.tool(sequential=True)
+    @tool
     async def save_report(ctx: RunContext[JobDeps], filename: str, text: str) -> Any:
         """Save a concise exception/processing report as UTF-8 .txt or .md alongside the workbook."""
 
@@ -501,7 +756,7 @@ def register_tools(agent: Agent):
 
         return await ctx.deps.action('save_report', {'filename': filename, 'text': text}, save)
 
-    @agent.tool(sequential=True)
+    @tool
     async def ask_user(ctx: RunContext[JobDeps], question: str) -> str:
         """Ask a necessary material question that the sources cannot resolve. Save progress first; continue unrelated work before asking. Job releases its worker until answered."""
         ctx.deps.store.update(ctx.deps.job_id, question={'call_id': ctx.tool_call_id, 'text': question})
