@@ -52,7 +52,11 @@ def bootstrap() -> None:
         shutil.copyfile(ROOT / '.env.example', env_file)
         print('Created .env. Add your OpenAI key there to process documents.', flush=True)
     args = [arg for arg in sys.argv[1:] if arg != '--bootstrap']
-    os.execv(str(python), [str(python), str(Path(__file__).resolve()), *args])
+    command = [str(python), str(Path(__file__).resolve()), *args]
+    if os.name == 'nt':
+        # Windows execv does not quote arguments containing spaces.
+        raise SystemExit(subprocess.call(command))
+    os.execv(str(python), command)
 
 
 def fetch(url: str) -> tuple[int, bytes]:
