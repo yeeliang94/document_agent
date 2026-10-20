@@ -324,13 +324,27 @@ function harnessDetails(job) {
     .join('');
 }
 
+// Zero rows to resolve only means something once records have been registered.
+function rowsToResolve(coverage) {
+  if (!coverage) return '—';
+  const records = coverage.records;
+  const total = Object.values(records).reduce((sum, n) => sum + n, 0);
+  return total ? records.pending + records.unresolved : 'None registered yet';
+}
+
 function output() {
   const job = state.job;
   const usage = job?.usage || {};
   const artifacts = job?.artifacts?.length
     ? job.artifacts
         .map(
-          (a, i) => `<button class="btn artifact-download" data-artifact="${i}">${icon('down')}${esc(a.name)}</button>`,
+          (a, i) =>
+            `<button class="btn artifact-download" data-artifact="${i}">${icon('down')}${esc(a.name)}</button>` +
+            (a.status === 'draft'
+              ? '<div class="artifact-badge draft">Draft — not validated. It may still be an unchanged template copy.</div>'
+              : a.status === 'validated'
+                ? '<div class="artifact-badge validated">Validated against sources</div>'
+                : ''),
         )
         .join('')
     : '<div class="artifact-meta">No output yet.</div>';
@@ -340,7 +354,8 @@ function output() {
     ['Model calls', usage.requests ?? '—'],
     ['Input tokens', usage.input_tokens ?? '—'],
     ['Output tokens', usage.output_tokens ?? '—'],
-    ['Rows to resolve', job?.coverage ? job.coverage.records.pending + job.coverage.records.unresolved : '—'],
+    ['Rows to resolve', rowsToResolve(job?.coverage)],
+    ['Open items', job?.coverage ? job.coverage.open_items : '—'],
   ]
     .map(detailRow)
     .join('');

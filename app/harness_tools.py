@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 
+from .config import Settings
 from .datasets import (
     Column,
     Destination,
@@ -26,7 +27,7 @@ from .datasets import (
     transform_dataset,
 )
 from .inventory import inspect_source
-from .state import UNSETTLED_TASKS, identity, paginate
+from .state import UNSETTLED_TASKS, encode, identity, paginate
 from .tools import JobDeps, registrar
 
 Kind = Literal['raw', 'identifier', 'text', 'decimal', 'date']
@@ -151,6 +152,8 @@ def validate_job(deps, path):
     finally:
         workbook.close()
     result = {
+        # Citeable from the work plan as the saved result that backs a finished item.
+        'id': identity(path),
         'path': path,
         'sha256': digest,
         'passed': not failures,
@@ -282,9 +285,14 @@ def register_harness_tools(agent, delegation=None, readonly=False):
         def record():
             for decision in decisions:
                 if decision.scope == 'source':
-                    source = ctx.deps.state.get('inventory', decision.id)
+                    # A file path names the source as well as its inventory ID does.
+                    key, source = decision.id, ctx.deps.state.get('inventory', decision.id)
                     if not source:
-                        raise ValueError('Unknown inventory item')
+                        key, source = ctx.deps.state.file_entry(decision.id)
+                        source = source and ctx.deps.state.get('inventory', key)
+                    if not source:
+                        raise ValueError('Unknown source: use its file path or an ID from query_inventory')
+                    decision = decision.model_copy(update={'id': key})
                     if (
                         decision.status == 'reviewed'
                         and source['kind'] == 'file'
@@ -326,9 +334,12 @@ def register_harness_tools(agent, delegation=None, readonly=False):
                         | {'instruction_revision': ctx.deps.state.revision('instruction_revision')},
                     )
                 else:
-                    if decision.status == 'reviewed' or not ctx.deps.state.get('observation', decision.id):
+                    if not ctx.deps.state.get('observation', decision.id):
+                        raise ValueError('Unknown record: use an observation ID from query_dataset')
+                    if decision.status == 'reviewed':
                         raise ValueError(
-                            'Rows can be excluded or unresolved; inclusion is established by writing output'
+                            'A record is included by writing it to the output. If it duplicates or only '
+                            'corroborates another record, mark it excluded and give that as the reason.'
                         )
                     ctx.deps.state.put(
                         'decision',
@@ -496,6 +507,7 @@ def register_harness_tools(agent, delegation=None, readonly=False):
         ctx: RunContext[JobDeps],
         kind: Literal[
             'snapshot',
+            'instruction',
             'memory',
             'mapping',
             'dataset',
@@ -523,11 +535,38 @@ def register_harness_tools(agent, delegation=None, readonly=False):
         offset: int = 0,
         limit: int = 25,
     ) -> dict:
-        """Retrieve selected durable job facts after compaction; use IDs and pagination for details."""
+        """Retrieve durable job facts. 'snapshot' returns the compact resume card. 'instruction' pages an index of all user instructions with seq IDs, kind and applied status. To read full instruction text, set key to its seq, offset to a character offset and limit to up to 16000 characters (recommend 4000); follow next_offset until null. Use other kinds with key/offset for details."""
 
         def read():
             if kind == 'snapshot':
-                return ctx.deps.state.snapshot()
+                return ctx.deps.state.resume_card()
+            if kind == 'instruction':
+                instructions = ctx.deps.state.instructions()
+                budget = (ctx.deps.settings or Settings()).tool_result_bytes - 600
+                if key:
+                    item = next((item for item in instructions if str(item['seq']) == key), None)
+                    if item is None:
+                        return {'id': key, 'value': None}
+                    if offset < 0 or not 1 <= limit <= 16000:
+                        raise ValueError('Use a nonnegative character offset and a limit between 1 and 16000')
+                    text = item['text'][offset : offset + limit]
+                    value = {field: item[field] for field in ('seq', 'kind', 'applied')}
+                    while True:
+                        end = offset + len(text)
+                        result = {
+                            'id': key,
+                            'value': value | {'text': text},
+                            'offset': offset,
+                            'next_offset': end if end < len(item['text']) else None,
+                        }
+                        if len(encode(result).encode()) <= budget:
+                            return result
+                        text = text[: len(text) // 2]
+                index = [{field: item[field] for field in ('seq', 'kind', 'applied')} for item in instructions]
+                page = paginate(index, offset, limit)
+                while len(encode(page).encode()) > budget and len(page['items']) > 1:
+                    page = paginate(index, offset, max(1, len(page['items']) // 2))
+                return page
             if key:
                 return {'id': key, 'value': ctx.deps.state.get(kind, key)}
             return ctx.deps.state.page(kind, offset, limit)

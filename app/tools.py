@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from xml.etree import ElementTree
 
 from openpyxl import load_workbook
@@ -23,10 +23,10 @@ from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 from pydantic import BaseModel
 from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolReturn
 
+from . import sheet_reads
 from .config import Settings
 from .files import SUPPORTED, atomic_bytes, relative_name, within
-from .regions import sheet_layout
-from .state import JobState, encode, identity
+from .state import JobState, encode, fit_result, identity
 from .store import Store
 from .supervisor import CapabilityResult, failure, normalized, repetition
 from .workplan import record_outcome
@@ -40,6 +40,29 @@ DROPPED_PARTS = {
     'xl/slicers/': 'slicers',
     'xl/vbaProject.bin': 'macros',
 }
+# Output names that would claim a status the application has not verified.
+# Whole words only, so names like "incomplete_items" or "abandoned" stay allowed.
+STATUS_WORDS = re.compile(r'(?<![a-z])(completed?|final|validated|verified|approved|done)(?![a-z])', re.IGNORECASE)
+# Reads of one source (any offset or range) within the recent action window that earn a warning.
+REREAD_WARNING = 4
+READ_TOOLS = {
+    'read_cell',
+    'read_sheet',
+    'read_document',
+    'inspect_workbook',
+    'inspect_regions',
+    'search_cells',
+    'view_page',
+}
+
+
+def read_target(tool, arguments):
+    """The source a read looks at, ignoring where in it; None for anything but a read."""
+    if tool not in READ_TOOLS or not isinstance(arguments, dict):
+        return None
+    return arguments.get('path'), arguments.get('sheet'), arguments.get('page')
+
+
 # Identical calls with identical results within this many recent actions count as no progress.
 ACTIVITY_WINDOW = 10
 _job_locks: dict[str, threading.Lock] = {}
@@ -74,13 +97,6 @@ def package_features(path):
                 ):
                     features[label] += sum(1 for _ in drawing.iter('{' + drawing_ns + '}' + tag))
     return features
-
-
-def unsized(sh):
-    # Some generators omit the sheet dimension; read-only mode then reports no size.
-    if sh.max_row is None or sh.max_column is None:
-        sh.calculate_dimension(force=True)
-    return sh
 
 
 def read_email(p, root, max_files=2000, max_bytes=200 * 1024 * 1024):
@@ -416,20 +432,30 @@ class JobDeps:
                     )
             if warning and not waiting and isinstance(result, dict):
                 result = result | {
-                    'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, link evidence to the current work item, or identify a specific blocker.'
+                    'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, save a result from what you have read, or identify a specific blocker.'
+                }
+            # Paging with new offsets or ranges dodges the identical-call check, so also count reads per target.
+            rereads = sum(read_target(item['tool'], item['arguments']) == read_target(name, args) for item in actions)
+            if read_target(name, args) and rereads >= REREAD_WARNING and isinstance(result, dict):
+                result = result | {
+                    'reread_warning': f'This source has been read {rereads} times in your last {len(actions)} actions. '
+                    'Save what you have learned (interpretation, dataset or blocker) instead of reading it again.'
                 }
             payload = encode(result).encode()
             limit = (self.settings or Settings()).tool_result_bytes
             if len(payload) > limit:
+                # Keep the full result for audit, but hand the model a usable, shortened structure.
+                # Paging through a saved result in raw slices was the observed re-reading trap.
                 artifact = self.state.artifact('tool-results', result)
                 self.allow_artifact(artifact)
-                return {
+                envelope = {
                     'artifact': artifact,
                     'truncated': True,
                     'bytes': len(payload),
-                    'preview': payload[: min(1000, limit // 2)].decode('utf-8', errors='ignore'),
-                    'instruction': 'Use read_document with offsets to retrieve the stored result.',
+                    'instruction': 'Result shortened to fit. Do not reread the saved result; repeat the tool with '
+                    'a narrower request (fewer rows, offset/limit, or a specific key).',
                 }
+                return fit_result(result, limit, envelope)
         return result
 
 
@@ -472,7 +498,9 @@ def registrar(agent: Agent, readonly, worker_tools):
 
 
 def register_tools(agent: Agent, readonly=False):
-    tool = registrar(agent, readonly, {'list_files', 'inspect_workbook', 'read_sheet', 'read_document', 'view_page'})
+    tool = registrar(
+        agent, readonly, {'list_files', 'inspect_workbook', 'read_sheet', 'read_cell', 'read_document', 'view_page'}
+    )
 
     @tool
     async def list_files(ctx: RunContext[JobDeps]) -> dict:
@@ -552,55 +580,19 @@ def register_tools(agent: Agent, readonly=False):
         end_column: int = 90,
         formulas: bool = False,
     ) -> Any:
-        """Read native workbook cells with coordinates. Iterate across all applicable rows; each read is limited to 10000 cells. Formula values may be cached/stale."""
+        """Read native workbook cells with coordinates. Only non-empty cells are returned (absent coordinates are blank); data_type and number_format appear only when notable. Each read covers at most 10000 cells and stops early at the result size limit; continue from next_row. If one row cannot fit, narrow columns or use read_cell to page its value/note text before advancing. Formula values may be cached/stale."""
 
         def read():
-            if (
-                start_row < 1
-                or start_column < 1
-                or end_row < start_row
-                or end_column < start_column
-                or (end_row - start_row + 1) * (end_column - start_column + 1) > 10000
-            ):
-                raise ValueError('Use a valid range of at most 10000 cells')
-            source = ctx.deps.resolve(path)
-            w = load_workbook(source, read_only=True, data_only=not formulas)
-            try:
-                sh = unsized(w[sheet])
-                notes, merges = sheet_layout(source, sheet)
-                return {
-                    'sheet': sheet,
-                    'rows': [
-                        [
-                            {
-                                'cell': (
-                                    coordinate
-                                    := f'{get_column_letter(start_column + column_index)}{start_row + row_index}'
-                                ),
-                                'value': c.value.isoformat() if hasattr(c.value, 'isoformat') else c.value,
-                                'data_type': c.data_type,
-                                'number_format': c.number_format or 'General',
-                                'note': (notes.get(coordinate) or '')[:1000] or None,
-                            }
-                            for column_index, c in enumerate(row)
-                        ]
-                        for row_index, row in enumerate(
-                            sh.iter_rows(
-                                min_row=start_row,
-                                max_row=min(end_row, sh.max_row),
-                                min_col=start_column,
-                                max_col=end_column,
-                            )
-                        )
-                    ],
-                    'merged_ranges': merges[:200],
-                    'last_row': min(end_row, sh.max_row),
-                    'sheet_rows': sh.max_row,
-                    'more_rows': end_row < sh.max_row,
-                    'formulas': formulas,
-                }
-            finally:
-                w.close()
+            return sheet_reads.read_sheet(
+                ctx.deps.resolve(path),
+                sheet,
+                start_row,
+                end_row,
+                start_column,
+                end_column,
+                formulas,
+                (ctx.deps.settings or Settings()).tool_result_bytes,
+            )
 
         return await ctx.deps.action(
             'read_sheet',
@@ -611,6 +603,32 @@ def register_tools(agent: Agent, readonly=False):
                 'formulas': formulas,
             },
             read,
+        )
+
+    @tool
+    async def read_cell(
+        ctx: RunContext[JobDeps],
+        path: str,
+        sheet: str,
+        cell: str,
+        field: Literal['value', 'note'] = 'value',
+        offset: int = 0,
+        formulas: bool = False,
+    ) -> Any:
+        """Read the complete text of one native cell value or note in bounded character pages. Follow next_offset until null; finish all columns of an oversized row before advancing read_sheet. Numeric/date values are returned as text here. Formula values may be cached/stale unless formulas is true."""
+
+        return await ctx.deps.action(
+            'read_cell',
+            {'path': path, 'sheet': sheet, 'cell': cell, 'field': field, 'offset': offset, 'formulas': formulas},
+            lambda: sheet_reads.read_cell(
+                ctx.deps.resolve(path),
+                sheet,
+                cell,
+                field,
+                offset,
+                formulas,
+                (ctx.deps.settings or Settings()).tool_result_bytes,
+            ),
         )
 
     @tool
@@ -746,12 +764,17 @@ def register_tools(agent: Agent, readonly=False):
         return await ctx.deps.action('view_page', {'path': path, 'page': page}, render)
 
     @tool
-    async def create_output(ctx: RunContext[JobDeps], filename: str = 'payroll_completed.xlsx') -> Any:
-        """Create an output copy of the uploaded template. Existing output is retained, so resume never resets previous edits."""
+    async def create_output(ctx: RunContext[JobDeps], filename: str = 'payroll_output.xlsx') -> Any:
+        """Create an output copy of the uploaded template. Existing output is retained, so resume never resets previous edits. The application labels it draft until validation passes, so the filename must not claim a status."""
 
         def create():
             if len(relative_name(filename).parts) != 1 or not filename.endswith('.xlsx'):
                 raise ValueError('Use a simple .xlsx filename')
+            if STATUS_WORDS.search(filename):
+                raise ValueError(
+                    'Do not put a status such as completed, final or validated in the filename; '
+                    'the application shows draft or validated itself'
+                )
             dest = ctx.deps.root / 'outputs' / filename
             if not dest.exists():
                 template = next(f for f in ctx.deps.current()['files'] if f['role'] == 'template')

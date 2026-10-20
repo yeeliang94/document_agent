@@ -30,8 +30,40 @@ KEEP_RECENT_MESSAGES = 6
 ARCHIVE_RESULTS_OVER_CHARS = 800
 
 
+# How far the measured/estimated ratio may move the estimate: never below a quarter, never far above it.
+CALIBRATION_RANGE = (0.25, 1.25)
+
+
 class ContextBudgetError(Exception):
     pass
+
+
+def calibrate(state, usage, response):
+    """Learn how the local estimate compares with the input tokens the provider actually counted.
+
+    The estimate prices every image at DI_IMAGE_TOKEN_ESTIMATE and counts serialization overhead the provider
+    does not bill, so it can run several times high. Unchecked, that rebuilt the context on almost every turn
+    and wiped the agent's recent work. Only a real provider's count is trusted; test models have none.
+    """
+    reported = getattr(getattr(response, 'usage', None), 'input_tokens', 0)
+    estimated = usage.get('estimated_tokens')
+    if not estimated or not reported or not getattr(response, 'provider_name', None):
+        return None
+    # The sent estimate already carried the factor in force then; compare the uncorrected estimate.
+    raw = estimated / usage.get('calibration', 1.0)
+    low, high = CALIBRATION_RANGE
+    ratio = min(max(reported / raw, low), high)
+    old = state.get('context', 'calibration', {})
+    # Average with earlier samples, so one unusual request cannot swing the budget.
+    factor = ratio if 'factor' not in old else (old['factor'] + ratio) / 2
+    calibration = {
+        'factor': factor,
+        'last_reported': reported,
+        'last_estimated': round(raw),
+        'samples': old.get('samples', 0) + 1,
+    }
+    state.put('context', 'calibration', calibration)
+    return calibration
 
 
 def estimate_text(text):
@@ -98,7 +130,8 @@ def archive_tool_result(root: Path, message: ModelRequest, part: ToolReturnPart)
         'stored_history': pointer,
         'tool_call_id': part.tool_call_id,
         'excerpt': str(part.content)[:500],
-        'instruction': 'Full details available with read_document or reread the source. Read saved job memory via list_files.',
+        'instruction': 'Older result. Prefer saved job state (read_job_state) or a narrow reread of the source; '
+        'read the stored copy only for a specific detail.',
     }
     return dataclasses.replace(part, content=placeholder), pointer
 
@@ -186,8 +219,8 @@ class ContextPolicy(AbstractCapability):
         atomic_bytes(deps.root / archive, full)
         deps.allow_artifact(archive)
         if deps.actor == 'main':
-            job = deps.current()
-            note = deps.state.snapshot() | {'objective': job['instructions'], 'module_context': job['context']}
+            # The task and module context are already in the instructions; the card says where the work stands.
+            note = {'resume_card': deps.state.resume_card(), 'task': deps.current()['instructions']}
         else:
             note = {'assignment': deps.state.get('task', deps.actor), 'scope': deps.scope}
         narrative = '\n'.join(
@@ -196,7 +229,8 @@ class ContextPolicy(AbstractCapability):
         continuation = {
             'continuation': note,
             'earlier_history': archive,
-            'instruction': 'Retrieve original evidence and selected job state on demand; summaries do not prove coverage.',
+            'instruction': 'Continue from the resume card: do its next step rather than restarting discovery. '
+            'Retrieve original evidence and selected job state on demand; summaries do not prove coverage.',
         }
         return continuation, narrative, archive
 
@@ -247,6 +281,7 @@ class ContextPolicy(AbstractCapability):
             await asyncio.to_thread(deps.state.put, 'context', retry_key, {'force': False})
         history = await asyncio.to_thread(self.compact, deps, list(request_context.messages), force)
         usable = settings.context_tokens - 2 * settings.response_tokens
+        factor = (await asyncio.to_thread(deps.state.get, 'context', 'calibration', {})).get('factor', 1.0)
 
         def count(messages):
             data = text_payload(json.loads(ModelMessagesTypeAdapter.dump_json(messages)))
@@ -259,7 +294,7 @@ class ContextPolicy(AbstractCapability):
                 for item in part.content
                 if getattr(item, 'media_type', '').startswith('image/')
             )
-            return tokens + images * settings.image_tokens, method
+            return round((tokens + images * settings.image_tokens) * factor), method
 
         fixed_tokens, fixed_method = estimate_text(fixed)
         if fixed_tokens > usable:
@@ -324,6 +359,7 @@ class ContextPolicy(AbstractCapability):
                 deps.actor + ':usage',
                 {
                     'estimated_tokens': after,
+                    'calibration': factor,
                     'budget': usable,
                     'method': method,
                     'fixed_tokens': fixed_tokens,

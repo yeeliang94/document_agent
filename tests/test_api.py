@@ -82,10 +82,10 @@ def payroll_model():
         ('list_files', {}),
         ('inspect_workbook', {'path': 'template/template.xlsx'}),
         ('read_document', {'path': 'inputs/HR/Reports/employees.txt'}),
-        ('create_output', {'filename': 'payroll_completed.xlsx'}),
-        ('write_cells', {'path': 'outputs/payroll_completed.xlsx', 'changes': changes}),
-        ('validate_output', {'path': 'outputs/payroll_completed.xlsx'}),
-        *completion_checks('outputs/payroll_completed.xlsx'),
+        ('create_output', {'filename': 'payroll_output.xlsx'}),
+        ('write_cells', {'path': 'outputs/payroll_output.xlsx', 'changes': changes}),
+        ('validate_output', {'path': 'outputs/payroll_output.xlsx'}),
+        *completion_checks('outputs/payroll_output.xlsx'),
         (
             'final_result',
             {'summary': 'Prepared one employee; formula preserved.', 'status': 'complete', 'unresolved': []},
@@ -122,7 +122,7 @@ def test_real_agent_tools_write_validate_download_and_log(tmp_path):
             'validate_job',
             'final_result',
         ]
-        output = tmp_path / 'jobs' / job['id'] / 'outputs/payroll_completed.xlsx'
+        output = tmp_path / 'jobs' / job['id'] / 'outputs/payroll_output.xlsx'
         workbook = load_workbook(output)
         assert workbook['Employees']['A2'].value == 'EMP001'
         assert workbook['Employees']['C2'].value == 4200

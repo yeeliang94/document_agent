@@ -37,8 +37,8 @@ from goal_helpers import establish_requirements, messy_case
 from helpers import run_tool
 
 
-def payment_case(tmp_path):
-    store, job, deps = messy_case(tmp_path)
+def payment_case(tmp_path, prefilled=False):
+    store, job, deps = messy_case(tmp_path, prefilled=prefilled)
     state = deps.state
     inspect_source(state, 'inputs/nested/October.xlsx')
     output = establish_requirements(deps)
@@ -89,6 +89,21 @@ def payment_destination():
         ],
         required=['id', 'amount', 'code'],
     )
+
+
+def test_source_backed_records_matching_prefilled_template_pass_validation(tmp_path):
+    _, _, deps, path, _, dataset = payment_case(tmp_path, prefilled=True)
+    specification = deps.state.get('requirement', identity(path))
+    # The prefilled data makes the detected block span A1:D3, including blank formula-column cells.
+    next(area for area in specification['areas'] if area['id'] == 'formula')['bounds'] = 'D1:D3'
+    save_requirements(deps, OutputSpecification.model_validate(specification))
+    assert 'Too few output records: payments' in check_requirements(deps.state, path)
+    result = populate_template(deps.state, dataset['id'], path, payment_destination(), 'matching-records')
+    assert result['records_written'] == 2
+    assert deps.state.coverage()['passed']
+    assert validate_workbook(deps, path)['passed']
+    checked = validate_job(deps, path)
+    assert checked['passed'], checked['failures']
 
 
 def unpivot_case(tmp_path):

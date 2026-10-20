@@ -30,11 +30,17 @@ def save_plan(state, plan):
     for item in plan.items:
         if any(key not in known for key in item.dependencies) or item.id in item.dependencies:
             raise ValueError('Dependencies must reference other work items')
+    # The plan is a working hypothesis: drop references that do not exist rather than refuse the whole plan.
+    ignored = []
+    for item in plan.items:
+        ignored.extend(key for key in item.evidence if not state.has_reference(key))
+        item.evidence = [key for key in item.evidence if state.has_reference(key)]
+        # Claiming completion still needs a real saved result behind it.
         if item.status == 'done' and not item.evidence:
-            raise ValueError('A completed work item needs saved result references')
-        for key in item.evidence:
-            if not state.has_reference(key):
-                raise ValueError('Unknown result/evidence reference: ' + key)
+            raise ValueError(
+                f'Work item {item.id} is marked done but cites no saved result. Cite an id returned by a tool, '
+                'such as validate_job, extract_region, save_output_requirements or an evidence_id.'
+            )
     visiting, visited = set(), set()
     dependencies = {item.id: item.dependencies for item in plan.items}
 
@@ -54,13 +60,14 @@ def save_plan(state, plan):
     values = plan.model_dump()
     old = state.get('plan', 'current', {})
     digest = identity(values, state.revision('instruction_revision'))
+    note = {'ignored_references': sorted(set(ignored))} if ignored else {}
     if old.get('hash') == digest:
-        return old
+        return old | note
     if old:
         state.put('plan_history', old['hash'], old)
     result = values | {'hash': digest, 'instruction_revision': state.revision('instruction_revision')}
     state.put('plan', 'current', result)
-    return result
+    return result | note
 
 
 def record_outcome(state, actor, tool, arguments, result, events):

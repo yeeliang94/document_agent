@@ -12,6 +12,7 @@ ISOLATED_TOOLS = {
     'inspect_source',
     'inspect_workbook',
     'read_sheet',
+    'read_cell',
     'read_document',
     'view_page',
     'extract_dataset',
@@ -23,7 +24,15 @@ ISOLATED_TOOLS = {
     'extract_region',
 }
 # Killing these cannot leave a half-applied change, so a deadline is an ordinary tool error.
-READ_ONLY_TOOLS = {'inspect_workbook', 'read_sheet', 'read_document', 'view_page', 'validate_output', 'validate_job'}
+READ_ONLY_TOOLS = {
+    'read_cell',
+    'inspect_workbook',
+    'read_sheet',
+    'read_document',
+    'view_page',
+    'validate_output',
+    'validate_job',
+}
 
 
 async def execute_tool(ctx, name, kwargs):

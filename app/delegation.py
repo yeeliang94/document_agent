@@ -190,6 +190,7 @@ class Delegation:
                                 self.runner.settings.stall_turns,
                                 self.runner.settings.recovery_turns,
                                 self.runner.settings.evidence_window,
+                                self.runner.settings.discovery_turns,
                             ).turn()
                             if decision == 'pause':
                                 state.patch(

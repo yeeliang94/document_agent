@@ -98,9 +98,9 @@ def test_completion_uses_the_validated_workbook_among_several(tmp_path):
     model, _ = scripted(
         [
             ('create_output', {'filename': 'a_draft.xlsx'}),
-            ('create_output', {'filename': 'z_final.xlsx'}),
-            ('validate_output', {'path': './outputs/z_final.xlsx'}),
-            *completion_checks('outputs/z_final.xlsx'),
+            ('create_output', {'filename': 'z_output.xlsx'}),
+            ('validate_output', {'path': './outputs/z_output.xlsx'}),
+            *completion_checks('outputs/z_output.xlsx'),
             final(),
         ]
     )

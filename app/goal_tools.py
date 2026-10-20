@@ -18,12 +18,9 @@ def register_goal_tools(agent, readonly=False):
     async def update_work_plan(ctx: RunContext[JobDeps], plan: WorkPlan) -> dict:
         """Persist a bounded objective, current work items, blockers and next actions. Cite saved result IDs; prose cannot establish processing progress."""
 
-        def save():
-            result = save_plan(ctx.deps.state, plan)
-            Supervisor(ctx.deps.state, ctx.deps.actor).link([key for item in plan.items for key in item.evidence])
-            return result
-
-        return await ctx.deps.action('update_work_plan', {}, save)
+        # A plan is a hypothesis. Citing evidence in it must not turn reading into lasting progress,
+        # or rewriting the plan clears a stall without any record being extracted or written.
+        return await ctx.deps.action('update_work_plan', {}, lambda: save_plan(ctx.deps.state, plan))
 
     @tool
     async def search_cells(
@@ -186,7 +183,15 @@ def register_goal_tools(agent, readonly=False):
                 )
                 or not reason.strip()
             ):
-                raise ValueError('View the extracted image, cite its evidence ID, and establish a supported role')
+                if not item:
+                    raise ValueError(
+                        'Unknown visual. resolve_visual is for images embedded in workbooks (listed by inspect_regions); '
+                        'account for a standalone image file with record_decisions instead.'
+                    )
+                raise ValueError(
+                    'Cite the evidence_id from viewing this image with view_page, use role instructions, reference '
+                    'or outside_scope, and give a reason'
+                )
             state.put(
                 'visual',
                 visual,

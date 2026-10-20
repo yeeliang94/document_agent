@@ -40,21 +40,21 @@ def test_tool_error_is_recoverable_and_output_write_is_atomic(tmp_path):
     add_file(store.path(job['id']), 'template', 'template.xlsx', buffer.getvalue(), manifest)
     store.update(job['id'], files=manifest)
     sequence = [
-        ('create_output', {'filename': 'completed.xlsx'}),
+        ('create_output', {'filename': 'output.xlsx'}),
         (
             'write_cells',
             {
-                'path': 'outputs/completed.xlsx',
+                'path': 'outputs/output.xlsx',
                 'changes': [
                     {'sheet': 'Employees', 'cell': 'A2', 'value': 'must not be partially saved'},
                     {'sheet': 'Employees', 'cell': 'E2', 'value': 'overwrite formula'},
                 ],
             },
         ),
-        ('validate_output', {'path': 'outputs/completed.xlsx'}),
+        ('validate_output', {'path': 'outputs/output.xlsx'}),
         (
             'write_cells',
-            {'path': 'outputs/completed.xlsx', 'changes': [{'sheet': 'Employees', 'cell': 'B2', 'value': 'Recovered'}]},
+            {'path': 'outputs/output.xlsx', 'changes': [{'sheet': 'Employees', 'cell': 'B2', 'value': 'Recovered'}]},
         ),
     ]
     called = []
@@ -70,7 +70,7 @@ def test_tool_error_is_recoverable_and_output_write_is_atomic(tmp_path):
     register_tools(agent)
     result = asyncio.run(agent.run('Exercise recovery.', deps=JobDeps(store, job['id'])))
     assert result.output == 'Done'
-    output = load_workbook(store.path(job['id']) / 'outputs/completed.xlsx')
+    output = load_workbook(store.path(job['id']) / 'outputs/output.xlsx')
     assert output['Employees']['A2'].value is None
     assert output['Employees']['B2'].value == 'Recovered'
     assert output['Employees']['E2'].value == '=C2*12'
@@ -154,7 +154,7 @@ def test_registered_tools_have_concrete_openai_parameter_schemas():
         check(schema, name)
 
 
-def test_read_sheet_returns_coordinates_for_blank_readonly_cells(tmp_path):
+def test_read_sheet_omits_blank_readonly_cells_and_counts_them(tmp_path):
 
     store = Store(tmp_path)
     job = store.create('payroll', '2026-10', '', '')
@@ -198,13 +198,14 @@ def test_read_sheet_returns_coordinates_for_blank_readonly_cells(tmp_path):
     register_tools(agent)
     asyncio.run(agent.run('Read the sparse sheet', deps=JobDeps(store, job['id'])))
     assert 'error' not in observed[-1], observed[-1]
-    assert observed[-1]['rows'][1][3] == {
-        'cell': 'D2',
-        'value': None,
-        'data_type': 'n',
-        'number_format': 'General',
-        'note': None,
-    }
+    result = observed[-1]
+    # Blank cells are absent rather than spelled out; the count says how many were skipped.
+    assert result['rows'] == [
+        {'row': 1, 'cells': [{'cell': 'A1', 'value': 'Employee ID'}, {'cell': 'B1', 'value': 'Name'}]},
+        {'row': 2, 'cells': [{'cell': 'A2', 'value': 'EMP001'}]},
+    ]
+    assert result['empty_cells_omitted'] == 5
+    assert result['next_row'] is None and not result['more_rows']
 
 
 def strip_dimension(data):
@@ -230,7 +231,7 @@ def test_read_sheet_handles_workbooks_without_dimension(tmp_path):
     add_file(store.path(job['id']), 'inputs', 'nodim.xlsx', strip_dimension(buf.getvalue()), [])
     result = run_tool(store, job['id'], 'read_sheet', {'path': 'inputs/nodim.xlsx', 'sheet': 'Source', 'end_column': 1})
     assert 'error' not in result, result
-    assert result['sheet_rows'] == 2 and result['rows'][1][0]['value'] == 'EMP001'
+    assert result['sheet_rows'] == 2 and result['rows'][1]['cells'][0]['value'] == 'EMP001'
 
 
 def test_email_body_is_read_and_attachments_saved(tmp_path):

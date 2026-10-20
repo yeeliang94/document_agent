@@ -878,6 +878,17 @@ svg {
   width: 100%;
   margin-top: 13px;
 }
+.artifact-badge {
+  margin-top: 6px;
+  font-size: 9px;
+  line-height: 1.5;
+}
+.artifact-badge.draft {
+  color: var(--amber);
+}
+.artifact-badge.validated {
+  color: var(--muted);
+}
 .session {
   background: #283226;
   color: #e2eacb;

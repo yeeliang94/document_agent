@@ -20,7 +20,7 @@ def workbook_payload(workbook):
     return buffer.getvalue()
 
 
-def messy_case(tmp_path, top=14, reference_column=7, image=False):
+def messy_case(tmp_path, top=14, reference_column=7, image=False, prefilled=False):
     store = Store(tmp_path)
     job = store.create(
         'payroll',
@@ -58,6 +58,9 @@ def messy_case(tmp_path, top=14, reference_column=7, image=False):
     template = Workbook()
     template.active.title = 'Output'
     template.active.append(['Employee ID', 'Amount', 'Code'])
+    if prefilled:
+        template.active.append(['00101', 10, 'REG'])
+        template.active.append(['00102', 20, 'REG'])
     template.active['D2'] = '=SUM(B2:B3)'
     template.create_sheet('Lookup').sheet_state = 'hidden'
     manifest = []
@@ -76,7 +79,7 @@ def establish_requirements(deps):
     evidence = observe(
         deps, 'inspect_workbook', {'path': 'template/destination.xlsx'}, {'sheets': ['Output', 'Lookup']}
     )[0]['key']
-    path = 'outputs/completed.xlsx'
+    path = 'outputs/output.xlsx'
     atomic_bytes(state.root / path, (state.root / 'template/destination.xlsx').read_bytes())
     areas = [
         OutputArea(

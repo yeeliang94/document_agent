@@ -42,7 +42,7 @@ def source_case(tmp_path, rows):
     region, _ = next((key, item) for key, item in deps.state.all('region') if item['path'] == 'inputs/source.xlsx')
     evidence = observe(deps, 'inspect_regions', {'path': 'inputs/source.xlsx', 'region': region}, {})[0]['key']
     save_role(deps.state, RegionRole(region=region, role='records', rationale='Employee records', evidence=[evidence]))
-    path = 'outputs/completed.xlsx'
+    path = 'outputs/output.xlsx'
     atomic_bytes(root / path, (root / 'template/template.xlsx').read_bytes())
     inspect_source(deps.state, 'template/template.xlsx')
     inspected = {}
