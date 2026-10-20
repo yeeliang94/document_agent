@@ -1,5 +1,6 @@
 """Application-issued progress from verified tool outcomes; workbook-specific adapter."""
 
+from .config import Settings
 from .state import identity
 from .supervisor import Supervisor
 
@@ -13,7 +14,28 @@ def observe(deps, name, args, result):
 
     if not isinstance(result, dict) or result.get('error'):
         return []
-    if name in ('read_sheet', 'read_document', 'inspect_workbook', 'search_cells', 'inspect_regions', 'view_page'):
+    if name == 'read_job_state' and args.get('kind') == 'instruction':
+        supervisor = Supervisor(state, deps.actor)
+        if args.get('key') and isinstance(result.get('value'), dict):
+            value = result['value']
+            # Accommodate byte-limited Unicode/escaped pages while requiring substantial new coverage.
+            quantum = max(1, min(4000, ((deps.settings or Settings()).tool_result_bytes - 600) // 16))
+            start = result['offset']
+            supervisor.restore_instruction(
+                ('text', value['seq']), start, start + len(value['text']), quantum, result['next_offset'] is None
+            )
+        elif not args.get('key'):
+            for item in result.get('items', []):
+                supervisor.restore_instruction('index', item['seq'], item['seq'] + 1)
+    if name in (
+        'read_sheet',
+        'read_cell',
+        'read_document',
+        'inspect_workbook',
+        'search_cells',
+        'inspect_regions',
+        'view_page',
+    ):
         entry = state.file_entry(args.get('path'))[1]
         if not entry and name == 'view_page':
             entry = next(

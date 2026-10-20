@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from xml.etree import ElementTree
 
 from openpyxl import load_workbook
@@ -23,9 +23,9 @@ from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 from pydantic import BaseModel
 from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolReturn
 
+from . import sheet_reads
 from .config import Settings
 from .files import SUPPORTED, atomic_bytes, relative_name, within
-from .regions import sheet_layout
 from .state import JobState, encode, fit_result, identity
 from .store import Store
 from .supervisor import CapabilityResult, failure, normalized, repetition
@@ -45,7 +45,15 @@ DROPPED_PARTS = {
 STATUS_WORDS = re.compile(r'(?<![a-z])(completed?|final|validated|verified|approved|done)(?![a-z])', re.IGNORECASE)
 # Reads of one source (any offset or range) within the recent action window that earn a warning.
 REREAD_WARNING = 4
-READ_TOOLS = {'read_sheet', 'read_document', 'inspect_workbook', 'inspect_regions', 'search_cells', 'view_page'}
+READ_TOOLS = {
+    'read_cell',
+    'read_sheet',
+    'read_document',
+    'inspect_workbook',
+    'inspect_regions',
+    'search_cells',
+    'view_page',
+}
 
 
 def read_target(tool, arguments):
@@ -89,13 +97,6 @@ def package_features(path):
                 ):
                     features[label] += sum(1 for _ in drawing.iter('{' + drawing_ns + '}' + tag))
     return features
-
-
-def unsized(sh):
-    # Some generators omit the sheet dimension; read-only mode then reports no size.
-    if sh.max_row is None or sh.max_column is None:
-        sh.calculate_dimension(force=True)
-    return sh
 
 
 def read_email(p, root, max_files=2000, max_bytes=200 * 1024 * 1024):
@@ -497,7 +498,9 @@ def registrar(agent: Agent, readonly, worker_tools):
 
 
 def register_tools(agent: Agent, readonly=False):
-    tool = registrar(agent, readonly, {'list_files', 'inspect_workbook', 'read_sheet', 'read_document', 'view_page'})
+    tool = registrar(
+        agent, readonly, {'list_files', 'inspect_workbook', 'read_sheet', 'read_cell', 'read_document', 'view_page'}
+    )
 
     @tool
     async def list_files(ctx: RunContext[JobDeps]) -> dict:
@@ -577,74 +580,19 @@ def register_tools(agent: Agent, readonly=False):
         end_column: int = 90,
         formulas: bool = False,
     ) -> Any:
-        """Read native workbook cells with coordinates. Only non-empty cells are returned (absent coordinates are blank); data_type and number_format appear only when notable. Each read covers at most 10000 cells and stops early at the result size limit; continue from next_row. Formula values may be cached/stale."""
+        """Read native workbook cells with coordinates. Only non-empty cells are returned (absent coordinates are blank); data_type and number_format appear only when notable. Each read covers at most 10000 cells and stops early at the result size limit; continue from next_row. If one row cannot fit, narrow columns or use read_cell to page its value/note text before advancing. Formula values may be cached/stale."""
 
         def read():
-            if (
-                start_row < 1
-                or start_column < 1
-                or end_row < start_row
-                or end_column < start_column
-                or (end_row - start_row + 1) * (end_column - start_column + 1) > 10000
-            ):
-                raise ValueError('Use a valid range of at most 10000 cells')
-            source = ctx.deps.resolve(path)
-            limit = (ctx.deps.settings or Settings()).tool_result_bytes
-            # Leave room for merged ranges, cursor fields and the capability envelope.
-            budget = max(limit // 2, limit - 3000)
-            w = load_workbook(source, read_only=True, data_only=not formulas)
-            try:
-                sh = unsized(w[sheet])
-                notes, merges = sheet_layout(source, sheet)
-                last = min(end_row, sh.max_row)
-                rows, size, empty, stopped_at = [], 0, 0, None
-                for row_index, row in enumerate(
-                    sh.iter_rows(min_row=start_row, max_row=last, min_col=start_column, max_col=end_column)
-                ):
-                    number = start_row + row_index
-                    cells = []
-                    for column_index, c in enumerate(row):
-                        coordinate = f'{get_column_letter(start_column + column_index)}{number}'
-                        note = (notes.get(coordinate) or '')[:1000] or None
-                        if c.value is None and not note:
-                            empty += 1
-                            continue
-                        cell = {
-                            'cell': coordinate,
-                            'value': c.value.isoformat() if hasattr(c.value, 'isoformat') else c.value,
-                        }
-                        if c.data_type not in ('s', 'n'):
-                            cell['data_type'] = c.data_type
-                        if (c.number_format or 'General') != 'General':
-                            cell['number_format'] = c.number_format
-                        if note:
-                            cell['note'] = note
-                        cells.append(cell)
-                    if not cells:
-                        continue
-                    entry = {'row': number, 'cells': cells}
-                    cost = len(encode(entry).encode()) + 1
-                    # Stop at a whole row, so the caller continues exactly where this read ended.
-                    if rows and size + cost > budget:
-                        stopped_at = number
-                        break
-                    rows.append(entry)
-                    size += cost
-                next_row = stopped_at or (end_row + 1 if end_row < sh.max_row else None)
-                return {
-                    'sheet': sheet,
-                    'rows': rows,
-                    'empty_cells_omitted': empty,
-                    'merged_ranges': merges[:200],
-                    'last_row': stopped_at - 1 if stopped_at else last,
-                    'sheet_rows': sh.max_row,
-                    'more_rows': next_row is not None,
-                    'next_row': next_row,
-                    'stopped_at_size_limit': stopped_at is not None,
-                    'formulas': formulas,
-                }
-            finally:
-                w.close()
+            return sheet_reads.read_sheet(
+                ctx.deps.resolve(path),
+                sheet,
+                start_row,
+                end_row,
+                start_column,
+                end_column,
+                formulas,
+                (ctx.deps.settings or Settings()).tool_result_bytes,
+            )
 
         return await ctx.deps.action(
             'read_sheet',
@@ -655,6 +603,32 @@ def register_tools(agent: Agent, readonly=False):
                 'formulas': formulas,
             },
             read,
+        )
+
+    @tool
+    async def read_cell(
+        ctx: RunContext[JobDeps],
+        path: str,
+        sheet: str,
+        cell: str,
+        field: Literal['value', 'note'] = 'value',
+        offset: int = 0,
+        formulas: bool = False,
+    ) -> Any:
+        """Read the complete text of one native cell value or note in bounded character pages. Follow next_offset until null; finish all columns of an oversized row before advancing read_sheet. Numeric/date values are returned as text here. Formula values may be cached/stale unless formulas is true."""
+
+        return await ctx.deps.action(
+            'read_cell',
+            {'path': path, 'sheet': sheet, 'cell': cell, 'field': field, 'offset': offset, 'formulas': formulas},
+            lambda: sheet_reads.read_cell(
+                ctx.deps.resolve(path),
+                sheet,
+                cell,
+                field,
+                offset,
+                formulas,
+                (ctx.deps.settings or Settings()).tool_result_bytes,
+            ),
         )
 
     @tool

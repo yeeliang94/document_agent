@@ -145,8 +145,43 @@ class Supervisor:
             return True
         return False
 
+    def restore_instruction(self, key, start, end, quantum=1, final=False):
+        """Suspend one stall-clock tick for new instruction coverage, without resetting work/recovery.
+
+        Coverage survives restart and application of an instruction, but a context rebuild needs a fresh
+        restoration pass. Character quanta prevent shifting an overlapping range by one character from
+        buying a turn each time. Credit is consumed at the next boundary, never banked for idle turns.
+        """
+        if end <= start:
+            return
+        generation = self.state.get('context', self.actor, {}).get('archive')
+        key = identity(self.actor, generation, key)
+        saved = self.state.get('instruction_read', key, {})
+        previous = saved.get('ranges', [])
+        merged = []
+        for left, right in sorted([*previous, [start, end]]):
+            if merged and left <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], right)
+            else:
+                merged.append([left, right])
+        if merged == previous:
+            return
+        before = sum(right - left for left, right in previous)
+        after = sum(right - left for left, right in merged)
+        self.state.put('instruction_read', key, {'ranges': merged, 'final': final or saved.get('final', False)})
+        # A legitimate short last page must also fit, even when recovery was already nearly exhausted.
+        if (after + quantum - 1) // quantum > (before + quantum - 1) // quantum or (final and not saved.get('final')):
+            clock = self.state.get('supervision', self.actor, {'turn': 0, 'last_useful': 0, 'recovery': None})
+            clock['restoring_instructions'] = True
+            self.state.put('supervision', self.actor, clock)
+
     def turn(self) -> tuple[Literal['continue', 'recover', 'pause'], dict]:
         clock = self.state.get('supervision', self.actor, {'turn': 0, 'last_useful': 0, 'recovery': None})
+        if clock.pop('restoring_instructions', False):
+            clock['restoration_turns'] = clock.get('restoration_turns', 0) + 1
+            clock['notice'] = False
+            self.state.put('supervision', self.actor, clock)
+            return 'continue', clock
         clock['turn'] += 1
         events = [event for _, event in self.state.all('progress_event') if event['actor'] == self.actor]
         baseline = clock.get('instruction_baseline', 0)

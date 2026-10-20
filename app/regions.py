@@ -59,7 +59,7 @@ def declared_tables(archive, sheet_part):
     return tables
 
 
-def sheet_notes(archive, sheet_part):
+def sheet_notes(archive, sheet_part, cell=None):
     folder, name = posixpath.split(sheet_part)
     relpart = folder + '/_rels/' + name + '.rels'
     if relpart not in archive.namelist():
@@ -69,8 +69,11 @@ def sheet_notes(archive, sheet_part):
         if relation.attrib.get('Type', '').endswith('/comments'):
             target = posixpath.normpath(posixpath.join(folder, relation.attrib['Target'])).lstrip('/')
             for comment in ET.fromstring(archive.read(target)).iter(NS + 'comment'):
+                if cell is not None and comment.attrib['ref'] != cell:
+                    continue
                 text = comment.find(NS + 'text')
-                notes[comment.attrib['ref']] = ''.join(text.itertext())[:2000] if text is not None else ''
+                content = ''.join(text.itertext()) if text is not None else ''
+                notes[comment.attrib['ref']] = content[:2000] if cell is None else content
                 if len(notes) > 10000:
                     raise NotImplementedError(
                         'More than 10000 worksheet comments require a narrower source; discovery is incomplete'
@@ -78,16 +81,18 @@ def sheet_notes(archive, sheet_part):
     return notes
 
 
-def sheet_layout(source, sheet):
+def sheet_layout(source, sheet, note_cell=None):
     """Notes and merged ranges for one sheet, streamed so a bounded read never loads the whole workbook."""
     with zipfile.ZipFile(source) as archive:
         part = next((part for title, _, part in workbook_parts(archive) if title == sheet), None)
         if part is None:
-            return {}, []
+            raise KeyError('Unknown worksheet: ' + sheet)
         try:
-            notes = sheet_notes(archive, part)
+            notes = sheet_notes(archive, part, note_cell)
         except NotImplementedError:
             notes = {}
+        if note_cell is not None:
+            return notes, []
         merges = []
         with archive.open(part) as stream:
             for _, element in ET.iterparse(stream, events=('end',)):

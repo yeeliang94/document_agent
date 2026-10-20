@@ -19,6 +19,7 @@ UNVERSIONED_KINDS = (
     'progress_event',
     'supervision',
     'supervision_request',
+    'instruction_read',
     'checkpoint',
     'plan',
     'plan_history',
