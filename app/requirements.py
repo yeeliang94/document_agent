@@ -180,13 +180,17 @@ def check_write_scope(state, path, sheet, first_row, last_row, columns):
         or specification['instruction_revision'] != state.revision('instruction_revision')
     ):
         raise ValueError('Save current output requirements before writing')
+    areas = [
+        (area['role'], range_boundaries(area['bounds'])) for area in specification['areas'] if area['sheet'] == sheet
+    ]
     for column in columns:
-        for row in (first_row, last_row):
-            if not any(
-                area['sheet'] == sheet
-                and area['role'] in ('required', 'optional')
-                and range_boundaries(area['bounds'])[0] <= column <= range_boundaries(area['bounds'])[2]
-                and range_boundaries(area['bounds'])[1] <= first_row <= last_row <= range_boundaries(area['bounds'])[3]
-                for area in specification['areas']
-            ):
-                raise ValueError(f'Write falls outside established input areas: {sheet}!{column}:{row}')
+        if any(
+            role not in ('required', 'optional') and left <= column <= right and top <= last_row and first_row <= bottom
+            for role, (left, top, right, bottom) in areas
+        ):
+            raise ValueError(f'Write intersects a protected destination area: {sheet}!{column}:{first_row}-{last_row}')
+        if not any(
+            role in ('required', 'optional') and left <= column <= right and top <= first_row <= last_row <= bottom
+            for role, (left, top, right, bottom) in areas
+        ):
+            raise ValueError(f'Write falls outside established input areas: {sheet}!{column}:{first_row}-{last_row}')

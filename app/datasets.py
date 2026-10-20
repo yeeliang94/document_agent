@@ -16,6 +16,7 @@ from .files import atomic_bytes, within
 from .state import identity
 
 Scalar = str | int | float | bool | None
+EXTRACTION_VERSION = 2
 
 
 class Column(BaseModel):
@@ -236,7 +237,7 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
         raise ValueError('Source changed since intake; submit a new input version')
     from openpyxl.utils.cell import range_boundaries
 
-    from .regions import accounting_version
+    from .regions import accounting_version, indexed_cells
     from .requirements import contains
 
     region_mapping = None
@@ -261,7 +262,16 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
             raise ValueError('Establish an evidence-backed records or reference role before extraction')
         if any(number < start_row or number > end_row for number in header_rows):
             raise ValueError('Header rows must lie within extraction bounds')
-        region_mapping = identity(region_id, start_row, end_row, [c.model_dump() for c in columns], header_rows)
+        left, top, right, bottom = range_boundaries(region['bounds'])
+        occupied_region_rows = {
+            cell['row']
+            for cell in indexed_cells(state, source_id)
+            if left <= cell['column'] <= right and top <= cell['row'] <= bottom
+        }
+        # Earlier extraction caches could omit occupied rows whose mapped fields were blank.
+        region_mapping = identity(
+            region_id, start_row, end_row, [c.model_dump() for c in columns], header_rows, EXTRACTION_VERSION
+        )
         state.put(
             'region_mapping',
             region_id,
@@ -274,6 +284,7 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
                 'end_row': end_row,
                 'header_rows': header_rows,
                 'instruction_revision': state.revision('instruction_revision'),
+                'extraction_version': EXTRACTION_VERSION,
             },
         )
     dataset = fresh_id(
@@ -313,7 +324,7 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
             )
             if not region_id and source_record not in observed:
                 continue
-            if region_id and not any(raw[c.column - left].value is not None for c in columns):
+            if region_id and number not in occupied_region_rows:
                 continue
             if number in header_rows:
                 header_signatures.add(tuple(str(cell.value) for cell in raw))
@@ -331,11 +342,15 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
                             'region': region_id,
                             'reference_only': role['role'] == 'reference',
                             'mapping_version': region_mapping,
-                            'cells': [raw[c.column - left].coordinate for c in columns],
+                            'cells': [f'{get_column_letter(c.column)}{number}' for c in columns],
                         },
                     )
                 )
             record = {'id': source_record, 'sources': [source_record], 'values': {}, 'evidence': {}, 'issues': []}
+            if region_id and not any(raw[c.column - left].value is not None for c in columns):
+                record['issues'].append(
+                    'Occupied region row has no values in the selected columns; investigate or explicitly exclude'
+                )
             if tuple(str(cell.value) for cell in raw) in header_signatures:
                 record['issues'].append('Repeated header inside the declared data region')
             labels = {str(cell.value).strip().casefold() for cell in raw if isinstance(cell.value, str)}
@@ -814,8 +829,6 @@ def recover_operation(state, operation_id, abort=False, reason=''):
         if not reason.strip():
             raise ValueError('An abort requires an explicit reconciliation reason')
         journal.update(status='aborted', reason=reason)
-    elif digest == journal['before_sha256']:
-        journal.update(status='aborted', reason='No file replacement occurred; output retained')
     elif digest == journal['sha256']:
         if journal.get('kind') == 'cells':
             from .tools import assign_cells
@@ -824,6 +837,8 @@ def recover_operation(state, operation_id, abort=False, reason=''):
             journal['status'] = 'completed'
         else:
             settle(state, operation_id, journal)
+    elif digest == journal['before_sha256']:
+        journal.update(status='aborted', reason='No file replacement occurred; output retained')
     else:
         raise ValueError(
             'Output differs from both journal revisions; reconcile it and explicitly abort the old operation'
