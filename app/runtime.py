@@ -371,27 +371,20 @@ class Runner:
                 checked = state.get('validation', 'current', {})
                 # Settled work must not become a stall just because the model keeps rewriting a final plan.
                 # Prose alone never suffices: complete() rechecks sources, journals, versions and output bytes.
-                if (
+                validated = (
                     state.get('schema', 'accounting', {}).get('version') == 2
                     and checked.get('passed')
                     and checked.get('revision') == state.revision()
+                    and not pending
+                    and not current.get('pending_messages')
+                )
+                if (
+                    validated
                     and plan.get('items')
                     and all(item['status'] == 'done' and not item.get('blocker') for item in plan['items'])
                     and not plan.get('stale')
-                    and not pending
-                    and not current.get('pending_messages')
                 ):
-                    count = checked['coverage']['output_assignments']
-                    self.complete(
-                        job_id,
-                        SimpleNamespace(
-                            output=JobResult(
-                                summary=f'Prepared and validated {count} output records. Native Excel formula recalculation was not performed.',
-                                status='complete',
-                            ),
-                            usage=run.usage,
-                        ),
-                    )
+                    self.complete_validated(job_id, checked, run.usage)
                     return True
                 supervised = state.get('supervision_request', 'main', {}).get('request', 0)
                 if run.usage.requests > supervised:
@@ -405,6 +398,18 @@ class Runner:
                         self.settings.discovery_turns,
                     ).turn()
                     current_stage = stage(state)
+                    if decision in ('recover', 'pause') and validated:
+                        # The work already passed validate_job; idling afterwards (e.g. failing to tidy the plan)
+                        # is not a stall. Finish instead of pausing a done job; complete() still rechecks everything.
+                        self.store.event(
+                            job_id,
+                            'progress.settled',
+                            'Validated work stopped changing; finishing instead of pausing.',
+                            type='job',
+                            clock=clock,
+                        )
+                        self.complete_validated(job_id, checked, run.usage)
+                        return True
                     if decision == 'recover':
                         add_user_instructions(
                             node.request,
@@ -529,6 +534,20 @@ class Runner:
         return False
 
     # --- Settling the outcome ---------------------------------------------
+
+    def complete_validated(self, job_id, checked, usage):
+        count = checked['coverage']['output_assignments']
+        self.complete(
+            job_id,
+            SimpleNamespace(
+                output=JobResult(
+                    summary=f'Prepared and validated {count} output records. '
+                    'Native Excel formula recalculation was not performed.',
+                    status='complete',
+                ),
+                usage=usage,
+            ),
+        )
 
     def finish(self, job_id, result):
         status = self.store.get(job_id)['status']

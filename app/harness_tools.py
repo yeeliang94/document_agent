@@ -152,6 +152,8 @@ def validate_job(deps, path):
     finally:
         workbook.close()
     result = {
+        # Citeable from the work plan as the saved result that backs a finished item.
+        'id': identity(path),
         'path': path,
         'sha256': digest,
         'passed': not failures,

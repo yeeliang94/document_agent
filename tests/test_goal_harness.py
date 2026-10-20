@@ -330,7 +330,9 @@ def test_native_chart_is_visible_as_an_unsupported_material_capability(tmp_path)
     assert any('visual' in issue['reason'] for issue in deps.state.coverage()['issues'])
 
 
-def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path):
+@pytest.mark.parametrize('finish', ['plan', 'idle'])
+def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path, finish):
+    """'idle' replays the live run that validated, then failed to tidy its plan and only read state."""
     from fastapi.testclient import TestClient
     from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
     from pydantic_ai.models.function import FunctionModel
@@ -470,6 +472,8 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
             actions = [('validate_output', {'path': 'outputs/output.xlsx'})]
         elif number == 6:
             actions = [('validate_job', {'path': 'outputs/output.xlsx'})]
+        elif number >= 7 and finish == 'idle' and number < 20:
+            actions = [('read_job_state', {'kind': 'validation'})]
         elif number == 7:
             actions = [
                 (
@@ -516,6 +520,9 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
         assert client.post(f'/api/jobs/{job["id"]}/start').status_code == 200
         completed = wait_for_job(client, job['id'], statuses=('completed', 'partial', 'failed', 'paused'))
         assert completed['status'] == 'completed', completed
+        names = [event['name'] for event in client.get(f'/api/jobs/{job["id"]}/events').json()]
+        # Validated work that stops changing finishes; it is never paused as a stall.
+        assert ('progress.settled' in names) == (finish == 'idle') and 'progress.stalled' not in names
         assert client.get(f'/api/jobs/{job["id"]}/plan').json()['plan']['objective'] == 'Prepare October payments'
         assert client.get(f'/api/jobs/{job["id"]}/regions').json()['total'] >= 6
         workbook = load_workbook(io.BytesIO(client.get(f'/api/jobs/{job["id"]}/artifacts/output.xlsx').content))

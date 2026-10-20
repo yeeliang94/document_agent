@@ -37,7 +37,10 @@ def save_plan(state, plan):
         item.evidence = [key for key in item.evidence if state.has_reference(key)]
         # Claiming completion still needs a real saved result behind it.
         if item.status == 'done' and not item.evidence:
-            raise ValueError(f'Work item {item.id} is marked done but cites no saved result or evidence ID')
+            raise ValueError(
+                f'Work item {item.id} is marked done but cites no saved result. Cite an id returned by a tool, '
+                'such as validate_job, extract_region, save_output_requirements or an evidence_id.'
+            )
     visiting, visited = set(), set()
     dependencies = {item.id: item.dependencies for item in plan.items}
 
