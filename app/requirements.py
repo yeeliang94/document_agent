@@ -1,12 +1,13 @@
 """Source-backed destination requirements and checks against current output bytes."""
 
+import itertools
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from openpyxl import load_workbook
 from openpyxl.utils.cell import range_boundaries
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .files import within
 from .state import identity
@@ -19,7 +20,21 @@ class RequiredField(BaseModel):
     kind: Literal['any', 'identifier', 'decimal', 'date'] = 'any'
     allowed_values: list[str] = Field(default_factory=list, max_length=100)
     unique: bool = False
-    expected_total: str | None = None
+    expected_total: str | None = Field(
+        default=None, description='Expected numeric sum as a plain number such as "10000.00"; omit when unknown.'
+    )
+
+    @field_validator('expected_total')
+    @classmethod
+    def numeric_total(cls, expected):
+        # A rule written as prose here made validation fail later as an "uncheckable" value.
+        try:
+            valid = expected is None or Decimal(expected).is_finite()
+        except InvalidOperation:
+            valid = False
+        if not valid:
+            raise ValueError(f'expected_total must be a plain number or omitted, not {expected!r}')
+        return expected
 
 
 class OutputArea(BaseModel):
@@ -46,12 +61,52 @@ def contains(outer, inner):
     return a <= e <= g <= c and b <= f <= h <= d
 
 
+def covered(region, areas):
+    """Whether the areas together cover every cell of region (all as min_col, min_row, max_col, max_row).
+
+    A detected block is often split by meaning, e.g. headers, data and formula columns, so one area need not hold it.
+    """
+    left, top, right, bottom = region
+    # Rows between consecutive area edges share the same set of overlapping areas; check each band once.
+    cuts = {top, bottom + 1}
+    for _, area_top, _, area_bottom in areas:
+        cuts.update(edge for edge in (area_top, area_bottom + 1) if top < edge <= bottom)
+    cuts = sorted(cuts)
+    for first, end in itertools.pairwise(cuts):
+        spans = sorted(
+            (max(area_left, left), min(area_right, right))
+            for area_left, area_top, area_right, area_bottom in areas
+            if area_top <= first and area_bottom >= end - 1 and area_left <= right and area_right >= left
+        )
+        reach = left
+        for start, stop in spans:
+            if start > reach:
+                return False
+            reach = max(reach, stop + 1)
+        if reach <= right:
+            return False
+    return True
+
+
 def save_requirements(deps, specification):
-    deps.resolve(specification.path, output=True)
+    target = within(deps.root, specification.path)
+    if not target.is_relative_to(deps.root / 'outputs'):
+        # Requirements describe the deliverable; naming the template is the natural slip when only one copy exists.
+        copies = sorted((deps.root / 'outputs').glob('*.xlsx'))
+        if len(copies) != 1:
+            raise ValueError('Save requirements for the output copy: run create_output, then use its outputs/ path')
+        target = copies[0]
+    deps.resolve(target.relative_to(deps.root).as_posix(), output=True)
+    # validate_job looks requirements up by the normalized output path.
+    specification = specification.model_copy(update={'path': target.relative_to(deps.root).as_posix()})
     state = deps.state
     template = next(entry for _, entry in state.all('inventory') if entry.get('role') == 'template')
     if len({area.id for area in specification.areas}) != len(specification.areas):
         raise ValueError('Area IDs must be unique')
+    from .regions import usable_evidence
+
+    available = usable_evidence(state, template['sha256'], deps.actor)
+    ignored = sorted({key for area in specification.areas for key in area.evidence if key not in available})
     for area in specification.areas:
         bounds = range_boundaries(area.bounds)
         if None in bounds or min(bounds) < 1 or bounds[2] > 16384 or bounds[3] > 1048576:
@@ -60,23 +115,13 @@ def save_requirements(deps, specification):
             raise ValueError('Requirement areas must be bounded to one million cells')
         if any(not bounds[0] <= field.column <= bounds[2] for field in area.fields):
             raise ValueError('Field column is outside its area')
-        for key in area.evidence:
-            evidence = state.get('evidence', key)
-            if (
-                not evidence
-                or evidence['source_hash'] != template['sha256']
-                or evidence.get('actor', 'main') != deps.actor
-            ):
-                raise ValueError(
-                    'Cite inspected destination evidence IDs. Available references: '
-                    + str(
-                        [
-                            {'id': key, 'location': value['location']}
-                            for key, value in state.all('evidence')
-                            if value['source_hash'] == template['sha256'] and value.get('actor', 'main') == deps.actor
-                        ][:8]
-                    )
-                )
+        # Each area needs one real inspection of the destination; extra mistyped citations are dropped.
+        if not any(key in available for key in area.evidence):
+            raise ValueError(
+                f'Area {area.id}: cite an evidence_id from inspecting the destination. Available references: '
+                + str([{'id': key, 'location': location} for key, location in available.items()][:8])
+            )
+        area.evidence = [key for key in area.evidence if key in available]
     result = specification.model_dump() | {
         'instruction_revision': state.revision('instruction_revision'),
         'template_hash': template['sha256'],
@@ -86,7 +131,22 @@ def save_requirements(deps, specification):
     if old:
         state.put('requirement_history', identity(old), old)
     state.put('requirement', key, result)
-    return {'id': key, **result}
+    return {'id': key, **result} | ({'ignored_evidence': ignored} if ignored else {})
+
+
+def output_row(sheet, original, row, left, right, assigned_columns):
+    """Count non-empty assigned or changed rows, leaving unchanged template labels out.
+
+    A header or label row copied from the template is not an output record.
+    """
+    cells = [(sheet.cell(row, col).value, col) for col in range(left, right + 1)]
+    if all(value is None for value, _ in cells):
+        return False
+    return (
+        any(left <= column <= right for column in assigned_columns)
+        or original is None
+        or any(value != original.cell(row, col).value for value, col in cells)
+    )
 
 
 def check_requirements(state, path):
@@ -104,15 +164,32 @@ def check_requirements(state, path):
     for _, region in state.all('region'):
         if region.get('superseded') or region['source'] not in template_sheets:
             continue
-        if not any(
-            area['sheet'] == region['sheet']
-            and area['role'] != 'unresolved'
-            and contains(area['bounds'], region['bounds'])
+        areas = [
+            range_boundaries(area['bounds'])
             for area in specification['areas']
-        ):
-            failures.append('Unclassified destination area: ' + region['sheet'] + '!' + region['bounds'])
+            if area['sheet'] == region['sheet'] and area['role'] != 'unresolved'
+        ]
+        if not covered(range_boundaries(region['bounds']), areas):
+            failures.append(
+                'Unclassified destination area: '
+                + region['sheet']
+                + '!'
+                + region['bounds']
+                + ' (cover every cell with output areas; several adjoining areas are fine)'
+            )
     workbook = load_workbook(within(state.root, path), data_only=False)
+    template_entry = next((entry for _, entry in state.all('inventory') if entry.get('role') == 'template'), None)
+    template = load_workbook(within(state.root, template_entry['path']), data_only=False) if template_entry else None
     try:
+        mappings = dict(state.all('mapping'))
+        assigned_columns = {}
+        for _, assignment in state.all('assignment'):
+            if assignment['path'] != path:
+                continue
+            destination = mappings.get(assignment['operation'], {}).get('destination', {})
+            assigned_columns.setdefault((assignment['sheet'], assignment['row']), set()).update(
+                column['column'] for column in destination.get('columns', [])
+            )
         for area in specification['areas']:
             if area['role'] == 'unresolved':
                 failures.append('Unresolved destination area: ' + area['id'])
@@ -124,10 +201,11 @@ def check_requirements(state, path):
                 continue
             left, top, right, bottom = range_boundaries(area['bounds'])
             sheet = workbook[area['sheet']]
+            original = template[area['sheet']] if template and area['sheet'] in template.sheetnames else None
             active = [
                 row
                 for row in range(top, bottom + 1)
-                if any(sheet.cell(row, col).value is not None for col in range(left, right + 1))
+                if output_row(sheet, original, row, left, right, assigned_columns.get((area['sheet'], row), ()))
             ]
             if len(active) < max(area['min_records'], 1 if area['role'] == 'required' else 0):
                 failures.append('Too few output records: ' + area['id'])
@@ -165,6 +243,8 @@ def check_requirements(state, path):
                         failures.append('Uncheckable numeric value or formula cache: ' + field['meaning'])
     finally:
         workbook.close()
+        if template:
+            template.close()
     return failures
 
 

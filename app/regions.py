@@ -399,10 +399,15 @@ def save_role(state, decision):
                 ][:15]
             )
         )
-    for key in decision.evidence:
-        evidence = state.get('evidence', key)
-        if not evidence or evidence['source_hash'] != region['source_hash'] or evidence.get('actor', 'main') != 'main':
-            raise ValueError('Inspect source content and cite its evidence_id; filenames are insufficient')
+    # One inspection of this source is enough backing; a mistyped extra citation should not void the decision.
+    valid = [key for key in decision.evidence if key in usable_evidence(state, region['source_hash'])]
+    if not valid:
+        raise ValueError(
+            'Cite an evidence_id from an inspection of this source; filenames are insufficient. Available: '
+            + str(list(usable_evidence(state, region['source_hash']).items())[:8])
+        )
+    ignored = [key for key in decision.evidence if key not in valid]
+    decision = decision.model_copy(update={'evidence': valid})
     if decision.role != 'records':
         record_ids = {key for key, item in state.all('observation') if item.get('region') == decision.region}
         if any(record_ids.intersection(item['sources']) for _, item in state.all('assignment')):
@@ -412,7 +417,16 @@ def save_role(state, decision):
         'instruction_revision': state.revision('instruction_revision'),
     }
     state.put('region_role', decision.region, result)
-    return result
+    return result | ({'ignored_evidence': ignored} if ignored else {})
+
+
+def usable_evidence(state, source_hash, actor='main'):
+    """Evidence IDs from this actor's inspections of the source with this hash, with where each looked."""
+    return {
+        key: item['location']
+        for key, item in state.all('evidence')
+        if item['source_hash'] == source_hash and item.get('actor', 'main') == actor
+    }
 
 
 def inventory_images(state, archive, sheet_part, source_id, path, sheet, source_hash):

@@ -26,7 +26,7 @@ from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolRetu
 from .config import Settings
 from .files import SUPPORTED, atomic_bytes, relative_name, within
 from .regions import sheet_layout
-from .state import JobState, encode, identity
+from .state import JobState, encode, fit_result, identity
 from .store import Store
 from .supervisor import CapabilityResult, failure, normalized, repetition
 from .workplan import record_outcome
@@ -40,6 +40,21 @@ DROPPED_PARTS = {
     'xl/slicers/': 'slicers',
     'xl/vbaProject.bin': 'macros',
 }
+# Output names that would claim a status the application has not verified.
+# Whole words only, so names like "incomplete_items" or "abandoned" stay allowed.
+STATUS_WORDS = re.compile(r'(?<![a-z])(completed?|final|validated|verified|approved|done)(?![a-z])', re.IGNORECASE)
+# Reads of one source (any offset or range) within the recent action window that earn a warning.
+REREAD_WARNING = 4
+READ_TOOLS = {'read_sheet', 'read_document', 'inspect_workbook', 'inspect_regions', 'search_cells', 'view_page'}
+
+
+def read_target(tool, arguments):
+    """The source a read looks at, ignoring where in it; None for anything but a read."""
+    if tool not in READ_TOOLS or not isinstance(arguments, dict):
+        return None
+    return arguments.get('path'), arguments.get('sheet'), arguments.get('page')
+
+
 # Identical calls with identical results within this many recent actions count as no progress.
 ACTIVITY_WINDOW = 10
 _job_locks: dict[str, threading.Lock] = {}
@@ -416,20 +431,30 @@ class JobDeps:
                     )
             if warning and not waiting and isinstance(result, dict):
                 result = result | {
-                    'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, link evidence to the current work item, or identify a specific blocker.'
+                    'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, save a result from what you have read, or identify a specific blocker.'
+                }
+            # Paging with new offsets or ranges dodges the identical-call check, so also count reads per target.
+            rereads = sum(read_target(item['tool'], item['arguments']) == read_target(name, args) for item in actions)
+            if read_target(name, args) and rereads >= REREAD_WARNING and isinstance(result, dict):
+                result = result | {
+                    'reread_warning': f'This source has been read {rereads} times in your last {len(actions)} actions. '
+                    'Save what you have learned (interpretation, dataset or blocker) instead of reading it again.'
                 }
             payload = encode(result).encode()
             limit = (self.settings or Settings()).tool_result_bytes
             if len(payload) > limit:
+                # Keep the full result for audit, but hand the model a usable, shortened structure.
+                # Paging through a saved result in raw slices was the observed re-reading trap.
                 artifact = self.state.artifact('tool-results', result)
                 self.allow_artifact(artifact)
-                return {
+                envelope = {
                     'artifact': artifact,
                     'truncated': True,
                     'bytes': len(payload),
-                    'preview': payload[: min(1000, limit // 2)].decode('utf-8', errors='ignore'),
-                    'instruction': 'Use read_document with offsets to retrieve the stored result.',
+                    'instruction': 'Result shortened to fit. Do not reread the saved result; repeat the tool with '
+                    'a narrower request (fewer rows, offset/limit, or a specific key).',
                 }
+                return fit_result(result, limit, envelope)
         return result
 
 
@@ -552,7 +577,7 @@ def register_tools(agent: Agent, readonly=False):
         end_column: int = 90,
         formulas: bool = False,
     ) -> Any:
-        """Read native workbook cells with coordinates. Iterate across all applicable rows; each read is limited to 10000 cells. Formula values may be cached/stale."""
+        """Read native workbook cells with coordinates. Only non-empty cells are returned (absent coordinates are blank); data_type and number_format appear only when notable. Each read covers at most 10000 cells and stops early at the result size limit; continue from next_row. Formula values may be cached/stale."""
 
         def read():
             if (
@@ -564,39 +589,58 @@ def register_tools(agent: Agent, readonly=False):
             ):
                 raise ValueError('Use a valid range of at most 10000 cells')
             source = ctx.deps.resolve(path)
+            limit = (ctx.deps.settings or Settings()).tool_result_bytes
+            # Leave room for merged ranges, cursor fields and the capability envelope.
+            budget = max(limit // 2, limit - 3000)
             w = load_workbook(source, read_only=True, data_only=not formulas)
             try:
                 sh = unsized(w[sheet])
                 notes, merges = sheet_layout(source, sheet)
+                last = min(end_row, sh.max_row)
+                rows, size, empty, stopped_at = [], 0, 0, None
+                for row_index, row in enumerate(
+                    sh.iter_rows(min_row=start_row, max_row=last, min_col=start_column, max_col=end_column)
+                ):
+                    number = start_row + row_index
+                    cells = []
+                    for column_index, c in enumerate(row):
+                        coordinate = f'{get_column_letter(start_column + column_index)}{number}'
+                        note = (notes.get(coordinate) or '')[:1000] or None
+                        if c.value is None and not note:
+                            empty += 1
+                            continue
+                        cell = {
+                            'cell': coordinate,
+                            'value': c.value.isoformat() if hasattr(c.value, 'isoformat') else c.value,
+                        }
+                        if c.data_type not in ('s', 'n'):
+                            cell['data_type'] = c.data_type
+                        if (c.number_format or 'General') != 'General':
+                            cell['number_format'] = c.number_format
+                        if note:
+                            cell['note'] = note
+                        cells.append(cell)
+                    if not cells:
+                        continue
+                    entry = {'row': number, 'cells': cells}
+                    cost = len(encode(entry).encode()) + 1
+                    # Stop at a whole row, so the caller continues exactly where this read ended.
+                    if rows and size + cost > budget:
+                        stopped_at = number
+                        break
+                    rows.append(entry)
+                    size += cost
+                next_row = stopped_at or (end_row + 1 if end_row < sh.max_row else None)
                 return {
                     'sheet': sheet,
-                    'rows': [
-                        [
-                            {
-                                'cell': (
-                                    coordinate
-                                    := f'{get_column_letter(start_column + column_index)}{start_row + row_index}'
-                                ),
-                                'value': c.value.isoformat() if hasattr(c.value, 'isoformat') else c.value,
-                                'data_type': c.data_type,
-                                'number_format': c.number_format or 'General',
-                                'note': (notes.get(coordinate) or '')[:1000] or None,
-                            }
-                            for column_index, c in enumerate(row)
-                        ]
-                        for row_index, row in enumerate(
-                            sh.iter_rows(
-                                min_row=start_row,
-                                max_row=min(end_row, sh.max_row),
-                                min_col=start_column,
-                                max_col=end_column,
-                            )
-                        )
-                    ],
+                    'rows': rows,
+                    'empty_cells_omitted': empty,
                     'merged_ranges': merges[:200],
-                    'last_row': min(end_row, sh.max_row),
+                    'last_row': stopped_at - 1 if stopped_at else last,
                     'sheet_rows': sh.max_row,
-                    'more_rows': end_row < sh.max_row,
+                    'more_rows': next_row is not None,
+                    'next_row': next_row,
+                    'stopped_at_size_limit': stopped_at is not None,
                     'formulas': formulas,
                 }
             finally:
@@ -746,12 +790,17 @@ def register_tools(agent: Agent, readonly=False):
         return await ctx.deps.action('view_page', {'path': path, 'page': page}, render)
 
     @tool
-    async def create_output(ctx: RunContext[JobDeps], filename: str = 'payroll_completed.xlsx') -> Any:
-        """Create an output copy of the uploaded template. Existing output is retained, so resume never resets previous edits."""
+    async def create_output(ctx: RunContext[JobDeps], filename: str = 'payroll_output.xlsx') -> Any:
+        """Create an output copy of the uploaded template. Existing output is retained, so resume never resets previous edits. The application labels it draft until validation passes, so the filename must not claim a status."""
 
         def create():
             if len(relative_name(filename).parts) != 1 or not filename.endswith('.xlsx'):
                 raise ValueError('Use a simple .xlsx filename')
+            if STATUS_WORDS.search(filename):
+                raise ValueError(
+                    'Do not put a status such as completed, final or validated in the filename; '
+                    'the application shows draft or validated itself'
+                )
             dest = ctx.deps.root / 'outputs' / filename
             if not dest.exists():
                 template = next(f for f in ctx.deps.current()['files'] if f['role'] == 'template')

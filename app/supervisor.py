@@ -17,6 +17,8 @@ PROGRESS_EVENTS = {
     'output_assigned',
     'validation_improved',
 }
+# Looking at evidence. Useful early, but it cannot stand in for work once the discovery budget is spent.
+DISCOVERY_EVENTS = {'evidence_inspected', 'cursor_extended'}
 VOLATILE = {
     'revision',
     'scanned_cells',
@@ -65,6 +67,9 @@ def repetition(recent, fingerprint):
 
 def failure(error):
     name, detail = type(error).__name__, str(error)
+    if isinstance(error, ArithmeticError):
+        # decimal.InvalidOperation reads as "[<class 'decimal.ConversionSyntax'>]"; say what it means.
+        detail = 'A value that must be a number is not numeric: ' + detail
     if isinstance(error, TimeoutError) or name in ('RateLimitError', 'APIConnectionError', 'APITimeoutError'):
         category, instruction = (
             'transient_service',
@@ -76,7 +81,7 @@ def failure(error):
         category, instruction = 'unsupported_format', 'Use an available capability or report the precise limitation.'
     elif 'journal' in detail.lower() or 'prepared operation' in detail.lower():
         category, instruction = 'uncertain_write', 'Reconcile the output journal before any further mutation.'
-    elif isinstance(error, (ValueError, KeyError, TypeError)):
+    elif isinstance(error, (ValueError, KeyError, TypeError, ArithmeticError)):
         category, instruction = 'invalid_arguments', 'Correct arguments or change the failing approach before retrying.'
     else:
         category, instruction = 'unclassified', 'Investigate the failure; continue independent work.'
@@ -84,9 +89,10 @@ def failure(error):
 
 
 class Supervisor:
-    def __init__(self, state, actor='main', stall_turns=4, recovery_turns=2, evidence_window=6):
+    def __init__(self, state, actor='main', stall_turns=4, recovery_turns=2, evidence_window=6, discovery_turns=10):
         self.state, self.actor = state, actor
         self.stall_turns, self.recovery_turns, self.evidence_window = stall_turns, recovery_turns, evidence_window
+        self.discovery_turns = discovery_turns
 
     def accept(self, result: CapabilityResult):
         return self.accept_many(result.progress)
@@ -143,16 +149,44 @@ class Supervisor:
         clock = self.state.get('supervision', self.actor, {'turn': 0, 'last_useful': 0, 'recovery': None})
         clock['turn'] += 1
         events = [event for _, event in self.state.all('progress_event') if event['actor'] == self.actor]
-        permanent = [event['turn'] + 1 for event in events if event['linked']]
-        unlinked = [
-            event['turn'] for event in events if not event['linked'] and event['turn'] + 1 > max(permanent, default=0)
-        ]
-        useful = permanent[:]
-        # A stream of unrelated new reads cannot renew the oldest unresolved evidence allowance.
-        if unlinked and clock['turn'] - min(unlinked) <= self.evidence_window:
-            useful.extend(turn + 1 for turn in unlinked)
-        clock['last_useful'] = max([*useful, clock.get('instruction_baseline', 0)])
+        baseline = clock.get('instruction_baseline', 0)
+        work = [event['turn'] + 1 for event in events if event['kind'] not in DISCOVERY_EVENTS]
+        clock['last_work'] = max([*work, baseline])
+        # The main agent gets a bounded allowance of reading between pieces of work. Once it is spent, or once
+        # recovery has begun, only work clears the stall: rereading or citing evidence in a plan cannot.
+        reading_counts = self.actor != 'main' or (
+            clock['turn'] - clock['last_work'] < self.discovery_turns and clock.get('recovery') is None
+        )
+        clock['discovery_left'] = (
+            max(0, self.discovery_turns - (clock['turn'] - clock['last_work'])) if self.actor == 'main' else None
+        )
+        if reading_counts:
+            permanent = [event['turn'] + 1 for event in events if event['linked']]
+            unlinked = [
+                event['turn']
+                for event in events
+                if not event['linked'] and event['turn'] + 1 > max(permanent, default=0)
+            ]
+            useful = permanent[:]
+            # A stream of unrelated new reads cannot renew the oldest unresolved evidence allowance.
+            if unlinked and clock['turn'] - min(unlinked) <= self.evidence_window:
+                useful.extend(turn + 1 for turn in unlinked)
+            window_left = self.evidence_window - (clock['turn'] - min(unlinked)) if unlinked else None
+        else:
+            useful, window_left = work, 0
+        clock['last_useful'] = max([*useful, baseline])
         idle = clock['turn'] - clock['last_useful']
+        # Both limits end reading credit abruptly, so warn once per stretch without work, just before either does.
+        left = [value for value in (clock['discovery_left'], window_left) if value is not None]
+        clock['notice'] = bool(
+            self.actor == 'main'
+            and left
+            and min(left) <= 1
+            and clock.get('recovery') is None
+            and clock.get('noticed_after') != clock['last_work']
+        )
+        if clock['notice']:
+            clock['noticed_after'] = clock['last_work']
         status = 'continue'
         if idle >= self.stall_turns:
             if clock.get('recovery') is None:

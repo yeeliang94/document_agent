@@ -10,7 +10,7 @@ from typing import Literal
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .files import atomic_bytes, within
 from .state import identity
@@ -66,7 +66,23 @@ class Destination(BaseModel):
     required: list[str] = Field(default_factory=list)
     unique: list[str] = Field(default_factory=list)
     allowed: dict[str, list[Scalar]] = Field(default_factory=dict)
-    totals: dict[str, str] = Field(default_factory=dict)
+    totals: dict[str, str] = Field(
+        default_factory=dict,
+        description='Expected numeric sum per field, as a plain number such as "10000.00"; omit when unknown.',
+    )
+
+    @field_validator('totals')
+    @classmethod
+    def numeric_totals(cls, totals):
+        # A rule written as prose here used to surface only as an opaque decimal error mid-write.
+        for field, expected in totals.items():
+            try:
+                valid = Decimal(expected).is_finite()
+            except InvalidOperation:
+                valid = False
+            if not valid:
+                raise ValueError(f'Total for {field} must be a plain number, not {expected!r}')
+        return totals
 
 
 def convert(value, kind, number_format='General'):

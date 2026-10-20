@@ -183,14 +183,18 @@ def test_general_supervisor_dedup_flip_flops_and_unlinked_wandering(tmp_path):
     assert restored.turn()[0] == 'pause'
 
 
-def test_linked_investigation_and_plan_survive_restart(tmp_path):
+def test_linked_investigation_counts_only_within_the_reading_allowance_and_plan_survives_restart(tmp_path):
     state = JobState(tmp_path)
-    supervisor = Supervisor(state)
+    supervisor = Supervisor(state, discovery_turns=10)
+    decisions = []
     for number in range(12):
         key = f'paragraph:{number}'
         supervisor.event('evidence_inspected', key, 'v1')
         supervisor.link([key])
-        assert supervisor.turn()[0] == 'continue'
+        decisions.append(supervisor.turn()[0])
+    # Fresh, linked reading is progress until the allowance between work results is spent.
+    # Linking evidence to a plan item cannot extend it, and recovery cannot be cleared by more reading.
+    assert decisions == ['continue'] * 9 + ['recover', 'continue', 'pause']
     state.put('evidence', 'paragraph:11', {'source_hash': 'v1'})
     plan = WorkPlan(
         objective='Summarize clauses',
@@ -355,7 +359,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
         elif number == 1:
             actions = [
                 ('inspect_regions', {'path': 'inputs/October.xlsx'}),
-                ('create_output', {'filename': 'completed.xlsx'}),
+                ('create_output', {'filename': 'output.xlsx'}),
             ]
         elif number == 2:
             for region in returns['inspect_regions']['items']:
@@ -386,7 +390,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
                     {
                         'specification': {
                             'objective': 'Prepare the two current payments',
-                            'path': 'outputs/completed.xlsx',
+                            'path': 'outputs/output.xlsx',
                             'areas': [
                                 {
                                     'id': 'data',
@@ -446,7 +450,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
                     'populate_template',
                     {
                         'dataset': returns['extract_region']['id'],
-                        'path': 'outputs/completed.xlsx',
+                        'path': 'outputs/output.xlsx',
                         'destination': {
                             'sheet': 'Output',
                             'start_row': 2,
@@ -463,9 +467,9 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
                 )
             ]
         elif number == 5:
-            actions = [('validate_output', {'path': 'outputs/completed.xlsx'})]
+            actions = [('validate_output', {'path': 'outputs/output.xlsx'})]
         elif number == 6:
-            actions = [('validate_job', {'path': 'outputs/completed.xlsx'})]
+            actions = [('validate_job', {'path': 'outputs/output.xlsx'})]
         elif number == 7:
             actions = [
                 (
@@ -514,7 +518,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
         assert completed['status'] == 'completed', completed
         assert client.get(f'/api/jobs/{job["id"]}/plan').json()['plan']['objective'] == 'Prepare October payments'
         assert client.get(f'/api/jobs/{job["id"]}/regions').json()['total'] >= 6
-        workbook = load_workbook(io.BytesIO(client.get(f'/api/jobs/{job["id"]}/artifacts/completed.xlsx').content))
+        workbook = load_workbook(io.BytesIO(client.get(f'/api/jobs/{job["id"]}/artifacts/output.xlsx').content))
         assert [workbook['Output'][c].value for c in ('A2', 'B2', 'A3', 'B3', 'D2')] == [
             '00101',
             10,
@@ -618,7 +622,7 @@ def test_worker_evidence_does_not_establish_owner_review(tmp_path):
     evidence = observe(worker, 'inspect_regions', {'path': 'inputs/nested/October.xlsx', 'region': region}, {})[0][
         'key'
     ]
-    with pytest.raises(ValueError, match='Inspect source content'):
+    with pytest.raises(ValueError, match='inspection of this source'):
         save_role(state, RegionRole(region=region, role='records', rationale='Worker handover', evidence=[evidence]))
     owner_evidence = observe(deps, 'inspect_regions', {'path': 'inputs/nested/October.xlsx', 'region': region}, {})[0][
         'key'
@@ -659,8 +663,9 @@ def test_targeted_reads_expose_deep_comments_merges_formats_and_declared_tables(
         'read_sheet',
         {'path': 'inputs/nested/October.xlsx', 'sheet': 'Payments', 'start_row': 37, 'end_row': 39, 'end_column': 3},
     )
-    assert read['rows'][1][2]['note'] == 'REG is the current payment code.'
-    assert read['rows'][1][0]['number_format'] == '@'
+    cells = {cell['cell']: cell for row in read['rows'] for cell in row['cells']}
+    assert cells['C38']['note'] == 'REG is the current payment code.'
+    assert cells['A38']['number_format'] == '@'
     assert 'J37:K37' in read['merged_ranges']
 
 

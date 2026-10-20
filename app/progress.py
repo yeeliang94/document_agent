@@ -81,3 +81,24 @@ def observe(deps, name, args, result):
         checkpoint = {'tool': name, 'events': events[:20], 'message': message}
         state.put('checkpoint', deps.actor, checkpoint)
     return events
+
+
+# What the job needs next, judged from saved results rather than the model's own account.
+STAGES = {
+    'discover': 'Save destination requirements (save_output_requirements) and settle what each source region means '
+    '(save_interpretation or record_decisions, citing evidence IDs).',
+    'extract': 'Extract the accepted record regions (extract_region, extract_dataset or record_observations).',
+    'populate': 'Write the extracted records into the output copy (populate_template, or write_cells with record IDs).',
+    'validate': 'Run validate_output, then validate_job on the same workbook, and resolve the failures it lists.',
+}
+
+
+def stage(state):
+    """The earliest stage without a saved result. Later stages cannot start without earlier ones."""
+    if not any(state.count(kind) for kind in ('requirement', 'region_role', 'decision')):
+        return 'discover'
+    if not any(state.count(kind) for kind in ('dataset', 'observation')):
+        return 'extract'
+    if not state.count('assignment'):
+        return 'populate'
+    return 'validate'

@@ -143,7 +143,7 @@ def main():
             for column in range(1, 31)
         ]
         dataset = extract_dataset(deps.state, 'inputs/nested/source.xlsx', 'Employees', 1, 5001, columns, [1])
-        path = 'outputs/completed.xlsx'
+        path = 'outputs/output.xlsx'
         (folder / path).write_bytes(template)
         populate_template(
             deps.state,

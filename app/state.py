@@ -32,6 +32,48 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, default=str, sort_keys=True)
 
 
+# The resume card stays this small however large the job grows.
+RESUME_CARD_BYTES = 4000
+# Progressively tighter caps until a shortened result fits: (list items kept, string characters kept).
+FIT_STEPS = ((50, 2000), (20, 1000), (10, 400), (5, 200), (2, 100), (1, 60))
+
+
+def shorten(value, items, chars):
+    if isinstance(value, dict):
+        return {key: shorten(item, items, chars) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        kept = [shorten(item, items, chars) for item in value[:items]]
+        return kept + ([{'omitted_items': len(value) - items}] if len(value) > items else [])
+    if isinstance(value, str) and len(value) > chars:
+        return value[:chars] + f'… [{len(value) - chars} more characters]'
+    return value
+
+
+def fit_result(result, limit, envelope=None):
+    """Fit the complete serialized response, including its envelope, within a UTF-8 byte limit."""
+    envelope = envelope or {}
+    if not isinstance(result, dict):
+        result = {'value': result}
+    if len(encode(result | envelope).encode()) <= limit:
+        return result | envelope
+    for items, chars in FIT_STEPS:
+        shortened = shorten(result, items, chars) | envelope
+        if len(encode(shortened).encode()) <= limit:
+            return shortened
+    preview = encode(result)
+    low, high = 0, min(len(preview), limit)
+    if len(encode({'preview': ''} | envelope).encode()) > limit:
+        raise ValueError('Result envelope exceeds the byte limit')
+    # JSON escaping and multi-byte characters make a character count insufficient.
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(encode({'preview': preview[:middle]} | envelope).encode()) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return {'preview': preview[:low]} | envelope
+
+
 def identity(*parts):
     return hashlib.sha256(encode(parts).encode()).hexdigest()[:32]
 
@@ -151,6 +193,10 @@ class JobState:
                 changed = True
             if changed and kind not in UNVERSIONED_KINDS:
                 db.execute("UPDATE meta SET value=value+1 WHERE key='revision'")
+
+    def count(self, kind):
+        with self.connect() as db:
+            return db.execute('SELECT count(*) FROM facts WHERE kind=?', (kind,)).fetchone()[0]
 
     def all(self, kind):
         with self.connect() as db:
@@ -379,6 +425,76 @@ class JobState:
             'revision': self.revision(),
             'instruction_revision': self.revision('instruction_revision'),
         }
+
+    def pending_vision(self):
+        """Pages the main agent found to have no usable text but never looked at, unless the file was excluded."""
+        inventory = [item for _, item in self.all('inventory')]
+        excluded = {item['path'] for item in inventory if item.get('status') == 'excluded'}
+        known = {item['path'] for item in inventory}
+        pending = []
+        for path, reads in self.all('read'):
+            # Worker reads are keyed actor:path and do not establish coverage.
+            if path in excluded or path not in known:
+                continue
+            for page, entry in sorted(reads['content'].items(), key=lambda item: int(item[0])):
+                if entry.get('needs_vision') and not entry.get('vision'):
+                    pending.append({'path': path, 'page': int(page)})
+        return pending
+
+    def resume_card(self):
+        """A small, always-current account of where the job stands, injected after the context is reduced.
+
+        It points to details instead of copying them, so it can never be the oversized result it replaces.
+        """
+        from .progress import STAGES, stage
+
+        plan = self.get('plan', 'current', {})
+        coverage = self.coverage()
+        current = stage(self)
+        instructions = self.instructions()
+        approaches = sorted((item for _, item in self.all('approach')), key=lambda item: -item['count'])
+        card = {
+            'stage': current,
+            'next': STAGES[current],
+            'objective': plan.get('objective', ''),
+            'focus': plan.get('focus', ''),
+            'work_items': [
+                {key: item[key] for key in ('id', 'status', 'objective', 'blocker') if item.get(key)}
+                for item in plan.get('items', [])
+            ],
+            'next_actions': plan.get('next_actions', []),
+            'last_result': self.get('checkpoint', 'main', {}).get('message'),
+            'saved': {
+                'requirements': self.count('requirement'),
+                'interpretations': self.count('region_role') + self.count('decision'),
+                'datasets': self.count('dataset'),
+                'observations': self.count('observation'),
+                'output_assignments': coverage['output_assignments'],
+                'open_items': coverage['open_items'],
+            },
+            'top_open_items': coverage['issues'][:5],
+            'unviewed_scanned_pages': self.pending_vision()[:10],
+            # Applied instructions still constrain the work; the full records stay retrievable by sequence ID.
+            'user_instructions': {
+                'total': len(instructions),
+                'pending': sum(not item['applied'] for item in instructions),
+                'recent': [
+                    {field: item[field] for field in ('seq', 'kind', 'text', 'applied')} for item in instructions[-10:]
+                ],
+                'read': 'Read all pages with read_job_state(kind="instruction", offset=0, limit=10), including '
+                'applied instructions, before continuing. Read full text with key=seq, offset=0, limit=4000; '
+                'follow next_offset until null.',
+            },
+            'most_repeated_approaches': [
+                {'tool': item['tool'], 'count': item['count'], 'outcome': item['outcome']}
+                for item in approaches[:5]
+                if item['count'] > 1
+            ],
+            'reading_allowance_left': self.get('supervision', 'main', {}).get('discovery_left'),
+            'details': 'Use read_job_state with a kind (plan, requirement, region_role, dataset, mapping, memory, '
+            'approach, validation, instruction) and key/offset for anything listed here.',
+        }
+        return fit_result(card, RESUME_CARD_BYTES)
 
     def snapshot(self):
         snapshot = {
