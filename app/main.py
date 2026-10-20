@@ -21,11 +21,12 @@ from pydantic import BaseModel, Field
 
 from . import jobstatus
 from .config import ROOT, Settings, settings
+from .context import estimate_text
 from .files import add_file, add_zip, is_junk, within
 from .runtime import Runner
 from .store import DEFAULT_CONTEXT, MODULE_LABELS, Store, clean
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 MAX_TEXT_CHARS = 30000
 
 
@@ -104,6 +105,8 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             'ready': True,
             'openai_configured': bool(conf.api_key),
             'version': VERSION,
+            'tokenizer_method': estimate_text('startup health check')[1],
+            'index_version': 1,
             'pid': os.getpid(),
             'instance_id': hashlib.sha256(str(ROOT.resolve()).encode()).hexdigest()[:16],
         }
@@ -124,6 +127,13 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 'max_subagents': conf.max_subagents,
                 'context_token_budget': conf.context_tokens,
                 'tool_result_bytes': conf.tool_result_bytes,
+                'tool_deadline_seconds': conf.tool_timeout,
+                'stall_turns': conf.stall_turns,
+                'recovery_turns': conf.recovery_turns,
+                'evidence_window': conf.evidence_window,
+                'tokenizer_method': estimate_text('capability diagnostics')[1],
+                'accounting_version': 2,
+                'index_version': 1,
             },
         }
 
@@ -168,6 +178,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             manifest = await save_uploads(store.path(job_id), template, files)
             mark_duplicates(manifest)
             store.update(job_id, files=manifest)
+            store.state(job_id).put('schema', 'accounting', {'version': 2, 'index_version': 1})
             store.state(job_id).inventory(manifest)
             store.event(
                 job_id, 'files.received', f'{len(manifest) - 1} source files received', type='job', files=manifest
@@ -290,6 +301,24 @@ def create_app(settings_override: Settings | None = None, model_override=None):
     def coverage(job_id):
         get(job_id)
         return store.state(job_id).coverage()
+
+    @api.get('/api/jobs/{job_id}/plan')
+    def work_plan(job_id):
+        get(job_id)
+        state = store.state(job_id)
+        return {
+            'plan': state.get('plan', 'current'),
+            'checkpoint': state.get('checkpoint', 'main'),
+            'supervision': state.get('supervision', 'main'),
+        }
+
+    @api.get('/api/jobs/{job_id}/regions')
+    def regions(job_id, offset: int = 0, limit: int = 25):
+        get(job_id)
+        try:
+            return store.state(job_id).page('region', offset, limit)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
 
     @api.get('/api/jobs/{job_id}/tasks')
     def tasks(job_id, offset: int = 0, limit: int = 25):

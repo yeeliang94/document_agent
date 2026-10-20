@@ -10,7 +10,22 @@ from .files import atomic_bytes
 # Delegated task statuses that still need settling before a job can complete.
 UNSETTLED_TASKS = ('queued', 'running', 'interrupted')
 # Operational bookkeeping that does not change job facts, so it leaves validation current.
-UNVERSIONED_KINDS = ('operation', 'task', 'validation', 'context', 'activity')
+UNVERSIONED_KINDS = (
+    'operation',
+    'task',
+    'validation',
+    'context',
+    'activity',
+    'progress_event',
+    'supervision',
+    'supervision_request',
+    'checkpoint',
+    'plan',
+    'plan_history',
+    'evidence',
+    'approach',
+    'memory',
+)
 
 
 def encode(value):
@@ -36,7 +51,17 @@ def paginate(items, offset, limit):
 
 
 # Facts a user instruction can invalidate individually.
-INVALIDATABLE = ('dataset', 'mapping', 'decision', 'inventory', 'task')
+INVALIDATABLE = (
+    'dataset',
+    'mapping',
+    'decision',
+    'inventory',
+    'task',
+    'region_role',
+    'region_mapping',
+    'requirement',
+    'plan',
+)
 
 
 class JobState:
@@ -83,6 +108,22 @@ class JobState:
         with self.connect() as db:
             row = db.execute('SELECT data FROM facts WHERE kind=? AND id=?', (kind, key)).fetchone()
         return json.loads(row[0]) if row else default
+
+    def existing(self, kind, keys):
+        """The subset of keys already stored for kind, in one connection."""
+        keys, found = list(keys), set()
+        with self.connect() as db:
+            for start in range(0, len(keys), 500):
+                chunk = keys[start : start + 500]
+                marks = ','.join('?' * len(chunk))
+                query = f'SELECT id FROM facts WHERE kind=? AND id IN ({marks})'
+                found.update(row[0] for row in db.execute(query, (kind, *chunk)))
+        return found
+
+    def has_reference(self, key):
+        """Opaque durable references for the format-independent work plan."""
+        with self.connect() as db:
+            return db.execute('SELECT 1 FROM facts WHERE id=? LIMIT 1', (key,)).fetchone() is not None
 
     def put(self, kind, key, data):
         self.put_many(kind, [(key, data)])
@@ -177,6 +218,16 @@ class JobState:
                 self.patch('task', key, {'status': 'cancelled', 'error': 'Superseded by user instruction'})
             else:
                 self.put(kind, key, self.get(kind, key) | note)
+        plan = self.get('plan', 'current')
+        if plan:
+            affected = set(invalidate)
+            changed = False
+            for item in plan.get('items', []):
+                if reset_all or affected.intersection(item.get('evidence', [])):
+                    item.update(status='pending', blocker='New instructions require re-evaluation: ' + reason)
+                    changed = True
+            if changed:
+                self.put('plan', 'current', plan | {'stale': reason})
         with self.connect() as db:
             impact = encode({'reason': reason, 'invalidated': [key for _, key in targets], 'reset_all': reset_all})
             db.executemany('UPDATE instructions SET applied=1, impact=? WHERE seq=?', [(impact, seq) for seq in seqs])
@@ -300,7 +351,23 @@ class JobState:
                 issues.append(
                     {'id': key, 'reason': decision.get('reason', 'Record has no output assignment or exclusion')}
                 )
+        from .regions import accounting_version, region_coverage
+
+        region_counts = {}
+        if accounting_version(self) == 2:
+            scoped = region_coverage(self)
+            # Region accounting replaces legacy row obligations, while user instructions still block.
+            issues = [issue for issue in issues if issue['id'].startswith('instruction:')] + scoped['issues']
+            counts, region_counts = scoped['records'], scoped['regions']
+        # A source can back several output rows; one successful sibling cannot settle a rejected row.
+        issues.extend(
+            {'id': key, 'reason': 'Unresolved output record: ' + '; '.join(item['issues'])}
+            for key, item in self.all('output_record')
+            if item['issues']
+        )
         return {
+            'accounting_version': accounting_version(self),
+            'regions': region_counts,
             'inventory_items': len(inventory),
             'source_rows': sum('row' in item and item.get('file') not in template_ids for _, item in observations),
             'source_observations': sum(item.get('file') not in template_ids for _, item in observations),
@@ -315,17 +382,25 @@ class JobState:
 
     def snapshot(self):
         snapshot = {
+            'plan': self.get('plan', 'current'),
+            'checkpoint': self.get('checkpoint', 'main'),
+            'attempted_approaches': self.page('approach', limit=5),
+            'supervision': self.get('supervision', 'main'),
             'revision': self.revision(),
             'instruction_revision': self.revision('instruction_revision'),
             'instructions': self.instructions(),
             'coverage': self.coverage(),
             'datasets': self.page('dataset', limit=10),
+            'regions': self.page('region', limit=10),
+            'evidence': self.page('evidence', limit=8),
+            'requirements': self.page('requirement', limit=3),
+            'inventory': self.page('inventory', limit=10),
             'mappings': self.page('mapping', limit=10),
             'tasks': self.page('task', limit=10),
             'memory': self.page('memory', limit=10),
         }
         # A handover is an index to facts, not another copy of large mappings or notes.
-        for kind in ('mappings', 'tasks', 'memory'):
+        for kind in ('mappings', 'tasks', 'memory', 'requirements', 'regions', 'inventory'):
             snapshot[kind]['items'] = [
                 {'id': item['id'], 'summary': encode(item)[:400]} for item in snapshot[kind]['items']
             ]

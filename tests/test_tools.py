@@ -198,7 +198,13 @@ def test_read_sheet_returns_coordinates_for_blank_readonly_cells(tmp_path):
     register_tools(agent)
     asyncio.run(agent.run('Read the sparse sheet', deps=JobDeps(store, job['id'])))
     assert 'error' not in observed[-1], observed[-1]
-    assert observed[-1]['rows'][1][3] == {'cell': 'D2', 'value': None}
+    assert observed[-1]['rows'][1][3] == {
+        'cell': 'D2',
+        'value': None,
+        'data_type': 'n',
+        'number_format': 'General',
+        'note': None,
+    }
 
 
 def strip_dimension(data):

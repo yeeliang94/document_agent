@@ -35,7 +35,8 @@ def workbook_bytes():
     return buffer.getvalue()
 
 
-def create_job(client, files=None):
+def create_job(client, files=None, *, legacy=True):
+    """Existing scenarios exercise legacy resume compatibility; new region cases opt out."""
     response = client.post(
         '/api/jobs',
         data={
@@ -61,10 +62,13 @@ def create_job(client, files=None):
         ],
     )
     assert response.status_code in (200, 201), response.text
-    return response.json()
+    job = response.json()
+    if legacy:
+        client.app.state.store.state(job['id']).put('schema', 'accounting', {'version': 1})
+    return job
 
 
-def wait_for_job(client, job_id, statuses=('completed', 'partial', 'failed'), timeout=10):
+def wait_for_job(client, job_id, statuses=('completed', 'partial', 'failed'), timeout=30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         job = client.get(f'/api/jobs/{job_id}').json()

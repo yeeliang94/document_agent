@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UsageLimitExceeded
-from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_ai.messages import ModelMessagesTypeAdapter, UserPromptPart
 from pydantic_ai.usage import UsageLimits
 from pydantic_graph import End
 
@@ -17,6 +17,7 @@ from .files import atomic_bytes
 from .harness_tools import register_harness_tools
 from .state import encode, identity
 from .store import clean
+from .supervisor import Supervisor
 from .tools import JobDeps, register_tools
 
 
@@ -178,9 +179,40 @@ class Delegation:
                 model_settings={'openai_store': False, 'max_tokens': self.runner.settings.response_tokens},
             ) as run:
                 node = run.next_node
+                requests = 0
                 while not isinstance(node, End):
                     deps.check_stop()
                     if Agent.is_model_request_node(node):
+                        if requests:
+                            decision, clock = Supervisor(
+                                state,
+                                deps.actor,
+                                self.runner.settings.stall_turns,
+                                self.runner.settings.recovery_turns,
+                                self.runner.settings.evidence_window,
+                            ).turn()
+                            if decision == 'pause':
+                                state.patch(
+                                    'task',
+                                    key,
+                                    {'status': 'cancelled', 'error': 'No useful change after bounded recovery'},
+                                )
+                                deps.store.event(
+                                    deps.job_id,
+                                    'task.cancelled',
+                                    'Worker stalled after bounded recovery; findings retained.',
+                                    type='task',
+                                    task_id=key,
+                                    clock=clock,
+                                )
+                                return
+                            if decision == 'recover':
+                                node.request.parts.append(
+                                    UserPromptPart(
+                                        'Harness recovery: change the unproductive approach or return a specific blocker with saved evidence.'
+                                    )
+                                )
+                        requests += 1
                         atomic_bytes(
                             history_path, ModelMessagesTypeAdapter.dump_json([*run.all_messages(), node.request])
                         )

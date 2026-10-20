@@ -1915,3 +1915,6 @@ dialog p {
     min-height: 260px;
   }
 }
+
+.work-focus { padding: 14px 20px; border-bottom: 1px solid var(--border, #e5e7eb); font-size: 13px; }
+.work-focus p { margin: 6px 0 0; color: var(--muted, #64748b); }

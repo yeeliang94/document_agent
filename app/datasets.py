@@ -16,6 +16,7 @@ from .files import atomic_bytes, within
 from .state import identity
 
 Scalar = str | int | float | bool | None
+EXTRACTION_VERSION = 2
 
 
 class Column(BaseModel):
@@ -31,10 +32,14 @@ class Predicate(BaseModel):
 
 
 class Transformation(BaseModel):
-    operation: Literal['filter', 'select', 'rename', 'convert', 'lookup', 'join', 'group', 'deduplicate', 'arithmetic']
+    operation: Literal[
+        'filter', 'select', 'rename', 'convert', 'lookup', 'join', 'group', 'deduplicate', 'arithmetic', 'unpivot'
+    ]
     fields: list[str] = Field(default_factory=list)
     field: str = ''
     target: str = ''
+    names_to: str = 'category'
+    values_to: str = 'value'
     kind: Literal['raw', 'identifier', 'text', 'decimal', 'date'] = 'raw'
     predicate: Predicate | None = None
     reason: str = ''
@@ -114,6 +119,17 @@ def require_current(state, dataset):
         info = state.get('dataset', key) or {}
         if info.get('instruction_revision', revision) != revision:
             raise ValueError('Instructions changed; re-extract/re-transform the dataset before writing')
+        if info.get('region'):
+            mapping = state.get('region_mapping', info['region'], {})
+            role = state.get('region_role', info['region'], {})
+            if (
+                mapping.get('stale')
+                or mapping.get('hash') != info.get('region_mapping')
+                or role.get('role') not in ('records', 'reference')
+                or role.get('stale')
+                or mapping.get('role', role.get('role')) != role.get('role')
+            ):
+                raise ValueError('Extraction interpretation changed; rebuild this dataset')
         if info.get('stale'):
             raise ValueError(f'Dataset {key} was invalidated by a user instruction ({info["stale"]}); rebuild it')
 
@@ -127,11 +143,56 @@ def fresh_id(state, key):
     return candidate
 
 
+def settle_output_records(state, operation_id, journal):
+    """Restore per-row obligations from the committed journal, including journals saved before this ledger existed."""
+    mapping = journal['mapping']
+    destination = mapping['destination']
+    rows = state.get('rows', mapping['dataset'])
+    if rows is None:
+        raise ValueError('Cannot recover output records without the saved dataset; reconcile this journal')
+    assigned = {item['row'] for item in journal['assignments']}
+    rejected = {item['id']: item['issues'] for item in journal.get('rejected', [])}
+    output_records = []
+    for index, row in enumerate(rows):
+        number = destination['start_row'] + index
+        output_records.append(
+            (
+                identity(mapping['path'], destination['sheet'], number),
+                {
+                    'path': mapping['path'],
+                    'sheet': destination['sheet'],
+                    'row': number,
+                    'columns': [column['column'] for column in destination['columns']],
+                    'record': row['id'],
+                    'dataset': mapping['dataset'],
+                    'operation': operation_id,
+                    'issues': [] if number in assigned else rejected[row['id']],
+                },
+            )
+        )
+    retained = {key for key, _ in output_records}
+    state.delete_many(
+        'output_record',
+        [
+            key
+            for key, item in state.all('output_record')
+            if item['path'] == mapping['path']
+            and item['sheet'] == destination['sheet']
+            and destination['start_row'] <= item['row'] <= destination['end_row']
+            and key not in retained
+        ],
+    )
+    state.put_many('output_record', output_records)
+    # This survives an intentionally empty replacement and prevents older journals from reviving rejected rows.
+    state.put('output_accounting', mapping['path'], {'version': 1})
+
+
 def settle(state, operation_id, journal):
     """Record a written journal's assignments and dispositions. Retries and recovery share this."""
     mapping = journal['mapping']
     state.delete_many('assignment', journal.get('removed_assignments', []))
     state.put_many('assignment', [(item['id'], item) for item in journal['assignments']])
+    settle_output_records(state, operation_id, journal)
     origins = lineage(state, mapping['dataset'])
     state.delete_many(
         'decision',
@@ -160,7 +221,7 @@ def settle(state, operation_id, journal):
     state.put('operation', operation_id, journal)
 
 
-def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows, stop=lambda: None):
+def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows, stop=lambda: None, region_id=None):
     if start_row < 1 or end_row < start_row or end_row > 1048576 or not columns:
         raise ValueError('Specify a valid region and at least one column')
     if len({c.name for c in columns}) != len(columns):
@@ -174,10 +235,64 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
         raise ValueError('Complete inspect_source for this sheet before extracting records')
     if hashlib.sha256(within(state.root, path).read_bytes()).hexdigest() != entry['sha256']:
         raise ValueError('Source changed since intake; submit a new input version')
+    from openpyxl.utils.cell import range_boundaries
+
+    from .regions import accounting_version, indexed_cells
+    from .requirements import contains
+
+    region_mapping = None
+    if accounting_version(state) == 2:
+        if not region_id:
+            raise ValueError('Use extract_region with an accepted records region for accounting version 2')
+        region = state.get('region', region_id)
+        role = state.get('region_role', region_id, {})
+        requested = f'{get_column_letter(min(c.column for c in columns))}{start_row}:{get_column_letter(max(c.column for c in columns))}{end_row}'
+        if (
+            not region
+            or region['path'] != path
+            or region['sheet'] != sheet
+            or not contains(region['bounds'], requested)
+        ):
+            raise ValueError('Extraction must remain inside the selected region')
+        if start_row != range_boundaries(region['bounds'])[1] or end_row != range_boundaries(region['bounds'])[3]:
+            raise ValueError(
+                'Account for the complete accepted region; revise/split its bounds before extracting a subset'
+            )
+        if role.get('role') not in ('records', 'reference') or role.get('stale'):
+            raise ValueError('Establish an evidence-backed records or reference role before extraction')
+        if any(number < start_row or number > end_row for number in header_rows):
+            raise ValueError('Header rows must lie within extraction bounds')
+        left, top, right, bottom = range_boundaries(region['bounds'])
+        occupied_region_rows = {
+            cell['row']
+            for cell in indexed_cells(state, source_id)
+            if left <= cell['column'] <= right and top <= cell['row'] <= bottom
+        }
+        # Earlier extraction caches could omit occupied rows whose mapped fields were blank.
+        region_mapping = identity(
+            region_id, start_row, end_row, [c.model_dump() for c in columns], header_rows, EXTRACTION_VERSION
+        )
+        state.put(
+            'region_mapping',
+            region_id,
+            {
+                'hash': region_mapping,
+                'role': role['role'],
+                'region': region_id,
+                'columns': [c.model_dump() for c in columns],
+                'start_row': start_row,
+                'end_row': end_row,
+                'header_rows': header_rows,
+                'instruction_revision': state.revision('instruction_revision'),
+                'extraction_version': EXTRACTION_VERSION,
+            },
+        )
     dataset = fresh_id(
         state,
         identity(
             file_id,
+            region_id,
+            region_mapping,
             sheet,
             start_row,
             end_row,
@@ -193,6 +308,7 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
     rows, errors = [], []
     profiles = {column.name: {'types': {}, 'missing': 0} for column in columns}
     header_signatures = set()
+    region_observations = []
     try:
         left, right = min(c.column for c in columns), max(c.column for c in columns)
         raw_rows = formulas[sheet].iter_rows(min_row=start_row, max_row=end_row, min_col=left, max_col=right)
@@ -201,13 +317,40 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
         for number, (raw, cached) in enumerate(zip(raw_rows, value_rows, strict=True), start_row):
             if (number - start_row) % 250 == 0:
                 stop()
-            source_record = identity(file_id, sheet, number)
-            if source_record not in observed:
+            source_record = (
+                identity(file_id, sheet, region_id, region_mapping, number)
+                if region_id
+                else identity(file_id, sheet, number)
+            )
+            if not region_id and source_record not in observed:
+                continue
+            if region_id and number not in occupied_region_rows:
                 continue
             if number in header_rows:
                 header_signatures.add(tuple(str(cell.value) for cell in raw))
                 continue
+            if region_id:
+                region_observations.append(
+                    (
+                        source_record,
+                        {
+                            'source': source_id,
+                            'file': file_id,
+                            'path': path,
+                            'sheet': sheet,
+                            'row': number,
+                            'region': region_id,
+                            'reference_only': role['role'] == 'reference',
+                            'mapping_version': region_mapping,
+                            'cells': [f'{get_column_letter(c.column)}{number}' for c in columns],
+                        },
+                    )
+                )
             record = {'id': source_record, 'sources': [source_record], 'values': {}, 'evidence': {}, 'issues': []}
+            if region_id and not any(raw[c.column - left].value is not None for c in columns):
+                record['issues'].append(
+                    'Occupied region row has no values in the selected columns; investigate or explicitly exclude'
+                )
             if tuple(str(cell.value) for cell in raw) in header_signatures:
                 record['issues'].append('Repeated header inside the declared data region')
             labels = {str(cell.value).strip().casefold() for cell in raw if isinstance(cell.value, str)}
@@ -241,12 +384,16 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
     finally:
         formulas.close()
         values.close()
+    # One transaction for the whole region; an interrupted extraction leaves no partial records.
+    state.put_many('observation', region_observations)
     state.put('rows', dataset, rows)
     info = {
         'id': dataset,
         'path': path,
         'sheet': sheet,
         'source': source_id,
+        'region': region_id,
+        'region_mapping': region_mapping,
         'rows': len(rows),
         'columns': [c.name for c in columns],
         'kinds': {c.name: c.kind for c in columns},
@@ -257,7 +404,7 @@ def extract_dataset(state, path, sheet, start_row, end_row, columns, header_rows
     state.put('dataset', dataset, info)
     for number in header_rows:
         key = identity(file_id, sheet, number)
-        if state.get('observation', key):
+        if not region_id and state.get('observation', key):
             state.put(
                 'decision',
                 key,
@@ -339,7 +486,37 @@ def transform_dataset(state, dataset, operations, stop=lambda: None):
         elif op.operation == 'join':
             joined, _ = dataset_rows(state, op.dataset)
             kinds.update({(op.target or 'joined_') + field: kind for field, kind in joined.get('kinds', {}).items()})
-        if op.operation == 'filter':
+        if op.operation == 'unpivot':
+            if (
+                not op.fields
+                or any(field not in kinds for field in op.fields)
+                or op.names_to in kinds
+                or op.values_to in kinds
+                or op.names_to == op.values_to
+            ):
+                raise ValueError('Unpivot needs existing fields and two distinct new field names')
+            if len(rows) * len(op.fields) > 100000:
+                raise ValueError('Unpivot exceeds 100000 output rows; narrow the dataset')
+            expanded = []
+            for row in rows:
+                for field in op.fields:
+                    item = copy.deepcopy(row)
+                    item['id'] = identity(row['id'], field)
+                    item['values'] = {key: value for key, value in row['values'].items() if key not in op.fields} | {
+                        op.names_to: field,
+                        op.values_to: row['values'][field],
+                    }
+                    item['evidence'] = {
+                        key: value for key, value in row['evidence'].items() if key not in op.fields
+                    } | {op.names_to: row['evidence'].get(field), op.values_to: row['evidence'].get(field)}
+                    expanded.append(item)
+            value_kinds = {kinds[field] for field in op.fields}
+            kinds = {key: value for key, value in kinds.items() if key not in op.fields} | {
+                op.names_to: 'text',
+                op.values_to: next(iter(value_kinds)) if len(value_kinds) == 1 else 'raw',
+            }
+            rows = expanded
+        elif op.operation == 'filter':
             if not op.predicate or not op.reason:
                 raise ValueError('Filtering requires a predicate and an exclusion reason')
             kept = []
@@ -476,6 +653,16 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
     if not target.is_relative_to(state.root / 'outputs'):
         raise ValueError('Only output copies can be edited')
     path = target.relative_to(state.root).as_posix()
+    from .requirements import check_write_scope
+
+    check_write_scope(
+        state,
+        path,
+        destination.sheet,
+        destination.start_row,
+        destination.end_row,
+        [c.column for c in destination.columns],
+    )
     args = {'dataset': dataset, 'path': path, 'destination': destination.model_dump()}
     fingerprint = identity(args)
     old = state.get('operation', operation_id)
@@ -484,6 +671,9 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
         raise ValueError('Operation ID was already used with different arguments')
     if old and old.get('sha256') == current_hash:
         if old['status'] == 'completed':
+            # Restore obligations for a matching saved output without replaying its assignments or decisions.
+            if not state.get('output_accounting', path):
+                settle_output_records(state, operation_id, old)
             return old['result']
         # Also closes the crash window after file replacement but before assignment persistence.
         settle(state, operation_id, old)
@@ -509,6 +699,13 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
         and item['sheet'] == destination.sheet
         and destination.start_row <= item['row'] <= destination.end_row
     ]
+    previous_output_records = [
+        (key, item)
+        for key, item in state.all('output_record')
+        if item['path'] == path
+        and item['sheet'] == destination.sheet
+        and destination.start_row <= item['row'] <= destination.end_row
+    ]
     old_mappings = dict(state.all('mapping'))
     for _, assignment in previous_assignments:
         old_columns = {column['column'] for column in old_mappings[assignment['operation']]['destination']['columns']}
@@ -516,10 +713,13 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
             raise ValueError(
                 'Partial-column overwrite would discard tracked cells; include all previously mapped columns'
             )
+    if any(not set(item['columns']).issubset(columns) for _, item in previous_output_records):
+        raise ValueError('Partial-column overwrite would discard output records; include all previously mapped columns')
     try:
         sh = workbook[destination.sheet]
         affected_rows = set(range(destination.start_row, destination.start_row + len(rows)))
         affected_rows.update(item['row'] for _, item in previous_assignments)
+        affected_rows.update(item['row'] for _, item in previous_output_records)
         for number in affected_rows:
             for column in destination.columns:
                 cell = sh.cell(number, column.column)
@@ -538,10 +738,10 @@ def populate_template(state, dataset, path, destination, operation_id, stop=lamb
             if destination.unique and (key in seen or any(value in (None, '') for value in key)):
                 issues.append('Duplicate or missing destination key')
             seen.add(key)
+            number = destination.start_row + index
             if issues:
                 rejected.append({'id': row['id'], 'sources': row['sources'], 'issues': issues})
                 continue
-            number = destination.start_row + index
             for column in destination.columns:
                 if column.field not in values:
                     raise ValueError(f'Missing mapped field: {column.field}')
@@ -629,10 +829,16 @@ def recover_operation(state, operation_id, abort=False, reason=''):
         if not reason.strip():
             raise ValueError('An abort requires an explicit reconciliation reason')
         journal.update(status='aborted', reason=reason)
+    elif digest == journal['sha256']:
+        if journal.get('kind') == 'cells':
+            from .tools import assign_cells
+
+            assign_cells(state, journal['result']['path'], journal['changes'], journal['instruction_revision'])
+            journal['status'] = 'completed'
+        else:
+            settle(state, operation_id, journal)
     elif digest == journal['before_sha256']:
         journal.update(status='aborted', reason='No file replacement occurred; output retained')
-    elif digest == journal['sha256']:
-        settle(state, operation_id, journal)
     else:
         raise ValueError(
             'Output differs from both journal revisions; reconcile it and explicitly abort the old operation'
