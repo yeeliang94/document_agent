@@ -185,9 +185,10 @@ def test_processes_cannot_be_started(tmp_path, layers):
 
 
 def test_outputs_are_staged_and_committed_only_on_success(tmp_path):
+    from goal_helpers import establish_requirements
+
     _, _, deps = messy_case(tmp_path)
-    output = deps.root / 'outputs/output.xlsx'
-    atomic_bytes(output, (deps.root / 'template/destination.xlsx').read_bytes())
+    output = deps.root / establish_requirements(deps)
     original = output.read_bytes()
     edit = (
         "import openpyxl\nwb = openpyxl.load_workbook(OUTPUTS + '/output.xlsx')\n"
@@ -502,7 +503,7 @@ def test_python_edits_outside_input_areas_are_refused(tmp_path):
     )
     for change in ("wb['Output']['A1'] = 'Renamed'", "wb['Lookup']['A1'] = 'Invented'"):
         refused = run(deps, edit.format(change))
-        assert not refused['saved'] and 'outside its input areas' in refused['error'], refused
+        assert not refused['saved'] and 'Protected cell changed' in refused['error'], refused
         assert output.read_bytes() == original
     allowed = run(deps, edit.format("wb['Output']['A2'] = '00101'"))
     assert allowed['saved'], allowed
@@ -559,3 +560,56 @@ def test_derived_rows_keep_source_issues_unless_resolved(tmp_path):
     assert resolved['saved'] and resolved['dataset']['exceptions'] == 0, resolved
     saved = deps.state.get('rows', resolved['dataset']['id'])[0]
     assert saved['evidence']['resolved_issues'] == {'Formula cache missing': 'Recomputed from B14'}
+
+
+def test_planted_pipe_cannot_hang_the_commit(tmp_path):
+    _, _, deps = messy_case(tmp_path)
+
+    async def bounded():
+        return await asyncio.wait_for(
+            run_python(deps, "import os\nos.mkfifo(os.path.dirname(OUTPUTS) + '/result.json')", []), 30
+        )
+
+    result = asyncio.run(bounded())
+    assert result['returncode'] == 0 and not result['saved'] and 'special file' in result['error'], result
+    assert job_lock(deps.job_id).acquire(blocking=False)
+    job_lock(deps.job_id).release()
+
+
+def test_python_workbook_edits_get_every_template_check_before_saving(tmp_path):
+    from goal_helpers import establish_requirements
+
+    _, _, deps = messy_case(tmp_path)
+    output = deps.root / 'outputs/output.xlsx'
+    atomic_bytes(output, (deps.root / 'template/destination.xlsx').read_bytes())
+    edit = (
+        "import openpyxl\nwb = openpyxl.load_workbook(OUTPUTS + '/output.xlsx')\n{}\nwb.save(OUTPUTS + '/output.xlsx')"
+    )
+    unrequired = run(deps, edit.format("wb['Output']['A2'] = '00101'"))
+    assert not unrequired['saved'] and 'requirements' in unrequired['error'], unrequired
+    establish_requirements(deps)
+    original = output.read_bytes()
+    for change, failure in (
+        ("del wb['Lookup']", 'Missing sheet: Lookup'),
+        ("wb['Output']['D2'] = '=1'", 'Formula changed: Output!D2'),
+        ("wb['Lookup'].sheet_state = 'visible'", 'Visibility changed: Lookup'),
+    ):
+        refused = run(deps, edit.format(change))
+        assert not refused['saved'] and failure in refused['error'], refused
+        assert output.read_bytes() == original
+
+
+def test_failed_preparation_leaves_no_staging_copies(tmp_path):
+    _, _, deps = messy_case(tmp_path)
+    atomic_bytes(deps.root / 'outputs/output.xlsx', (deps.root / 'template/destination.xlsx').read_bytes())
+    with pytest.raises(ValueError):
+        run(deps, 'pass', ['no-such-dataset'])
+    assert not list((deps.root / 'working/python/runs').iterdir())
+
+
+def test_derived_rows_need_unique_ids(tmp_path):
+    _, _, deps = messy_case(tmp_path)
+    dataset = payments_dataset(deps)
+    load = f'rows = DATASETS[{dataset["id"]!r}]["rows"]\n'
+    split = run(deps, load + 'save_dataset(rows + [dict(rows[0])])', [dataset['id']])
+    assert not split['saved'] and 'unique' in split['error'], split

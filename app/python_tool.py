@@ -20,6 +20,7 @@ import sys
 import sysconfig
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import get_args
 
@@ -31,8 +32,9 @@ from .datasets import dataset_rows, fresh_id, require_current
 from .execution import acquire_job_lock, run_killable
 from .files import atomic_bytes
 from .harness_tools import Kind, observed_kind
+from .regions import accounting_version
 from .state import encode, identity
-from .tools import JobDeps, protected_changes, registrar
+from .tools import JobDeps, registrar, template_changes
 
 SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 MAX_ROWS = 100_000
@@ -190,9 +192,10 @@ def _digest(path):
 
 
 def _staged_bytes(path):
-    """A staged file's bytes, refusing links: the unsandboxed parent must never read where a link points."""
+    """A staged file's bytes, refusing links: the unsandboxed parent must never read where a link points.
+    O_NONBLOCK keeps a planted named pipe from blocking the open; the type check below then refuses it."""
     try:
-        handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as error:
         raise ValueError(f'{path.name} is not a plain file the script wrote ({error.strerror})') from None
     with os.fdopen(handle, 'rb') as file:
@@ -309,6 +312,10 @@ def save_python_dataset(state, datasets, payload, code_sha256):
                 'issues': issues,
             }
         )
+    # Rejected rows are later keyed by ID, so a shared ID would let one row's reasons replace another's.
+    duplicates = sorted(key for key, count in Counter(row['id'] for row in saved).items() if count > 1)
+    if duplicates:
+        raise ValueError(f'Row IDs must be unique; repeated: {", ".join(duplicates[:5])}')
     surviving = {source for row in saved for source in row['sources']}
     missing = {source for row in parent_rows for source in row['sources']} - surviving - set(excluded)
     if missing:
@@ -356,21 +363,26 @@ def _commit(deps, prepared, code, datasets):
         if name not in originals:
             raise ValueError(f'New output {name} was not saved; create outputs with create_output first')
     changed = [name for name, data in files.items() if hashlib.sha256(data).hexdigest() != originals[name]]
-    template = next(f['path'] for f in deps.current()['files'] if f['role'] == 'template')
+    template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
     for name in changed:
         if name.endswith('.xlsx'):
+            # Without current requirements nothing says which cells a script may change.
+            specification = state.get('requirement', identity('outputs/' + name))
+            if (
+                accounting_version(state) != 2
+                or not specification
+                or specification.get('stale')
+                or specification['instruction_revision'] != state.revision('instruction_revision')
+            ):
+                raise ValueError(f'Save current output requirements for outputs/{name} before editing it with Python')
             try:
-                workbook = load_workbook(io.BytesIO(files[name]))
+                load_workbook(io.BytesIO(files[name])).close()
             except Exception as error:
                 raise ValueError(f'{name} no longer opens as a workbook: {error}') from None
-            original = load_workbook(deps.resolve(template))
-            try:
-                protected = protected_changes(deps, 'outputs/' + name, original, workbook)
-            finally:
-                original.close()
-                workbook.close()
-            if protected:
-                raise ValueError(f'{name} changes cells outside its input areas: ' + '; '.join(protected[:10]))
+            # The same checks as final validation, before a good output can be replaced.
+            failures, _ = template_changes(deps, 'outputs/' + name, template, files[name])
+            if failures:
+                raise ValueError(f'{name} was not saved: ' + '; '.join(failures[:10]))
         if any(
             op.get('status') == 'prepared' and op.get('result', {}).get('path') == 'outputs/' + name
             for _, op in state.all('operation')
@@ -418,9 +430,10 @@ async def _settled(function, *args):
 
 async def run_python(deps, code, datasets):
     settings = deps.settings or Settings()
-    prepared = await asyncio.to_thread(_prepare, deps, uuid.uuid4().hex, datasets)
+    run_id = uuid.uuid4().hex
     started = time.monotonic()
     try:
+        prepared = await _settled(_prepare, deps, run_id, datasets)
         try:
             finished = await run_killable(
                 prepared['argv'],
@@ -452,7 +465,7 @@ async def run_python(deps, code, datasets):
         except ValueError as error:
             return result | {'ok': False, 'saved': False, 'error': str(error)}
     finally:
-        await asyncio.to_thread(shutil.rmtree, prepared['run'], True)
+        await asyncio.to_thread(shutil.rmtree, Path(_real(deps.root)) / 'working/python/runs' / run_id, True)
 
 
 def register_python_tool(agent):
