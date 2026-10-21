@@ -10,7 +10,7 @@ import time
 import uuid
 import zipfile
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -28,7 +28,7 @@ from .config import Settings
 from .files import SUPPORTED, atomic_bytes, relative_name, within
 from .state import JobState, encode, fit_result, identity
 from .store import Store
-from .supervisor import CapabilityResult, failure, normalized, repetition
+from .supervisor import failure, normalized, repetition
 from .workplan import record_outcome
 
 # Package parts openpyxl cannot carry through a load/save round trip.
@@ -314,26 +314,6 @@ class JobDeps:
             logged = result.return_value if isinstance(result, ToolReturn) else result
             progress_events = observe(self, name, args, logged)
             record_outcome(self.state, self.actor, name, args, logged, progress_events)
-            if isinstance(logged, dict):
-                logged['capability'] = asdict(
-                    CapabilityResult(
-                        artifacts=[{'path': logged['path'], 'version': logged.get('sha256')}]
-                        if 'path' in logged
-                        else [],
-                        evidence=[{'id': logged['evidence_id']}] if logged.get('evidence_id') else [],
-                        cursor={
-                            'next_row': s.get('next_row'),
-                            'sheet': s.get('sheet'),
-                            'reason': s.get('continuation_reason'),
-                        }
-                        if (s := next((s for s in logged.get('sheets', []) if s.get('next_row')), None))
-                        else None,
-                        validation={'passed': logged['passed'], 'version': logged.get('sha256')}
-                        if 'passed' in logged
-                        else None,
-                        progress=progress_events[:20],
-                    )
-                )
             if progress_events:
                 self.store.event(
                     self.job_id,
@@ -433,13 +413,6 @@ class JobDeps:
             if warning and not waiting and isinstance(result, dict):
                 result = result | {
                     'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, save a result from what you have read, or identify a specific blocker.'
-                }
-            # Paging with new offsets or ranges dodges the identical-call check, so also count reads per target.
-            rereads = sum(read_target(item['tool'], item['arguments']) == read_target(name, args) for item in actions)
-            if read_target(name, args) and rereads >= REREAD_WARNING and isinstance(result, dict):
-                result = result | {
-                    'reread_warning': f'This source has been read {rereads} times in your last {len(actions)} actions. '
-                    'Save what you have learned (interpretation, dataset or blocker) instead of reading it again.'
                 }
             payload = encode(result).encode()
             limit = (self.settings or Settings()).tool_result_bytes

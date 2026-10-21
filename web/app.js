@@ -313,7 +313,6 @@ function harnessDetails(job) {
     ['Discovered regions', Object.values(job.coverage.regions || {}).reduce((total, count) => total + count, 0)],
     ['Context estimate method', job.context_usage?.method ?? '—'],
     ['Fixed context cost', job.context_usage?.fixed_tokens ?? '—'],
-    ['Recovery turn', job.supervision?.recovery ?? '—'],
     ['Source observations', job.coverage.source_observations],
     ['Rows included', job.coverage.records.included],
     ['Open coverage items', job.coverage.open_items],

@@ -30,7 +30,6 @@ from app.regions import RegionRole, save_role, search
 from app.requirements import OutputSpecification, check_requirements, save_requirements
 from app.runtime import Runner
 from app.state import JobState, identity
-from app.supervisor import Supervisor
 from app.tools import assign_cells, validate_workbook
 
 from goal_helpers import establish_requirements, messy_case
@@ -462,8 +461,6 @@ def test_worker_credits_scoped_reads_but_still_stops_repetition(tmp_path, repeat
             assert result['status'] == 'completed', result
             assert result['handover']['summary'] == 'Inspected ten assigned source ranges'
             assert len(calls) == 11
-            assert deps.state.get('supervision', task['id'])['recovery'] is None
-            assert Supervisor(deps.state).turn()[1]['last_useful'] == 0
         assert not deps.state.all('assignment')
 
     asyncio.run(investigate())

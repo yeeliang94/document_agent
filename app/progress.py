@@ -1,32 +1,18 @@
-"""Application-issued progress from verified tool outcomes; workbook-specific adapter."""
+"""What each verified tool outcome changed, for Activity and the resume card; workbook-specific adapter."""
 
-from .config import Settings
 from .state import identity
-from .supervisor import Supervisor
+from .supervisor import record_changes
 
 
 def observe(deps, name, args, result):
     state = deps.state
     candidates = []
 
-    def emit(kind, key, version, linked=False):
-        candidates.append({'kind': kind, 'key': key, 'version': version, 'linked': linked})
+    def emit(kind, key, version):
+        candidates.append({'kind': kind, 'key': key, 'version': version})
 
     if not isinstance(result, dict) or result.get('error'):
         return []
-    if name == 'read_job_state' and args.get('kind') == 'instruction':
-        supervisor = Supervisor(state, deps.actor)
-        if args.get('key') and isinstance(result.get('value'), dict):
-            value = result['value']
-            # Accommodate byte-limited Unicode/escaped pages while requiring substantial new coverage.
-            quantum = max(1, min(4000, ((deps.settings or Settings()).tool_result_bytes - 600) // 16))
-            start = result['offset']
-            supervisor.restore_instruction(
-                ('text', value['seq']), start, start + len(value['text']), quantum, result['next_offset'] is None
-            )
-        elif not args.get('key'):
-            for item in result.get('items', []):
-                supervisor.restore_instruction('index', item['seq'], item['seq'] + 1)
     if name in (
         'read_sheet',
         'read_cell',
@@ -46,7 +32,7 @@ def observe(deps, name, args, result):
             key = identity(deps.actor, args, entry['sha256'])
             state.put('evidence', key, {'source_hash': entry['sha256'], 'location': args, 'actor': deps.actor})
             # Workers investigate an explicitly assigned source scope and have no interpretation tools.
-            emit('evidence_inspected', key, entry['sha256'], linked=deps.actor != 'main')
+            emit('evidence_inspected', key, entry['sha256'])
             result['evidence_id'] = key
     if name == 'inspect_source':
         for sheet in result.get('sheets', []):
@@ -86,8 +72,8 @@ def observe(deps, name, args, result):
     if name == 'apply_instructions' and result.get('applied'):
         for instruction in state.instructions():
             if instruction['seq'] in result['applied'] and instruction['kind'] == 'answer':
-                emit('question_resolved', str(instruction['seq']), identity(instruction['text']), True)
-    credited = Supervisor(state, deps.actor).accept_many(candidates)
+                emit('question_resolved', str(instruction['seq']), identity(instruction['text']))
+    credited = record_changes(state, deps.actor, candidates)
     events = [{key: event[key] for key in ('kind', 'key', 'version')} for event in credited]
     if events:
         message = name.replace('_', ' ') + ': saved useful change'
@@ -103,24 +89,3 @@ def observe(deps, name, args, result):
         checkpoint = {'tool': name, 'events': events[:20], 'message': message}
         state.put('checkpoint', deps.actor, checkpoint)
     return events
-
-
-# What the job needs next, judged from saved results rather than the model's own account.
-STAGES = {
-    'discover': 'Save destination requirements (save_output_requirements) and settle what each source region means '
-    '(save_interpretation or record_decisions, citing evidence IDs).',
-    'extract': 'Extract the accepted record regions (extract_region, extract_dataset or record_observations).',
-    'populate': 'Write the extracted records into the output copy (populate_template, or write_cells with record IDs).',
-    'validate': 'Run validate_output, then validate_job on the same workbook, and resolve the failures it lists.',
-}
-
-
-def stage(state):
-    """The earliest stage without a saved result. Later stages cannot start without earlier ones."""
-    if not any(state.count(kind) for kind in ('requirement', 'region_role', 'decision')):
-        return 'discover'
-    if not any(state.count(kind) for kind in ('dataset', 'observation')):
-        return 'extract'
-    if not state.count('assignment'):
-        return 'populate'
-    return 'validate'

@@ -24,11 +24,6 @@ class Settings:
     port: int = int(os.getenv('DI_PORT', '8003'))
     data_dir: Path = Path(os.getenv('DI_DATA_DIR', str(ROOT / 'data'))).expanduser().resolve()
     tool_timeout: int = int(os.getenv('DI_TOOL_TIMEOUT_SECONDS', '110'))
-    stall_turns: int = int(os.getenv('DI_STALL_TURNS', '4'))
-    recovery_turns: int = int(os.getenv('DI_RECOVERY_TURNS', '2'))
-    evidence_window: int = int(os.getenv('DI_EVIDENCE_WINDOW', '6'))
-    # Model turns of reading allowed between pieces of real work before reading stops counting as progress.
-    discovery_turns: int = int(os.getenv('DI_DISCOVERY_TURNS', '10'))
     model_timeout: int = int(os.getenv('DI_MODEL_TIMEOUT_SECONDS', '120'))
     job_timeout: int = int(os.getenv('DI_JOB_TIMEOUT_SECONDS', '1800'))
     max_requests: int = int(os.getenv('DI_MAX_MODEL_REQUESTS', '60'))
@@ -54,11 +49,8 @@ class Settings:
     def validate(self):
         if self.context_tokens <= 2 * self.response_tokens or self.tool_result_bytes < 1024:
             raise ValueError('Context budget must leave input space; tool results need at least 1024 bytes')
-        if (
-            min(self.tool_timeout, self.stall_turns, self.recovery_turns, self.evidence_window, self.discovery_turns)
-            < 1
-        ):
-            raise ValueError('Execution and supervision limits must be positive')
+        if self.tool_timeout < 1:
+            raise ValueError('DI_TOOL_TIMEOUT_SECONDS must be positive')
         if self.max_subagents < 0 or self.inspection_cells < 1 or self.inspection_seconds < 1:
             raise ValueError('Invalid harness limits')
         if self.host not in LOOPBACK and not self.access_token:

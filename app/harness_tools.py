@@ -525,7 +525,6 @@ def register_harness_tools(agent, delegation=None, readonly=False):
             'visual',
             'evidence',
             'checkpoint',
-            'supervision',
             'approach',
             'plan_history',
             'requirement_history',

@@ -4,7 +4,6 @@ import hashlib
 import json
 import time
 import uuid
-from types import SimpleNamespace
 from typing import Literal
 
 from openai import AsyncOpenAI
@@ -24,10 +23,8 @@ from .datasets import recover_operation
 from .delegation import Delegation
 from .files import atomic_bytes
 from .harness_tools import register_harness_tools
-from .progress import STAGES, stage
 from .state import UNSETTLED_TASKS, identity
 from .store import Store, clean
-from .supervisor import Supervisor
 from .tools import JobDeps, register_tools
 from .workplan import WorkItem, WorkPlan, save_plan
 
@@ -268,10 +265,6 @@ class Runner:
             configuration={
                 'context_tokens': self.settings.context_tokens,
                 'tool_timeout': self.settings.tool_timeout,
-                'stall_turns': self.settings.stall_turns,
-                'recovery_turns': self.settings.recovery_turns,
-                'evidence_window': self.settings.evidence_window,
-                'discovery_turns': self.settings.discovery_turns,
             },
             module=job['module'],
         )
@@ -307,7 +300,6 @@ class Runner:
             context_usage=state.get('context', 'main:usage', {}),
             work_plan=state.get('plan', 'current'),
             progress_checkpoint=state.get('checkpoint', 'main'),
-            supervision=state.get('supervision', 'main'),
         )
 
     def model(self):
@@ -333,7 +325,7 @@ class Runner:
         return agent
 
     async def drive(self, job_id, run, history_path, instructions, restored_messages) -> bool:
-        """Step the agent until it ends. Returns True when stopped or finalized at a saved tool boundary."""
+        """Step the agent until it ends. Returns True when stopped at a saved tool boundary."""
         node = run.next_node
         logged = restored_messages
         model_span = None
@@ -366,105 +358,6 @@ class Runner:
                         ),
                     )
                 state = self.store.state(job_id)
-                Supervisor(state).instructions(max((item['seq'] for item in state.instructions()), default=0))
-                plan = state.get('plan', 'current', {})
-                checked = state.get('validation', 'current', {})
-                # Settled work must not become a stall just because the model keeps rewriting a final plan.
-                # Prose alone never suffices: complete() rechecks sources, journals, versions and output bytes.
-                validated = (
-                    state.get('schema', 'accounting', {}).get('version') == 2
-                    and checked.get('passed')
-                    and checked.get('revision') == state.revision()
-                    and not pending
-                    and not current.get('pending_messages')
-                )
-                if (
-                    validated
-                    and plan.get('items')
-                    and all(item['status'] == 'done' and not item.get('blocker') for item in plan['items'])
-                    and not plan.get('stale')
-                ):
-                    self.complete_validated(job_id, checked, run.usage)
-                    return True
-                supervised = state.get('supervision_request', 'main', {}).get('request', 0)
-                if run.usage.requests > supervised:
-                    state.put('supervision_request', 'main', {'request': run.usage.requests})
-                    decision, clock = Supervisor(
-                        state,
-                        'main',
-                        self.settings.stall_turns,
-                        self.settings.recovery_turns,
-                        self.settings.evidence_window,
-                        self.settings.discovery_turns,
-                    ).turn()
-                    current_stage = stage(state)
-                    if decision in ('recover', 'pause') and validated:
-                        # The work already passed validate_job; idling afterwards (e.g. failing to tidy the plan)
-                        # is not a stall. Finish instead of pausing a done job; complete() still rechecks everything.
-                        self.store.event(
-                            job_id,
-                            'progress.settled',
-                            'Validated work stopped changing; finishing instead of pausing.',
-                            type='job',
-                            clock=clock,
-                        )
-                        self.complete_validated(job_id, checked, run.usage)
-                        return True
-                    if decision == 'recover':
-                        add_user_instructions(
-                            node.request,
-                            [
-                                f'Harness recovery: no work result was saved recently. Stage: {current_stage}. '
-                                f'Next: {STAGES[current_stage]} Further reading or plan edits do not count as progress now. '
-                                'If this is blocked, record the specific blocker and ask a necessary question. '
-                                f'{self.settings.recovery_turns} recovery turn(s) remain before the job pauses.'
-                            ],
-                        )
-                        self.store.event(
-                            job_id,
-                            'progress.recovery',
-                            'No useful change; attempting bounded recovery.',
-                            type='job',
-                            level='WARN',
-                            clock=clock,
-                            plan=state.get('plan', 'current'),
-                            stage=current_stage,
-                        )
-                    elif decision == 'continue' and clock['notice']:
-                        add_user_instructions(
-                            node.request,
-                            [
-                                f'Harness notice: no work result has been saved for {clock["turn"] - clock["last_work"]} '
-                                'turn(s); further reading will soon stop counting as progress. '
-                                f'Stage: {current_stage}. Next: {STAGES[current_stage]}'
-                            ],
-                        )
-                        self.store.event(
-                            job_id,
-                            'progress.discovery_notice',
-                            'Reading budget nearly spent; asked the agent to move to the next stage.',
-                            type='job',
-                            stage=current_stage,
-                            clock=clock,
-                        )
-                    elif decision == 'pause':
-                        self.store.update(
-                            job_id,
-                            status='paused',
-                            error='Progress stalled after bounded recovery. Saved plan, evidence and available draft retained.',
-                            artifacts=self.artifacts(job_id),
-                        )
-                        self.store.event(
-                            job_id,
-                            'progress.stalled',
-                            'Paused after unsuccessful recovery.',
-                            type='job',
-                            level='WARN',
-                            clock=clock,
-                            stage=current_stage,
-                            checkpoint=state.get('checkpoint', 'main'),
-                        )
-                        return True
                 request_input_before = run.usage.input_tokens
                 model_span = uuid.uuid4().hex
                 started = time.monotonic()
@@ -534,20 +427,6 @@ class Runner:
         return False
 
     # --- Settling the outcome ---------------------------------------------
-
-    def complete_validated(self, job_id, checked, usage):
-        count = checked['coverage']['output_assignments']
-        self.complete(
-            job_id,
-            SimpleNamespace(
-                output=JobResult(
-                    summary=f'Prepared and validated {count} output records. '
-                    'Native Excel formula recalculation was not performed.',
-                    status='complete',
-                ),
-                usage=usage,
-            ),
-        )
 
     def finish(self, job_id, result):
         status = self.store.get(job_id)['status']

@@ -6,7 +6,6 @@ from .datasets import Column, extract_dataset
 from .regions import RegionRole, indexed_cells, save_role, search
 from .requirements import OutputSpecification, save_requirements
 from .state import identity, paginate
-from .supervisor import Supervisor
 from .tools import JobDeps, registrar
 from .workplan import WorkPlan, save_plan
 
@@ -114,12 +113,9 @@ def register_goal_tools(agent, readonly=False):
     async def save_interpretation(ctx: RunContext[JobDeps], decision: RegionRole) -> dict:
         """Accept a region as records, reference, instructions, outside scope or unresolved. Cite evidence_id from an actual inspected source result; names alone do not establish period/entity."""
 
-        def save():
-            result = save_role(ctx.deps.state, decision)
-            Supervisor(ctx.deps.state, ctx.deps.actor).link(decision.evidence)
-            return result
-
-        return await ctx.deps.action('save_interpretation', decision.model_dump(), save)
+        return await ctx.deps.action(
+            'save_interpretation', decision.model_dump(), lambda: save_role(ctx.deps.state, decision)
+        )
 
     @tool
     async def extract_region(
@@ -155,14 +151,9 @@ def register_goal_tools(agent, readonly=False):
     async def save_output_requirements(ctx: RunContext[JobDeps], specification: OutputSpecification) -> dict:
         """Save source-backed destination meanings, writable/preserved areas, required fields, allowed values, totals and material questions. Classify every discovered template area before completion."""
 
-        def save():
-            result = save_requirements(ctx.deps, specification)
-            Supervisor(ctx.deps.state, ctx.deps.actor).link(
-                [key for area in specification.areas for key in area.evidence]
-            )
-            return result
-
-        return await ctx.deps.action('save_output_requirements', {'path': specification.path}, save)
+        return await ctx.deps.action(
+            'save_output_requirements', {'path': specification.path}, lambda: save_requirements(ctx.deps, specification)
+        )
 
     @tool
     async def resolve_visual(ctx: RunContext[JobDeps], visual: str, role: str, evidence: str, reason: str) -> dict:
