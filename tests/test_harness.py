@@ -486,6 +486,31 @@ def test_essential_instructions_over_budget_pause_without_dropping_them(tmp_path
         asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
 
 
+def test_one_oversized_batch_of_reads_is_cleared_instead_of_pausing(tmp_path):
+    store, job, deps, _ = fixture_job(tmp_path)
+    deps.settings = Settings(data_dir=tmp_path, context_tokens=4000, response_tokens=100)
+    model = FunctionModel(lambda messages, info: ModelResponse(parts=[TextPart('unused')]))
+    runner = Runner(store, deps.settings, model)
+    calls = [ToolCallPart('read_document', {}, tool_call_id=str(n)) for n in range(3)]
+    history = [
+        ModelRequest(parts=[UserPromptPart('Original task')]),
+        ModelResponse(parts=calls),
+        ModelRequest(
+            parts=[
+                ToolReturnPart('read_document', 'Evidence ' * 3000 + f'END_{n}', tool_call_id=str(n)) for n in range(3)
+            ]
+        ),
+    ]
+    ctx = SimpleNamespace(deps=deps, messages=history.copy(), usage=RunUsage())
+    request = ModelRequestContext(
+        model=model, messages=history, model_settings={}, model_request_parameters=ModelRequestParameters()
+    )
+    result = asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
+    assert 'END_2' not in str(result.messages)
+    archives = list((deps.root / 'working/tool-results').glob('*.json'))
+    assert any('END_2' in artifact.read_text() for artifact in archives)
+
+
 def test_changed_source_and_changed_output_fail_validation(tmp_path):
     store, job, deps, state = fixture_job(tmp_path)
     dataset = extract(state)

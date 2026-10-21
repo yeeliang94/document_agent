@@ -341,6 +341,11 @@ class ContextPolicy(AbstractCapability):
                 history = await asyncio.to_thread(shrink, history)
         after, method = await asyncio.to_thread(count, history)
         if after > usable:
+            # One fresh batch of reads can exceed the budget before it is old history; its results are
+            # stored, so clear them too rather than pause.
+            history = await asyncio.to_thread(self.clear_old_results, deps, history, 0)
+            after, method = await asyncio.to_thread(count, history)
+        if after > usable:
             raise ContextBudgetError(
                 'Essential instructions and the latest exchange exceed the context budget. '
                 'Reduce the request or configure DI_CONTEXT_TOKEN_LIMIT for this model.'
