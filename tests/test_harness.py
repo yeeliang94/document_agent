@@ -430,7 +430,7 @@ def test_completion_without_coverage_validation_is_partial_and_endpoints_are_pag
 def test_context_rebuild_retains_user_decisions_and_archived_evidence_on_summary_failure(tmp_path):
     store, job, deps, state = fixture_job(tmp_path)
     state.instruction('Employee 000001 must be excluded; confirmed by the user.')
-    deps.settings = Settings(data_dir=tmp_path, context_tokens=10000, response_tokens=100, context_chars=1000000)
+    deps.settings = Settings(data_dir=tmp_path, context_tokens=10000, response_tokens=100)
 
     def fail_summary(messages, info):
         raise RuntimeError('Synthetic summary failure')

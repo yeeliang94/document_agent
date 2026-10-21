@@ -34,9 +34,10 @@ class Settings:
     max_requests: int = int(os.getenv('DI_MAX_MODEL_REQUESTS', '60'))
     max_upload_mb: int = int(os.getenv('DI_MAX_UPLOAD_MB', '200'))
     max_files: int = int(os.getenv('DI_MAX_FILES', '2000'))
-    context_chars: int = int(os.getenv('DI_CONTEXT_CHAR_LIMIT', '160000'))
-    context_tokens: int = int(os.getenv('DI_CONTEXT_TOKEN_LIMIT', '64000'))
-    response_tokens: int = int(os.getenv('DI_RESPONSE_TOKEN_RESERVE', '4096'))
+    # Set to the configured model's real context window. Older tool results are cleared only near it.
+    context_tokens: int = int(os.getenv('DI_CONTEXT_TOKEN_LIMIT', '200000'))
+    # Reasoning models spend output tokens on thinking too, so leave generous room per response.
+    response_tokens: int = int(os.getenv('DI_RESPONSE_TOKEN_RESERVE', '16000'))
     tool_result_bytes: int = int(os.getenv('DI_TOOL_RESULT_BYTES', '16000'))
     image_tokens: int = int(os.getenv('DI_IMAGE_TOKEN_ESTIMATE', '8192'))
     inspection_cells: int = int(os.getenv('DI_INSPECTION_CELLS', '1000000'))

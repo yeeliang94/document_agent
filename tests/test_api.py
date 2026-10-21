@@ -270,7 +270,7 @@ def test_compaction_keeps_tool_pairs_and_archives_full_content(tmp_path):
             ]
         )
 
-    settings = Settings(data_dir=tmp_path, api_key='test-key', context_chars=3000)
+    settings = Settings(data_dir=tmp_path, api_key='test-key', context_tokens=25000, response_tokens=100)
     with TestClient(base_url=LOCAL, app=create_app(settings, model_override=FunctionModel(respond))) as client:
         job = create_job(client, files=[('files', ('large.txt', source, 'text/plain'))])
         client.post(f'/api/jobs/{job["id"]}/start')

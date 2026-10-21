@@ -594,9 +594,8 @@ def test_rebuild_hysteresis_never_suppresses_recovery_at_the_hard_budget(tmp_pat
     store = Store(tmp_path)
     job = store.create('payroll', '2026-10', 'Prepare a supported output', '')
     deps = JobDeps(
-        store, job['id'], Settings(data_dir=tmp_path, context_tokens=6000, response_tokens=100, context_chars=1000000)
+        store, job['id'], Settings(data_dir=tmp_path, context_tokens=6000, response_tokens=100)
     )
-    deps.state.put('context', 'main:usage', {'rebuild_high_water': 100000})
 
     def no_summary(messages, info):
         raise RuntimeError('Synthetic summary outage')
