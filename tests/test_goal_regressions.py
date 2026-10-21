@@ -413,7 +413,7 @@ def test_search_pages_across_sheets_without_losing_matches(tmp_path):
 @pytest.mark.parametrize('repeat', [False, True])
 def test_worker_credits_scoped_reads_but_still_stops_repetition(tmp_path, repeat):
     store, job, deps = messy_case(tmp_path)
-    deps.settings = replace(deps.settings, subagent_requests=20)
+    deps.settings = replace(deps.settings, subagent_requests=20, max_subagents=2)
     calls = []
 
     def respond(messages, info):

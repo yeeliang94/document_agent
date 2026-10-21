@@ -46,7 +46,7 @@ def source_case(tmp_path, rows):
     atomic_bytes(root / path, (root / 'template/template.xlsx').read_bytes())
     inspect_source(deps.state, 'template/template.xlsx')
     inspected = {}
-    observe(deps, 'inspect_workbook', {'path': 'template/template.xlsx'}, inspected)
+    observe(deps, 'read_sheet', {'path': 'template/template.xlsx', 'sheet': 'Employees'}, inspected)
     save_requirements(
         deps,
         OutputSpecification(

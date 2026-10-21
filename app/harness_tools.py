@@ -86,7 +86,7 @@ def validate_job(deps, path):
     template_validation = state.root / 'working/validation.json'
     structural = json.loads(template_validation.read_text()) if template_validation.exists() else {}
     if not structural.get('passed') or structural.get('sha256') != digest:
-        failures.append('Run validate_output on the current workbook revision first')
+        failures.append('The workbook check failed or is out of date; see workbook.failures')
     from .regions import accounting_version
     from .requirements import check_requirements
 
@@ -174,7 +174,7 @@ def register_harness_tools(agent, delegation=None, readonly=False):
     from .goal_tools import register_goal_tools
 
     register_goal_tools(agent, readonly)
-    tool = registrar(agent, readonly, {'inspect_source', 'query_inventory'})
+    tool = registrar(agent, readonly, {'inspect_source'})
 
     @tool
     async def inspect_source_tool(
@@ -196,21 +196,6 @@ def register_harness_tools(agent, delegation=None, readonly=False):
             )
 
         return await ctx.deps.action('inspect_source', {'path': path, 'sheet': sheet, 'start_row': start_row}, inspect)
-
-    @tool
-    async def query_inventory(ctx: RunContext[JobDeps], offset: int = 0, limit: int = 25) -> dict:
-        """Retrieve paginated source inventory with structural discovery and disposition status."""
-
-        def query():
-            if ctx.deps.actor == 'main':
-                return ctx.deps.state.page('inventory', offset, limit)
-            allowed_paths = (*ctx.deps.scope, *ctx.deps.state.get('task', ctx.deps.actor, {}).get('artifacts', []))
-            items = [
-                {'id': key, **item} for key, item in ctx.deps.state.all('inventory') if item['path'] in allowed_paths
-            ]
-            return paginate(items, offset, limit)
-
-        return await ctx.deps.action('query_inventory', {'offset': offset, 'limit': limit}, query)
 
     @tool
     async def extract_dataset_tool(
@@ -291,7 +276,7 @@ def register_harness_tools(agent, delegation=None, readonly=False):
                         key, source = ctx.deps.state.file_entry(decision.id)
                         source = source and ctx.deps.state.get('inventory', key)
                     if not source:
-                        raise ValueError('Unknown source: use its file path or an ID from query_inventory')
+                        raise ValueError('Unknown source: use its file path or an ID from list_files')
                     decision = decision.model_copy(update={'id': key})
                     if (
                         decision.status == 'reviewed'
@@ -508,6 +493,7 @@ def register_harness_tools(agent, delegation=None, readonly=False):
         kind: Literal[
             'snapshot',
             'instruction',
+            'inventory',
             'memory',
             'mapping',
             'dataset',
@@ -571,11 +557,6 @@ def register_harness_tools(agent, delegation=None, readonly=False):
             return ctx.deps.state.page(kind, offset, limit)
 
         return await ctx.deps.action('read_job_state', {'kind': kind, 'key': key, 'offset': offset}, read)
-
-    @tool
-    async def validate_job_tool(ctx: RunContext[JobDeps], path: str) -> dict:
-        """Check source coverage and current output assignments. Run validate_output first; complete requires both checks."""
-        return await ctx.deps.action('validate_job', {'path': path}, lambda: validate_job(ctx.deps, path))
 
     if readonly:
         return

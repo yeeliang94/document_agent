@@ -78,7 +78,7 @@ def fixture_job(tmp_path, count=3, width=3, dirty=False):
     add_file(root, 'inputs', 'nested/source.xlsx', buffer.getvalue(), manifest)
     add_file(root, 'template', 'template.xlsx', destination.getvalue(), manifest)
     store.update(job['id'], files=manifest)
-    deps = JobDeps(store, job['id'], Settings(data_dir=tmp_path))
+    deps = JobDeps(store, job['id'], Settings(data_dir=tmp_path, max_subagents=2))
     state = deps.state
     return store, job, deps, state
 
@@ -806,7 +806,7 @@ def test_delegation_and_bulk_write_errors_return_to_the_agent(tmp_path):
         ]
     )
     with TestClient(
-        create_app(Settings(data_dir=tmp_path, api_key='test'), model_override=model), base_url=LOCAL
+        create_app(Settings(data_dir=tmp_path, api_key='test', max_subagents=2), model_override=model), base_url=LOCAL
     ) as client:
         job = create_job(client)
         client.post(f'/api/jobs/{job["id"]}/start')

@@ -37,7 +37,8 @@ class Settings:
     image_tokens: int = int(os.getenv('DI_IMAGE_TOKEN_ESTIMATE', '8192'))
     inspection_cells: int = int(os.getenv('DI_INSPECTION_CELLS', '1000000'))
     inspection_seconds: int = int(os.getenv('DI_INSPECTION_SECONDS', '30'))
-    max_subagents: int = int(os.getenv('DI_MAX_SUBAGENTS', '2'))
+    # Read-only sub-agents are off by default; on small jobs they add cost without benefit.
+    max_subagents: int = int(os.getenv('DI_MAX_SUBAGENTS', '0'))
     subagent_requests: int = int(os.getenv('DI_SUBAGENT_REQUESTS', '12'))
     access_token: str = os.getenv('DI_ACCESS_TOKEN', '')
     # Host names the browser may use to reach the app. Blank: loopback names only,

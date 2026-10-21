@@ -17,7 +17,7 @@ def observe(deps, name, args, result):
         'read_sheet',
         'read_cell',
         'read_document',
-        'inspect_workbook',
+        'inspect_source',
         'search_cells',
         'inspect_regions',
         'view_page',
@@ -67,7 +67,7 @@ def observe(deps, name, args, result):
                     continue
                 meaningful = {k: v for k, v in item.items() if k not in ('rationale', 'reason', 'evidence')}
                 emit('interpretation_settled', key, identity(meaningful))
-    if name in ('validate_output', 'validate_job') and result.get('passed'):
+    if name == 'validate_output' and result.get('passed'):
         emit('validation_improved', name, result.get('sha256', identity(result)))
     if name == 'apply_instructions' and result.get('applied'):
         for instruction in state.instructions():

@@ -80,7 +80,7 @@ def payroll_model():
     ]
     steps = [
         ('list_files', {}),
-        ('inspect_workbook', {'path': 'template/template.xlsx'}),
+        ('inspect_source', {'path': 'template/template.xlsx'}),
         ('read_document', {'path': 'inputs/HR/Reports/employees.txt'}),
         ('create_output', {'filename': 'payroll_output.xlsx'}),
         ('write_cells', {'path': 'outputs/payroll_output.xlsx', 'changes': changes}),
@@ -112,14 +112,14 @@ def test_real_agent_tools_write_validate_download_and_log(tmp_path):
         assert completed['status'] == 'completed', completed
         assert calls == [
             'list_files',
-            'inspect_workbook',
+            'inspect_source',
             'read_document',
             'create_output',
             'write_cells',
             'validate_output',
             'read_document',
             'record_decisions',
-            'validate_job',
+            'validate_output',
             'final_result',
         ]
         output = tmp_path / 'jobs' / job['id'] / 'outputs/payroll_output.xlsx'

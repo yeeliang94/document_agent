@@ -119,7 +119,7 @@ def completion_checks(path):
                 ]
             },
         ),
-        ('validate_job', {'path': path}),
+        ('validate_output', {'path': path}),
     ]
 
 

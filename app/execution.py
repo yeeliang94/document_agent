@@ -10,7 +10,6 @@ from .tools import job_lock
 
 ISOLATED_TOOLS = {
     'inspect_source',
-    'inspect_workbook',
     'read_sheet',
     'read_cell',
     'read_document',
@@ -20,18 +19,15 @@ ISOLATED_TOOLS = {
     'populate_template',
     'write_cells',
     'validate_output',
-    'validate_job',
     'extract_region',
 }
 # Killing these cannot leave a half-applied change, so a deadline is an ordinary tool error.
 READ_ONLY_TOOLS = {
     'read_cell',
-    'inspect_workbook',
     'read_sheet',
     'read_document',
     'view_page',
     'validate_output',
-    'validate_job',
 }
 
 

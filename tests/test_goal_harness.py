@@ -318,7 +318,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
             actions = [
                 ('inspect_source', {'path': 'inputs/October.xlsx'}),
                 ('inspect_source', {'path': 'template/destination.xlsx'}),
-                ('inspect_workbook', {'path': 'template/destination.xlsx'}),
+                ('read_sheet', {'path': 'template/destination.xlsx', 'sheet': 'Output'}),
             ]
         elif number == 1:
             actions = [
@@ -347,7 +347,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
                         },
                     )
                 )
-            ev = returns['inspect_workbook']['evidence_id']
+            ev = returns['read_sheet']['evidence_id']
             actions.append(
                 (
                     'save_output_requirements',
@@ -433,7 +433,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path)
         elif number == 5:
             actions = [('validate_output', {'path': 'outputs/output.xlsx'})]
         elif number == 6:
-            actions = [('validate_job', {'path': 'outputs/output.xlsx'})]
+            actions = [('validate_output', {'path': 'outputs/output.xlsx'})]
         elif number == 7:
             actions = [
                 (
