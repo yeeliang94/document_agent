@@ -456,17 +456,16 @@ def test_relaxed_rules_accept_reasonable_work_but_keep_their_guarantees(tmp_path
     )
     assert save_role(state, role)['ignored_evidence'] == ['typo']
 
-    # A plan with an unknown reference is kept, minus that reference; a done item still needs a real one.
+    # A plan is the agent's own notes: unknown references are reported, and nothing in it is refused.
     plan = WorkPlan(
         objective='Pay',
         focus='Extract',
         next_actions=['Extract the region'],
         items=[WorkItem(id='read', objective='Read', status='active', evidence=['validate_output'])],
     )
-    assert save_plan(state, plan)['ignored_references'] == ['validate_output']
+    assert save_plan(state, plan)['unrecognized_references'] == ['validate_output']
     done = plan.model_copy(update={'items': [WorkItem(id='read', objective='Read', status='done', evidence=['nope'])]})
-    with pytest.raises(ValueError, match='marked done'):
-        save_plan(state, done)
+    assert save_plan(state, done)['items'][0]['status'] == 'done'
 
 
 def test_record_decisions_accepts_a_file_path_for_a_source(tmp_path):

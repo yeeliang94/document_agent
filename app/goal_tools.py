@@ -15,10 +15,7 @@ def register_goal_tools(agent, readonly=False):
 
     @tool
     async def update_work_plan(ctx: RunContext[JobDeps], plan: WorkPlan) -> dict:
-        """Persist a bounded objective, current work items, blockers and next actions. Cite saved result IDs; prose cannot establish processing progress."""
-
-        # A plan is a hypothesis. Citing evidence in it must not turn reading into lasting progress,
-        # or rewriting the plan clears a stall without any record being extracted or written.
+        """Save your objective, work items, blockers, next actions and free-form notes. It survives restarts and context rebuilds; rewrite it whenever useful."""
         return await ctx.deps.action('update_work_plan', {}, lambda: save_plan(ctx.deps.state, plan))
 
     @tool

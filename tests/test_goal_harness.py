@@ -176,7 +176,7 @@ def test_work_plan_survives_restart(tmp_path):
     restored = JobState(tmp_path)
     assert restored.snapshot()['plan']['next_actions'] == plan.next_actions
     with pytest.raises(ValidationError):
-        WorkPlan(objective='Task', focus='Focus', items=[], next_actions=['action'] * 6)
+        WorkPlan(objective='Task', focus='Focus', items=[], next_actions=['action'] * 11)
 
 
 def test_isolated_nonreturning_process_is_killed_before_lock_release(tmp_path, monkeypatch):

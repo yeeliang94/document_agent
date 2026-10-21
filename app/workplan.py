@@ -1,4 +1,4 @@
-"""Bounded durable work hypotheses; completed operations, not prose, establish results."""
+"""The agent's durable working plan and notes; completed operations, not prose, establish results."""
 
 from typing import Literal
 
@@ -18,49 +18,30 @@ class WorkItem(BaseModel):
 
 class WorkPlan(BaseModel):
     objective: str = Field(min_length=1, max_length=3000)
-    focus: str = Field(min_length=1, max_length=1000)
-    items: list[WorkItem] = Field(max_length=20)
-    next_actions: list[str] = Field(min_length=1, max_length=5)
+    focus: str = Field(default='', max_length=1000)
+    items: list[WorkItem] = Field(default_factory=list, max_length=30)
+    next_actions: list[str] = Field(default_factory=list, max_length=10)
+    notes: str = Field(default='', max_length=4000)
 
 
 def save_plan(state, plan):
-    known = {item.id for item in plan.items}
-    if len(known) != len(plan.items):
-        raise ValueError('Work item IDs must be unique')
+    """Save the agent's own working notes. Never refused: the final checks, not the plan, decide completion."""
+    seen, items = set(), []
+    # A repeated ID keeps its latest entry, so a sloppy rewrite still saves.
+    for item in reversed(plan.items):
+        if item.id not in seen:
+            seen.add(item.id)
+            items.append(item)
+    plan.items = items[::-1]
+    unknown = []
     for item in plan.items:
-        if any(key not in known for key in item.dependencies) or item.id in item.dependencies:
-            raise ValueError('Dependencies must reference other work items')
-    # The plan is a working hypothesis: drop references that do not exist rather than refuse the whole plan.
-    ignored = []
-    for item in plan.items:
-        ignored.extend(key for key in item.evidence if not state.has_reference(key))
-        item.evidence = [key for key in item.evidence if state.has_reference(key)]
-        # Claiming completion still needs a real saved result behind it.
-        if item.status == 'done' and not item.evidence:
-            raise ValueError(
-                f'Work item {item.id} is marked done but cites no saved result. Cite an id returned by a tool, '
-                'such as validate_job, extract_region, save_output_requirements or an evidence_id.'
-            )
-    visiting, visited = set(), set()
-    dependencies = {item.id: item.dependencies for item in plan.items}
-
-    def visit(key):
-        if key in visiting:
-            raise ValueError('Work item dependencies contain a cycle')
-        if key in visited:
-            return
-        visiting.add(key)
-        for dependency in dependencies[key]:
-            visit(dependency)
-        visiting.remove(key)
-        visited.add(key)
-
-    for key in known:
-        visit(key)
+        unknown.extend(key for key in item.evidence if not state.has_reference(key))
+        unknown.extend(key for key in item.dependencies if key not in seen)
+        item.dependencies = [key for key in item.dependencies if key in seen and key != item.id]
     values = plan.model_dump()
     old = state.get('plan', 'current', {})
     digest = identity(values, state.revision('instruction_revision'))
-    note = {'ignored_references': sorted(set(ignored))} if ignored else {}
+    note = {'unrecognized_references': sorted(set(unknown))} if unknown else {}
     if old.get('hash') == digest:
         return old | note
     if old:
