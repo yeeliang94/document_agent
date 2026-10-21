@@ -281,6 +281,11 @@ class Runner:
         messages = ModelMessagesTypeAdapter.validate_json(history_path.read_bytes()) if history_path.exists() else []
         version = state.get('schema', 'accounting', {}).get('version', 1)
         delegation = self.settings.max_subagents > 0
+        if not delegation:
+            # Without delegation tools nothing could settle these, and they would block completion forever.
+            for key, task in state.all('task'):
+                if task['status'] in UNSETTLED_TASKS:
+                    state.patch('task', key, {'status': 'cancelled', 'error': 'Delegation is disabled'})
         instructions = '\n\n'.join(
             [
                 INSTRUCTIONS,
@@ -550,8 +555,9 @@ class Runner:
                 for a in artifacts
             )
         )
-        for _, specification in state.all('requirement'):
-            path = specification['path']
+        deliverables = {specification['path'] for _, specification in state.all('requirement')}
+        deliverables |= {assignment['path'] for _, assignment in state.all('assignment')}
+        for path in sorted(deliverables):
             validation = state.get('validation', identity(path), {})
             artifact = state.root / path
             if (

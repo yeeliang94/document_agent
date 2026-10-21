@@ -98,7 +98,7 @@ def validate_job(deps, path):
     try:
         for _, assignment in state.all('assignment'):
             if assignment['path'] != path:
-                failures.append('Assignment belongs to a different output: ' + assignment['path'])
+                # Other outputs are checked by their own validation; completion requires every one to pass.
                 continue
             mapping = mappings.get(assignment['operation'])
             if (

@@ -1110,3 +1110,12 @@ def test_editing_one_cell_keeps_provenance_for_the_rest_of_the_row(tmp_path):
     state.apply_instructions([1], 'IDs are wrong', invalidate=[dataset['id']])
     run_tool(store, job['id'], 'validate_output', {'path': path})
     assert any('invalidated' in failure for failure in validate_job(deps, path)['failures'])
+
+
+def test_resume_without_delegation_settles_interrupted_workers(tmp_path):
+    store, job, deps, state = fixture_job(tmp_path)
+    state.put('task', 'child', {'id': 'child', 'status': 'interrupted', 'objective': 'Scout'})
+    model, _ = scripted([final('partial', ['Test'])])
+    runner = Runner(store, Settings(data_dir=tmp_path, max_subagents=0), model)
+    asyncio.run(runner.run(job['id']))
+    assert state.get('task', 'child')['status'] == 'cancelled'

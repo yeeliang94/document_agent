@@ -19,7 +19,7 @@ from xml.etree import ElementTree
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
+from openpyxl.utils.cell import column_index_from_string, coordinate_from_string, range_boundaries
 from pydantic import BaseModel
 from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolReturn
 
@@ -107,6 +107,36 @@ def read_email(p, root, max_files=2000, max_bytes=200 * 1024 * 1024):
     return headers + '\n\n' + text, {'attachments': attachments} if attachments else {}
 
 
+def protected_changes(deps, path, original, w, limit=100):
+    """Cells outside the saved input areas that differ from the template, however they were written."""
+    from .regions import accounting_version
+
+    if accounting_version(deps.state) != 2:
+        return []
+    specification = deps.state.get('requirement', identity(path))
+    if not specification:
+        return []  # validate_job reports the missing requirements.
+    writable = {}
+    for area in specification['areas']:
+        if area['role'] in ('required', 'optional'):
+            writable.setdefault(area['sheet'], []).append(range_boundaries(area['bounds']))
+    failures = [f'Sheet not in the template: {title}' for title in w.sheetnames if title not in original.sheetnames]
+    for sh in original:
+        if sh.title not in w.sheetnames:
+            continue
+        copy, areas = w[sh.title], writable.get(sh.title, [])
+        # _cells holds only stored cells, so sparse formatting far down a sheet costs nothing.
+        for row, column in sorted(set(sh._cells) | set(copy._cells)):
+            if any(left <= column <= right and top <= row <= bottom for left, top, right, bottom in areas):
+                continue
+            before, after = sh.cell(row, column), copy.cell(row, column)
+            if before.data_type != 'f' and before.value != after.value:
+                failures.append(f'Protected cell changed: {sh.title}!{after.coordinate}')
+                if len(failures) >= limit:
+                    return failures
+    return failures
+
+
 def validate_workbook(deps, path):
     output = deps.resolve(path, output=True)
     template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
@@ -130,6 +160,7 @@ def validate_workbook(deps, path):
                         formula_count += 1
                         if w[sh.title][c.coordinate].value != c.value:
                             failures.append('Formula changed: ' + sh.title + '!' + c.coordinate)
+        failures.extend(protected_changes(deps, output.relative_to(deps.root).as_posix(), original, w))
 
         result = {
             'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
