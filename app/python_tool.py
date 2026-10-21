@@ -11,10 +11,13 @@ failed run never leaves a half-written workbook.
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import shutil
+import stat
 import sys
+import sysconfig
 import time
 import uuid
 from pathlib import Path
@@ -23,13 +26,13 @@ from typing import get_args
 from openpyxl import load_workbook
 from pydantic_ai import RunContext
 
-from .config import Settings
+from .config import ROOT, Settings
 from .datasets import dataset_rows, fresh_id, require_current
 from .execution import acquire_job_lock, run_killable
 from .files import atomic_bytes
 from .harness_tools import Kind, observed_kind
 from .state import encode, identity
-from .tools import JobDeps, registrar
+from .tools import JobDeps, protected_changes, registrar
 
 SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 MAX_ROWS = 100_000
@@ -111,7 +114,7 @@ with open(config['datasets'], encoding='utf-8') as handle:
 
 
 def save_dataset(rows, kinds=None, excluded=None):
-    """Save rows ({values, sources, evidence?, issues?}) as the result dataset of this run."""
+    """Save rows ({values, sources, evidence?, issues?, resolved?}) as the result dataset of this run."""
     plain = lambda value: value.isoformat() if hasattr(value, 'isoformat') else str(value)
     with open(config['result'], 'w', encoding='utf-8') as handle:
         json.dump({'rows': list(rows), 'kinds': kinds or {}, 'excluded': excluded or {}}, handle, default=plain)
@@ -137,10 +140,17 @@ def _real(path):
     return os.path.realpath(path)
 
 
-def python_reads():
+def python_reads(data_dir):
+    """The interpreter and its libraries; never sys.path, which the launcher extends with the application folder."""
     paths = {sys.prefix, sys.base_prefix, sys.exec_prefix, os.path.dirname(sys.executable)}
-    paths.update(p for p in sys.path if p and os.path.isdir(p))
-    return sorted({_real(p) for p in paths} | {p for p in SYSTEM_READS if os.path.exists(p)})
+    for scheme in (sysconfig.get_paths(), sysconfig.get_paths(vars={'base': sys.base_prefix})):
+        paths.update(scheme[key] for key in ('stdlib', 'platstdlib', 'purelib', 'platlib'))
+    reads = sorted({_real(p) for p in paths if os.path.isdir(p)} | {p for p in SYSTEM_READS if os.path.exists(p)})
+    # A library folder that contains the application (.env) or the job store would expose every job.
+    for private in (_real(ROOT), _real(data_dir)):
+        if any(private == p or private.startswith(p.rstrip(os.sep) + os.sep) for p in reads):
+            raise RuntimeError(f'run_python cannot sandbox {private}: it lies inside a Python library folder')
+    return reads
 
 
 def _quote(path):
@@ -166,17 +176,43 @@ def sandbox_profile(reads, writes, executables):
     )
 
 
-def sandbox_command(reads, writes):
+def sandbox_command(reads, writes, data_dir):
     if sys.platform != 'darwin' or not os.path.exists(SANDBOX_EXEC):
         # No unsandboxed fallback: payroll data must not meet unconfined model code.
         raise RuntimeError('run_python needs an OS sandbox; only macOS sandbox-exec is supported in this prototype')
     executables = sorted({_real(os.path.dirname(sys.executable)), _real(sys.base_prefix), _real(sys.prefix)})
-    profile = sandbox_profile([*python_reads(), *reads], writes, executables)
+    profile = sandbox_profile([*python_reads(data_dir), *reads], writes, executables)
     return [SANDBOX_EXEC, '-p', profile, sys.executable, '-I', '-c', BOOT]
 
 
 def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _staged_bytes(path):
+    """A staged file's bytes, refusing links: the unsandboxed parent must never read where a link points."""
+    try:
+        handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise ValueError(f'{path.name} is not a plain file the script wrote ({error.strerror})') from None
+    with os.fdopen(handle, 'rb') as file:
+        info = os.fstat(file.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError(f'{path.name} is a link or special file; outputs must be plain files')
+        return file.read()
+
+
+def _staged_files(folder):
+    """Plain top-level files of a staging folder the script could write; any link or folder is refused."""
+    if not stat.S_ISDIR(os.lstat(folder).st_mode):
+        raise ValueError(f'{folder.name} was replaced by a link; nothing was saved')
+    files = {}
+    with os.scandir(folder) as entries:
+        for entry in sorted(entries, key=lambda e: e.name):
+            if not entry.is_file(follow_symlinks=False):
+                raise ValueError(f'outputs/{entry.name} is a link or folder; outputs must be plain files')
+            files[entry.name] = _staged_bytes(Path(entry.path))
+    return files
 
 
 def _prepare(deps, run_id, datasets):
@@ -207,14 +243,15 @@ def _prepare(deps, run_id, datasets):
     }
     reads = [str(root / folder) for folder in ('inputs', 'template', 'working')]
     writes = [str(run), str(scratch)]
+    data_dir = (deps.settings or Settings()).data_dir
     return {
         'run': run,
         'staged': staged,
         'originals': originals,
-        'argv': sandbox_command(reads, writes),
+        'argv': sandbox_command(reads, writes, data_dir),
         'env': {'PATH': '/usr/bin:/bin', 'HOME': str(scratch), 'TMPDIR': str(scratch), 'LANG': 'en_US.UTF-8'},
         'config': {
-            'read': [*python_reads(), *reads],
+            'read': [*python_reads(data_dir), *reads],
             'write': writes,
             'names': names,
             'datasets': str(run / 'datasets.json'),
@@ -229,7 +266,12 @@ def save_python_dataset(state, datasets, payload, code_sha256):
     if not datasets:
         raise ValueError('Pass the input datasets to run_python before saving a derived dataset')
     parent, parent_rows = dataset_rows(state, datasets[0])
-    allowed = {source for dataset in datasets for row in dataset_rows(state, dataset)[1] for source in row['sources']}
+    inherited = {}
+    for dataset in datasets:
+        for row in dataset_rows(state, dataset)[1]:
+            for source in row['sources']:
+                inherited.setdefault(source, set()).update(row.get('issues') or [])
+    allowed = set(inherited)
     rows, kinds, excluded = payload.get('rows'), payload.get('kinds') or {}, payload.get('excluded') or {}
     if not isinstance(rows, list) or len(rows) > MAX_ROWS:
         raise ValueError(f'save_dataset needs a list of at most {MAX_ROWS} rows')
@@ -244,8 +286,19 @@ def save_python_dataset(state, datasets, payload, code_sha256):
         if not isinstance(sources, list) or not sources or not set(sources) <= allowed:
             raise ValueError(f'Row {number}: sources must be a non-empty list of input dataset sources')
         issues, evidence = row.get('issues') or [], row.get('evidence') or {}
+        resolved = row.get('resolved') or {}
         if not all(isinstance(issue, str) for issue in issues) or not isinstance(evidence, dict):
             raise ValueError(f'Row {number}: issues must be text and evidence a mapping')
+        # Problems found upstream follow the records they belong to unless the script resolves them by name.
+        carried = set().union(*(inherited[source] for source in sources))
+        if not isinstance(resolved, dict) or any(
+            issue not in carried or not isinstance(reason, str) or not reason.strip()
+            for issue, reason in resolved.items()
+        ):
+            raise ValueError(f'Row {number}: resolved must map issues of its source records to a non-empty reason')
+        issues = list(dict.fromkeys([*issues, *sorted(carried - set(resolved))]))
+        if resolved:
+            evidence = evidence | {'resolved_issues': resolved}
         columns.update(dict.fromkeys(values))
         saved.append(
             {
@@ -298,21 +351,26 @@ def save_python_dataset(state, datasets, payload, code_sha256):
 def _commit(deps, prepared, code, datasets):
     state, root = deps.state, Path(_real(deps.root))
     staged, originals = prepared['staged'], prepared['originals']
-    changed = []
-    for item in sorted(staged.rglob('*')):
-        if not item.is_file():
-            continue
-        name = item.relative_to(staged).as_posix()
+    files = _staged_files(staged)
+    for name in files:
         if name not in originals:
             raise ValueError(f'New output {name} was not saved; create outputs with create_output first')
-        if _digest(item) != originals[name]:
-            changed.append(name)
+    changed = [name for name, data in files.items() if hashlib.sha256(data).hexdigest() != originals[name]]
+    template = next(f['path'] for f in deps.current()['files'] if f['role'] == 'template')
     for name in changed:
         if name.endswith('.xlsx'):
             try:
-                load_workbook(staged / name).close()
+                workbook = load_workbook(io.BytesIO(files[name]))
             except Exception as error:
                 raise ValueError(f'{name} no longer opens as a workbook: {error}') from None
+            original = load_workbook(deps.resolve(template))
+            try:
+                protected = protected_changes(deps, 'outputs/' + name, original, workbook)
+            finally:
+                original.close()
+                workbook.close()
+            if protected:
+                raise ValueError(f'{name} changes cells outside its input areas: ' + '; '.join(protected[:10]))
         if any(
             op.get('status') == 'prepared' and op.get('result', {}).get('path') == 'outputs/' + name
             for _, op in state.all('operation')
@@ -321,10 +379,10 @@ def _commit(deps, prepared, code, datasets):
     result_file = prepared['run'] / 'result.json'
     dataset = None
     code_sha256 = hashlib.sha256(code.encode()).hexdigest()
-    if result_file.is_file():
-        dataset = save_python_dataset(state, datasets, json.loads(result_file.read_text()), code_sha256)
+    if os.path.lexists(result_file):
+        dataset = save_python_dataset(state, datasets, json.loads(_staged_bytes(result_file)), code_sha256)
     for name in changed:
-        atomic_bytes(root / 'outputs' / name, (staged / name).read_bytes())
+        atomic_bytes(root / 'outputs' / name, files[name])
     audit = state.artifact(
         'python-runs',
         {'code': code, 'datasets': datasets, 'outputs_changed': changed, 'dataset': dataset and dataset['id']},
@@ -334,11 +392,28 @@ def _commit(deps, prepared, code, datasets):
     )
     return {
         'outputs_changed': ['outputs/' + name for name in changed],
-        'outputs_removed_ignored': sorted(set(originals) - {p.name for p in staged.glob('*')}),
+        'outputs_removed_ignored': sorted(set(originals) - set(files)),
         'dataset': summary,
         'audit': audit,
         **({'next_action': 'Changed outputs must pass validate_output again.'} if changed else {}),
     }
+
+
+async def _settled(function, *args):
+    """Run a thread to its end even if cancelled: a commit cannot be stopped midway, so the job lock and
+    staging files must outlive it. Cancellation is re-raised once the thread has finished."""
+    future = asyncio.ensure_future(asyncio.to_thread(function, *args))
+    cancelled = False
+    while not future.done():
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        raise asyncio.CancelledError
+    return future.result()
 
 
 async def run_python(deps, code, datasets):
@@ -373,7 +448,7 @@ async def run_python(deps, code, datasets):
         if finished.returncode:
             return result | {'saved': False, 'note': 'The script failed; no outputs or dataset were saved.'}
         try:
-            return result | {'saved': True} | await asyncio.to_thread(_commit, deps, prepared, code, datasets)
+            return result | {'saved': True} | await _settled(_commit, deps, prepared, code, datasets)
         except ValueError as error:
             return result | {'ok': False, 'saved': False, 'error': str(error)}
     finally:
@@ -391,7 +466,8 @@ def register_python_tool(agent):
         writable folder). DATASETS maps each requested dataset ID to {columns, kinds, rows}; each row has
         values, sources, evidence and issues. save_dataset(rows, kinds=None, excluded=None) saves a derived
         dataset: every row keeps the sources it came from, and every source of the first dataset must survive
-        or appear in excluded={source: reason}. print() what you need; output is truncated. Outputs still
+        or appear in excluded={source: reason}. Issues of a row's sources carry over unless the row lists them
+        in resolved={issue: reason}. Edited workbooks may change only cells inside their input areas. print() what you need; output is truncated. Outputs still
         need validate_output, and populate_template from a saved dataset is what records source accounting."""
         datasets = list(datasets or [])
 

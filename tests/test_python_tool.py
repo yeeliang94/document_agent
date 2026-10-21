@@ -452,3 +452,110 @@ def test_scripted_job_uses_python_between_extraction_and_population(tmp_path):
             20,
             '=SUM(B2:B3)',
         ]
+
+
+def test_application_folder_and_other_jobs_cannot_be_read(tmp_path, layers):
+    from app.config import ROOT
+
+    _, _, deps = messy_case(tmp_path)
+    other_job = deps.store.create('payroll', '2026-10', 'Another job', '')
+    other = deps.store.path(other_job['id']) / 'working/notes.txt'
+    other.write_text('another job')
+    reads = python_tool.python_reads(deps.settings.data_dir)
+    assert not any(str(ROOT).startswith(p) or str(tmp_path.resolve()).startswith(p) for p in reads)
+    result = run(
+        deps,
+        attempts(f'print(open({str(ROOT / "requirements.txt")!r}).read())', f'print(open({str(other)!r}).read())'),
+    )
+    assert result['ok'], result
+    assert 'another job' not in result['stdout'] and 'openpyxl' not in result['stdout']
+    assert result['stdout'].count('blocked') == 2, result['stdout']
+
+
+def test_links_in_staged_outputs_are_refused(tmp_path):
+    _, _, deps = messy_case(tmp_path / 'store')
+    secret = tmp_path / 'secret.txt'
+    secret.write_text('payroll of another company')
+    output = deps.root / 'outputs/notes.txt'
+    atomic_bytes(output, b'draft')
+    # With the audit hook disabled from inside the script, only the commit stands between a link and its target.
+    unhook = 'import __main__\n__main__.READ = __main__.WRITE = ("",)\nimport os\n'
+    for attack in (
+        f'os.remove(OUTPUTS + "/notes.txt"); os.symlink({str(secret)!r}, OUTPUTS + "/notes.txt")',
+        f'os.rename(OUTPUTS, OUTPUTS + "-old"); os.symlink({str(tmp_path)!r}, OUTPUTS)',
+    ):
+        result = run(deps, unhook + attack)
+        assert result['returncode'] == 0 and not result['saved'], result
+        assert output.read_bytes() == b'draft'
+    assert 'payroll' not in json.dumps(deps.store.events(deps.job_id))
+
+
+def test_python_edits_outside_input_areas_are_refused(tmp_path):
+    from goal_helpers import establish_requirements
+
+    _, _, deps = messy_case(tmp_path)
+    path = establish_requirements(deps)
+    output = deps.root / path
+    original = output.read_bytes()
+    edit = (
+        "import openpyxl\nwb = openpyxl.load_workbook(OUTPUTS + '/output.xlsx')\n{}\nwb.save(OUTPUTS + '/output.xlsx')"
+    )
+    for change in ("wb['Output']['A1'] = 'Renamed'", "wb['Lookup']['A1'] = 'Invented'"):
+        refused = run(deps, edit.format(change))
+        assert not refused['saved'] and 'outside its input areas' in refused['error'], refused
+        assert output.read_bytes() == original
+    allowed = run(deps, edit.format("wb['Output']['A2'] = '00101'"))
+    assert allowed['saved'], allowed
+
+
+def test_cancelled_commit_finishes_before_the_lock_is_released(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    _, _, deps = messy_case(tmp_path)
+    started, finished = threading.Event(), []
+
+    def slow_commit(*args):
+        started.set()
+        time.sleep(0.3)
+        finished.append(True)
+        return {}
+
+    monkeypatch.setattr(python_tool, '_commit', slow_commit)
+
+    async def cancel_during_commit():
+        task = asyncio.create_task(run_python(deps, 'pass', []))
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return list(finished)
+
+    assert asyncio.run(cancel_during_commit()) == [True]
+
+
+def test_derived_rows_keep_source_issues_unless_resolved(tmp_path):
+    _, _, deps = messy_case(tmp_path)
+    dataset = payments_dataset(deps)
+    rows = deps.state.get('rows', dataset['id'])
+    rows[0]['issues'] = ['Formula cache missing']
+    deps.state.put('rows', dataset['id'], rows)
+    rebuild = (
+        f"rows = [{{'values': r['values'], 'sources': r['sources']}} for r in DATASETS[{dataset['id']!r}]['rows']]\n"
+    )
+    kept = run(deps, rebuild + 'save_dataset(rows)', [dataset['id']])
+    assert kept['saved'] and kept['dataset']['exceptions'] == 1, kept
+    assert deps.state.get('rows', kept['dataset']['id'])[0]['issues'] == ['Formula cache missing']
+    invented = run(
+        deps, rebuild + "rows[0]['resolved'] = {'Something else': 'ok'}\nsave_dataset(rows)", [dataset['id']]
+    )
+    assert not invented['saved'] and 'resolved' in invented['error']
+    resolved = run(
+        deps,
+        rebuild + "rows[0]['resolved'] = {'Formula cache missing': 'Recomputed from B14'}\nsave_dataset(rows)",
+        [dataset['id']],
+    )
+    assert resolved['saved'] and resolved['dataset']['exceptions'] == 0, resolved
+    saved = deps.state.get('rows', resolved['dataset']['id'])[0]
+    assert saved['evidence']['resolved_issues'] == {'Formula cache missing': 'Recomputed from B14'}
