@@ -40,6 +40,8 @@ class Settings:
     # Read-only sub-agents are off by default; on small jobs they add cost without benefit.
     max_subagents: int = int(os.getenv('DI_MAX_SUBAGENTS', '0'))
     subagent_requests: int = int(os.getenv('DI_SUBAGENT_REQUESTS', '12'))
+    # Model-written Python in an OS sandbox. Off until security approves it for payroll data.
+    python_tool: bool = os.getenv('DI_PYTHON_TOOL', '0') == '1'
     access_token: str = os.getenv('DI_ACCESS_TOKEN', '')
     # Host names the browser may use to reach the app. Blank: loopback names only,
     # or any name when an access token protects the API.

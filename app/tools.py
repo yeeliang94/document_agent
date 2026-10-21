@@ -137,15 +137,17 @@ def protected_changes(deps, path, original, w, limit=100):
     return failures
 
 
-def validate_workbook(deps, path):
-    output = deps.resolve(path, output=True)
-    template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
+def template_changes(deps, path, template, data):
+    """Everything a saved workbook (data: its bytes) lost or changed relative to the template.
+
+    Returns (failures, formula_count). Shared by final validation and run_python's commit, so a staged
+    workbook is refused before it can replace a good output."""
     failures = [
         f'Template {x} were lost when saving; edit this workbook in Excel instead.'
-        for x in sorted(package_features(template) - package_features(output))
+        for x in sorted(package_features(template) - package_features(io.BytesIO(data)))
     ]
     original = load_workbook(template)
-    w = load_workbook(output)
+    w = load_workbook(io.BytesIO(data))
     formula_count = 0
     try:
         for sh in original:
@@ -160,22 +162,29 @@ def validate_workbook(deps, path):
                         formula_count += 1
                         if w[sh.title][c.coordinate].value != c.value:
                             failures.append('Formula changed: ' + sh.title + '!' + c.coordinate)
-        failures.extend(protected_changes(deps, output.relative_to(deps.root).as_posix(), original, w))
-
-        result = {
-            'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
-            'path': output.relative_to(deps.root).as_posix(),
-            'reopened': True,
-            'formulas_preserved': formula_count,
-            'failures': failures,
-            'passed': not failures,
-            'limitation': 'No formula recalculation; source accounting and business rules need separate checks.',
-        }
-        atomic_bytes(deps.root / 'working/validation.json', json.dumps(result).encode())
-        return result
+        failures.extend(protected_changes(deps, path, original, w))
     finally:
         original.close()
         w.close()
+    return failures, formula_count
+
+
+def validate_workbook(deps, path):
+    output = deps.resolve(path, output=True)
+    template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
+    data = output.read_bytes()
+    failures, formula_count = template_changes(deps, output.relative_to(deps.root).as_posix(), template, data)
+    result = {
+        'sha256': hashlib.sha256(data).hexdigest(),
+        'path': output.relative_to(deps.root).as_posix(),
+        'reopened': True,
+        'formulas_preserved': formula_count,
+        'failures': failures,
+        'passed': not failures,
+        'limitation': 'No formula recalculation; source accounting and business rules need separate checks.',
+    }
+    atomic_bytes(deps.root / 'working/validation.json', json.dumps(result).encode())
+    return result
 
 
 class CellChange(BaseModel):
