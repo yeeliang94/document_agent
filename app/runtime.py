@@ -375,6 +375,10 @@ class Runner:
         )
         register_tools(agent)
         register_harness_tools(agent, self.delegation)
+        if self.settings.python_tool:
+            from .python_tool import register_python_tool
+
+            register_python_tool(agent)
         return agent
 
     async def drive(self, job_id, run, history_path, instructions, restored_messages) -> bool:

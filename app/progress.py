@@ -42,6 +42,13 @@ def observe(deps, name, args, result):
                 sheet['id'],
                 identity(entry['sha256'], sheet.get('next_row'), sheet.get('scan_complete')),
             )
+    if name == 'run_python' and result.get('dataset'):
+        rows = state.get('rows', result['dataset']['id'], [])
+        emit(
+            'dataset_changed',
+            identity('run_python', result['dataset']['parent'], result['dataset']['columns']),
+            identity([{key: row[key] for key in ('values', 'sources', 'issues')} for row in rows]),
+        )
     if name in (
         'extract_dataset',
         'extract_region',

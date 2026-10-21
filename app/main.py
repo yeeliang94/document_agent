@@ -128,6 +128,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 'context_token_budget': conf.context_tokens,
                 'tool_result_bytes': conf.tool_result_bytes,
                 'tool_deadline_seconds': conf.tool_timeout,
+                'python_tool': conf.python_tool,
                 'tokenizer_method': estimate_text('capability diagnostics')[1],
                 'accounting_version': 2,
                 'index_version': 1,
