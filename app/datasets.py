@@ -120,11 +120,11 @@ def lineage(state, dataset):
             continue
         seen.add(key)
         pending.append((state.get('dataset', key) or {}).get('parent'))
-        pending.extend(
-            op.get('dataset')
-            for op in (state.get('mapping', key) or {}).get('operations', [])
-            if op.get('operation') == 'join'
-        )
+        for op in (state.get('mapping', key) or {}).get('operations', []):
+            if op.get('operation') == 'join':
+                pending.append(op.get('dataset'))
+            elif op.get('operation') == 'python':
+                pending.extend(op.get('datasets', []))
     return seen
 
 

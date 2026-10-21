@@ -128,9 +128,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 'context_token_budget': conf.context_tokens,
                 'tool_result_bytes': conf.tool_result_bytes,
                 'tool_deadline_seconds': conf.tool_timeout,
-                'stall_turns': conf.stall_turns,
-                'recovery_turns': conf.recovery_turns,
-                'evidence_window': conf.evidence_window,
+                'python_tool': conf.python_tool,
                 'tokenizer_method': estimate_text('capability diagnostics')[1],
                 'accounting_version': 2,
                 'index_version': 1,
@@ -309,7 +307,6 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         return {
             'plan': state.get('plan', 'current'),
             'checkpoint': state.get('checkpoint', 'main'),
-            'supervision': state.get('supervision', 'main'),
         }
 
     @api.get('/api/jobs/{job_id}/regions')

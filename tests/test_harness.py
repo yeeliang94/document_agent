@@ -78,7 +78,7 @@ def fixture_job(tmp_path, count=3, width=3, dirty=False):
     add_file(root, 'inputs', 'nested/source.xlsx', buffer.getvalue(), manifest)
     add_file(root, 'template', 'template.xlsx', destination.getvalue(), manifest)
     store.update(job['id'], files=manifest)
-    deps = JobDeps(store, job['id'], Settings(data_dir=tmp_path))
+    deps = JobDeps(store, job['id'], Settings(data_dir=tmp_path, max_subagents=2))
     state = deps.state
     return store, job, deps, state
 
@@ -430,7 +430,7 @@ def test_completion_without_coverage_validation_is_partial_and_endpoints_are_pag
 def test_context_rebuild_retains_user_decisions_and_archived_evidence_on_summary_failure(tmp_path):
     store, job, deps, state = fixture_job(tmp_path)
     state.instruction('Employee 000001 must be excluded; confirmed by the user.')
-    deps.settings = Settings(data_dir=tmp_path, context_tokens=10000, response_tokens=100, context_chars=1000000)
+    deps.settings = Settings(data_dir=tmp_path, context_tokens=10000, response_tokens=100)
 
     def fail_summary(messages, info):
         raise RuntimeError('Synthetic summary failure')
@@ -484,6 +484,31 @@ def test_essential_instructions_over_budget_pause_without_dropping_them(tmp_path
     )
     with pytest.raises(ContextBudgetError):
         asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
+
+
+def test_one_oversized_batch_of_reads_is_cleared_instead_of_pausing(tmp_path):
+    store, job, deps, _ = fixture_job(tmp_path)
+    deps.settings = Settings(data_dir=tmp_path, context_tokens=4000, response_tokens=100)
+    model = FunctionModel(lambda messages, info: ModelResponse(parts=[TextPart('unused')]))
+    runner = Runner(store, deps.settings, model)
+    calls = [ToolCallPart('read_document', {}, tool_call_id=str(n)) for n in range(3)]
+    history = [
+        ModelRequest(parts=[UserPromptPart('Original task')]),
+        ModelResponse(parts=calls),
+        ModelRequest(
+            parts=[
+                ToolReturnPart('read_document', 'Evidence ' * 3000 + f'END_{n}', tool_call_id=str(n)) for n in range(3)
+            ]
+        ),
+    ]
+    ctx = SimpleNamespace(deps=deps, messages=history.copy(), usage=RunUsage())
+    request = ModelRequestContext(
+        model=model, messages=history, model_settings={}, model_request_parameters=ModelRequestParameters()
+    )
+    result = asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
+    assert 'END_2' not in str(result.messages)
+    archives = list((deps.root / 'working/tool-results').glob('*.json'))
+    assert any('END_2' in artifact.read_text() for artifact in archives)
 
 
 def test_changed_source_and_changed_output_fail_validation(tmp_path):
@@ -806,7 +831,7 @@ def test_delegation_and_bulk_write_errors_return_to_the_agent(tmp_path):
         ]
     )
     with TestClient(
-        create_app(Settings(data_dir=tmp_path, api_key='test'), model_override=model), base_url=LOCAL
+        create_app(Settings(data_dir=tmp_path, api_key='test', max_subagents=2), model_override=model), base_url=LOCAL
     ) as client:
         job = create_job(client)
         client.post(f'/api/jobs/{job["id"]}/start')
@@ -1110,3 +1135,12 @@ def test_editing_one_cell_keeps_provenance_for_the_rest_of_the_row(tmp_path):
     state.apply_instructions([1], 'IDs are wrong', invalidate=[dataset['id']])
     run_tool(store, job['id'], 'validate_output', {'path': path})
     assert any('invalidated' in failure for failure in validate_job(deps, path)['failures'])
+
+
+def test_resume_without_delegation_settles_interrupted_workers(tmp_path):
+    store, job, deps, state = fixture_job(tmp_path)
+    state.put('task', 'child', {'id': 'child', 'status': 'interrupted', 'objective': 'Scout'})
+    model, _ = scripted([final('partial', ['Test'])])
+    runner = Runner(store, Settings(data_dir=tmp_path, max_subagents=0), model)
+    asyncio.run(runner.run(job['id']))
+    assert state.get('task', 'child')['status'] == 'cancelled'

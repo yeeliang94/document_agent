@@ -22,7 +22,6 @@ from app.harness_tools import register_harness_tools
 from app.main import create_app
 from app.state import JobState, encode, fit_result
 from app.store import Store
-from app.supervisor import Supervisor
 from app.tools import JobDeps, register_tools
 
 from helpers import LOCAL, create_job, wait_for_job
@@ -222,55 +221,7 @@ def test_instruction_index_adapts_its_cursor_to_the_byte_limit(tmp_path):
     assert seqs == list(range(1, 31))
 
 
-def test_rereading_one_source_with_new_offsets_is_flagged(tmp_path):
-    settings = Settings(data_dir=tmp_path)
-    _, _, deps = job_with(tmp_path, 'dense.xlsx', dense_sheet(40), settings)
-    warnings = []
-    for start in range(1, 6):
-        args = {'path': 'inputs/dense.xlsx', 'sheet': 'Data', 'start_row': start, 'end_row': start, 'end_column': 4}
-        result = asyncio.run(deps.action('read_sheet', args, lambda: {'rows': []}))
-        warnings.append('reread_warning' in result)
-    assert warnings == [False, False, False, True, True]
-
-
-def test_reading_and_plan_links_cannot_hold_off_a_stall_once_the_allowance_is_spent(tmp_path):
-    supervisor = Supervisor(JobState(tmp_path), stall_turns=4, recovery_turns=2, discovery_turns=6)
-    decisions = []
-    for number in range(20):
-        key = f'sheet-read-{number}'
-        supervisor.event('evidence_inspected', key, 'v1')
-        supervisor.link([key])
-        decision, clock = supervisor.turn()
-        decisions.append(decision)
-        if decision == 'pause':
-            break
-    assert decisions == ['continue'] * 5 + ['recover', 'continue', 'pause']
-    assert clock['discovery_left'] == 0
-
-
-def test_saved_work_renews_the_reading_allowance_and_clears_recovery(tmp_path):
-    supervisor = Supervisor(JobState(tmp_path), stall_turns=4, recovery_turns=2, discovery_turns=6)
-    for number in range(6):
-        supervisor.event('evidence_inspected', f'read-{number}', 'v1')
-        decision, clock = supervisor.turn()
-    assert decision == 'recover'
-    supervisor.event('interpretation_settled', 'region-a', 'records')
-    decision, clock = supervisor.turn()
-    assert decision == 'continue' and clock['recovery'] is None and clock['discovery_left'] == 6
-    # Reading is progress again inside the renewed allowance.
-    for number in range(4):
-        supervisor.event('evidence_inspected', f'later-{number}', 'v1')
-        assert supervisor.turn()[0] == 'continue'
-
-
-def test_delegated_readers_keep_their_reading_credit(tmp_path):
-    supervisor = Supervisor(JobState(tmp_path), actor='task-1', discovery_turns=3)
-    for number in range(10):
-        supervisor.event('evidence_inspected', f'read-{number}', 'v1', linked=True)
-        assert supervisor.turn()[0] == 'continue'
-
-
-def test_resume_card_is_small_and_names_the_stage_next_step_and_unviewed_scans(tmp_path):
+def test_resume_card_is_small_and_names_unviewed_scans(tmp_path):
     state = JobState(tmp_path)
     state.inventory([{'path': 'inputs/scan.pdf', 'sha256': 'a' * 64, 'size': 1, 'role': 'inputs'}])
     for number in range(400):
@@ -282,7 +233,6 @@ def test_resume_card_is_small_and_names_the_stage_next_step_and_unviewed_scans(t
     state.record_read('inputs/scan.pdf', 2, 2, vision=True)
     card = state.resume_card()
     assert len(encode(card).encode()) <= 4000
-    assert card['stage'] == 'discover' and 'save_output_requirements' in card['next']
     assert card['unviewed_scanned_pages'] == [{'path': 'inputs/scan.pdf', 'page': 1}]
 
 
@@ -350,25 +300,12 @@ def replay_inspection_loop(tmp_path, max_requests=40):
     return stopped, events, prompts, settings
 
 
-def test_inspection_loop_pauses_with_a_draft_output_instead_of_running_on(tmp_path):
-    stopped, events, prompts, settings = replay_inspection_loop(tmp_path)
-    names = [event['name'] for event in events]
+def test_inspection_loop_stops_at_the_request_allowance_with_a_draft_output(tmp_path):
+    stopped, events, prompts, settings = replay_inspection_loop(tmp_path, max_requests=20)
     assert stopped['status'] == 'paused', stopped.get('error')
-    assert 'stalled' in stopped['error'].lower()
-    assert names.index('progress.discovery_notice') < names.index('progress.recovery')
-    # Before hardening, each new workbook scan and each plan citing fresh reads cleared the stall again, so this
-    # replay ran until its request limit. Now reading earns credit only within the allowance between results.
-    assert stopped['request_count'] <= settings.discovery_turns + settings.recovery_turns + 2
-    text = json.dumps(
-        [
-            part.content
-            for message in prompts[-1]
-            if isinstance(message, ModelRequest)
-            for part in message.parts
-            if isinstance(part, UserPromptPart)
-        ]
-    )
-    assert 'Stage: discover' in text and 'save_output_requirements' in text
+    # No turn-by-turn steering: the hard allowance bounds an aimless run, and its draft is kept.
+    assert stopped['request_count'] <= settings.max_requests
+    assert 'Harness' not in str(prompts[-1])
     assert [(item['name'], item.get('status')) for item in stopped['artifacts']] == [('payroll_output.xlsx', 'draft')]
 
 
@@ -519,17 +456,16 @@ def test_relaxed_rules_accept_reasonable_work_but_keep_their_guarantees(tmp_path
     )
     assert save_role(state, role)['ignored_evidence'] == ['typo']
 
-    # A plan with an unknown reference is kept, minus that reference; a done item still needs a real one.
+    # A plan is the agent's own notes: unknown references are reported, and nothing in it is refused.
     plan = WorkPlan(
         objective='Pay',
         focus='Extract',
         next_actions=['Extract the region'],
         items=[WorkItem(id='read', objective='Read', status='active', evidence=['validate_output'])],
     )
-    assert save_plan(state, plan)['ignored_references'] == ['validate_output']
+    assert save_plan(state, plan)['unrecognized_references'] == ['validate_output']
     done = plan.model_copy(update={'items': [WorkItem(id='read', objective='Read', status='done', evidence=['nope'])]})
-    with pytest.raises(ValueError, match='marked done'):
-        save_plan(state, done)
+    assert save_plan(state, done)['items'][0]['status'] == 'done'
 
 
 def test_record_decisions_accepts_a_file_path_for_a_source(tmp_path):

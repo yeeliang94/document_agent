@@ -80,7 +80,7 @@ def payroll_model():
     ]
     steps = [
         ('list_files', {}),
-        ('inspect_workbook', {'path': 'template/template.xlsx'}),
+        ('inspect_source', {'path': 'template/template.xlsx'}),
         ('read_document', {'path': 'inputs/HR/Reports/employees.txt'}),
         ('create_output', {'filename': 'payroll_output.xlsx'}),
         ('write_cells', {'path': 'outputs/payroll_output.xlsx', 'changes': changes}),
@@ -112,14 +112,14 @@ def test_real_agent_tools_write_validate_download_and_log(tmp_path):
         assert completed['status'] == 'completed', completed
         assert calls == [
             'list_files',
-            'inspect_workbook',
+            'inspect_source',
             'read_document',
             'create_output',
             'write_cells',
             'validate_output',
             'read_document',
             'record_decisions',
-            'validate_job',
+            'validate_output',
             'final_result',
         ]
         output = tmp_path / 'jobs' / job['id'] / 'outputs/payroll_output.xlsx'
@@ -270,7 +270,7 @@ def test_compaction_keeps_tool_pairs_and_archives_full_content(tmp_path):
             ]
         )
 
-    settings = Settings(data_dir=tmp_path, api_key='test-key', context_chars=3000)
+    settings = Settings(data_dir=tmp_path, api_key='test-key', context_tokens=25000, response_tokens=100)
     with TestClient(base_url=LOCAL, app=create_app(settings, model_override=FunctionModel(respond))) as client:
         job = create_job(client, files=[('files', ('large.txt', source, 'text/plain'))])
         client.post(f'/api/jobs/{job["id"]}/start')

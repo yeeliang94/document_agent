@@ -76,9 +76,7 @@ def messy_case(tmp_path, top=14, reference_column=7, image=False, prefilled=Fals
 def establish_requirements(deps):
     state = deps.state
     inspect_source(state, 'template/destination.xlsx')
-    evidence = observe(
-        deps, 'inspect_workbook', {'path': 'template/destination.xlsx'}, {'sheets': ['Output', 'Lookup']}
-    )[0]['key']
+    evidence = observe(deps, 'read_sheet', {'path': 'template/destination.xlsx', 'sheet': 'Output'}, {})[0]['key']
     path = 'outputs/output.xlsx'
     atomic_bytes(state.root / path, (state.root / 'template/destination.xlsx').read_bytes())
     areas = [

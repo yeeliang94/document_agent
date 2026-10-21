@@ -10,7 +10,7 @@ import time
 import uuid
 import zipfile
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -19,16 +19,16 @@ from xml.etree import ElementTree
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
+from openpyxl.utils.cell import column_index_from_string, coordinate_from_string, range_boundaries
 from pydantic import BaseModel
 from pydantic_ai import Agent, BinaryContent, CallDeferred, RunContext, ToolReturn
 
 from . import sheet_reads
 from .config import Settings
 from .files import SUPPORTED, atomic_bytes, relative_name, within
-from .state import JobState, encode, fit_result, identity
+from .state import JobState, encode, fit_result, identity, paginate
 from .store import Store
-from .supervisor import CapabilityResult, failure, normalized, repetition
+from .supervisor import failure, normalized, repetition
 from .workplan import record_outcome
 
 # Package parts openpyxl cannot carry through a load/save round trip.
@@ -44,25 +44,6 @@ DROPPED_PARTS = {
 # Whole words only, so names like "incomplete_items" or "abandoned" stay allowed.
 STATUS_WORDS = re.compile(r'(?<![a-z])(completed?|final|validated|verified|approved|done)(?![a-z])', re.IGNORECASE)
 # Reads of one source (any offset or range) within the recent action window that earn a warning.
-REREAD_WARNING = 4
-READ_TOOLS = {
-    'read_cell',
-    'read_sheet',
-    'read_document',
-    'inspect_workbook',
-    'inspect_regions',
-    'search_cells',
-    'view_page',
-}
-
-
-def read_target(tool, arguments):
-    """The source a read looks at, ignoring where in it; None for anything but a read."""
-    if tool not in READ_TOOLS or not isinstance(arguments, dict):
-        return None
-    return arguments.get('path'), arguments.get('sheet'), arguments.get('page')
-
-
 # Identical calls with identical results within this many recent actions count as no progress.
 ACTIVITY_WINDOW = 10
 _job_locks: dict[str, threading.Lock] = {}
@@ -126,15 +107,47 @@ def read_email(p, root, max_files=2000, max_bytes=200 * 1024 * 1024):
     return headers + '\n\n' + text, {'attachments': attachments} if attachments else {}
 
 
-def validate_workbook(deps, path):
-    output = deps.resolve(path, output=True)
-    template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
+def protected_changes(deps, path, original, w, limit=100):
+    """Cells outside the saved input areas that differ from the template, however they were written."""
+    from .regions import accounting_version
+
+    if accounting_version(deps.state) != 2:
+        return []
+    specification = deps.state.get('requirement', identity(path))
+    if not specification:
+        return []  # validate_job reports the missing requirements.
+    writable = {}
+    for area in specification['areas']:
+        if area['role'] in ('required', 'optional'):
+            writable.setdefault(area['sheet'], []).append(range_boundaries(area['bounds']))
+    failures = [f'Sheet not in the template: {title}' for title in w.sheetnames if title not in original.sheetnames]
+    for sh in original:
+        if sh.title not in w.sheetnames:
+            continue
+        copy, areas = w[sh.title], writable.get(sh.title, [])
+        # _cells holds only stored cells, so sparse formatting far down a sheet costs nothing.
+        for row, column in sorted(set(sh._cells) | set(copy._cells)):
+            if any(left <= column <= right and top <= row <= bottom for left, top, right, bottom in areas):
+                continue
+            before, after = sh.cell(row, column), copy.cell(row, column)
+            if before.data_type != 'f' and before.value != after.value:
+                failures.append(f'Protected cell changed: {sh.title}!{after.coordinate}')
+                if len(failures) >= limit:
+                    return failures
+    return failures
+
+
+def template_changes(deps, path, template, data):
+    """Everything a saved workbook (data: its bytes) lost or changed relative to the template.
+
+    Returns (failures, formula_count). Shared by final validation and run_python's commit, so a staged
+    workbook is refused before it can replace a good output."""
     failures = [
         f'Template {x} were lost when saving; edit this workbook in Excel instead.'
-        for x in sorted(package_features(template) - package_features(output))
+        for x in sorted(package_features(template) - package_features(io.BytesIO(data)))
     ]
     original = load_workbook(template)
-    w = load_workbook(output)
+    w = load_workbook(io.BytesIO(data))
     formula_count = 0
     try:
         for sh in original:
@@ -149,21 +162,29 @@ def validate_workbook(deps, path):
                         formula_count += 1
                         if w[sh.title][c.coordinate].value != c.value:
                             failures.append('Formula changed: ' + sh.title + '!' + c.coordinate)
-
-        result = {
-            'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
-            'path': output.relative_to(deps.root).as_posix(),
-            'reopened': True,
-            'formulas_preserved': formula_count,
-            'failures': failures,
-            'passed': not failures,
-            'limitation': 'No formula recalculation; source accounting and business rules need separate checks.',
-        }
-        atomic_bytes(deps.root / 'working/validation.json', json.dumps(result).encode())
-        return result
+        failures.extend(protected_changes(deps, path, original, w))
     finally:
         original.close()
         w.close()
+    return failures, formula_count
+
+
+def validate_workbook(deps, path):
+    output = deps.resolve(path, output=True)
+    template = deps.resolve(next(f['path'] for f in deps.current()['files'] if f['role'] == 'template'))
+    data = output.read_bytes()
+    failures, formula_count = template_changes(deps, output.relative_to(deps.root).as_posix(), template, data)
+    result = {
+        'sha256': hashlib.sha256(data).hexdigest(),
+        'path': output.relative_to(deps.root).as_posix(),
+        'reopened': True,
+        'formulas_preserved': formula_count,
+        'failures': failures,
+        'passed': not failures,
+        'limitation': 'No formula recalculation; source accounting and business rules need separate checks.',
+    }
+    atomic_bytes(deps.root / 'working/validation.json', json.dumps(result).encode())
+    return result
 
 
 class CellChange(BaseModel):
@@ -314,26 +335,6 @@ class JobDeps:
             logged = result.return_value if isinstance(result, ToolReturn) else result
             progress_events = observe(self, name, args, logged)
             record_outcome(self.state, self.actor, name, args, logged, progress_events)
-            if isinstance(logged, dict):
-                logged['capability'] = asdict(
-                    CapabilityResult(
-                        artifacts=[{'path': logged['path'], 'version': logged.get('sha256')}]
-                        if 'path' in logged
-                        else [],
-                        evidence=[{'id': logged['evidence_id']}] if logged.get('evidence_id') else [],
-                        cursor={
-                            'next_row': s.get('next_row'),
-                            'sheet': s.get('sheet'),
-                            'reason': s.get('continuation_reason'),
-                        }
-                        if (s := next((s for s in logged.get('sheets', []) if s.get('next_row')), None))
-                        else None,
-                        validation={'passed': logged['passed'], 'version': logged.get('sha256')}
-                        if 'passed' in logged
-                        else None,
-                        progress=progress_events[:20],
-                    )
-                )
             if progress_events:
                 self.store.event(
                     self.job_id,
@@ -434,13 +435,6 @@ class JobDeps:
                 result = result | {
                     'progress_warning': 'Repeated actions or an action cycle produced no new information. Change approach, save a result from what you have read, or identify a specific blocker.'
                 }
-            # Paging with new offsets or ranges dodges the identical-call check, so also count reads per target.
-            rereads = sum(read_target(item['tool'], item['arguments']) == read_target(name, args) for item in actions)
-            if read_target(name, args) and rereads >= REREAD_WARNING and isinstance(result, dict):
-                result = result | {
-                    'reread_warning': f'This source has been read {rereads} times in your last {len(actions)} actions. '
-                    'Save what you have learned (interpretation, dataset or blocker) instead of reading it again.'
-                }
             payload = encode(result).encode()
             limit = (self.settings or Settings()).tool_result_bytes
             if len(payload) > limit:
@@ -498,76 +492,21 @@ def registrar(agent: Agent, readonly, worker_tools):
 
 
 def register_tools(agent: Agent, readonly=False):
-    tool = registrar(
-        agent, readonly, {'list_files', 'inspect_workbook', 'read_sheet', 'read_cell', 'read_document', 'view_page'}
-    )
+    tool = registrar(agent, readonly, {'list_files', 'read_sheet', 'read_cell', 'read_document', 'view_page'})
 
     @tool
-    async def list_files(ctx: RunContext[JobDeps]) -> dict:
-        """List all submitted files with relative paths, hashes and duplicate links, plus outputs and saved working memory."""
+    async def list_files(ctx: RunContext[JobDeps], offset: int = 0, limit: int = 50) -> dict:
+        """List submitted files and discovered sheets with their review status, plus output files. Paginated."""
 
         def listing():
-            j = ctx.deps.current()
-            memory = ctx.deps.root / 'working/memory.json'
-            if ctx.deps.actor != 'main':
-                return {
-                    'files': [item for item in j['files'] if item['path'] in ctx.deps.scope],
-                    'artifacts': [],
-                    'memory': {},
-                }
-            return {
-                'files': j['files'],
-                'artifacts': j['artifacts'],
-                'memory': json.loads(memory.read_text()) if memory.exists() else {},
-            }
+            state = ctx.deps.state
+            if ctx.deps.actor == 'main':
+                return state.page('inventory', offset, limit) | {'outputs': ctx.deps.current()['artifacts']}
+            allowed = (*ctx.deps.scope, *state.get('task', ctx.deps.actor, {}).get('artifacts', []))
+            items = [{'id': key, **item} for key, item in state.all('inventory') if item['path'] in allowed]
+            return paginate(items, offset, limit)
 
-        return await ctx.deps.action('list_files', {}, listing)
-
-    @tool
-    async def inspect_workbook(ctx: RunContext[JobDeps], path: str) -> Any:
-        """Inspect every sheet, visibility, dimensions, first populated rows, comments, formulas and validation lists. Previews do not establish completeness."""
-
-        def read():
-            w = load_workbook(ctx.deps.resolve(path), data_only=False)
-            try:
-                sheets = []
-                for sh in w:
-                    rows = []
-                    for row in sh.iter_rows(min_row=1, max_row=min(sh.max_row, 20), max_col=min(sh.max_column, 100)):
-                        cells = [
-                            {
-                                'cell': c.coordinate,
-                                'value': str(c.value) if c.value is not None else None,
-                                'note': c.comment.text if c.comment else None,
-                            }
-                            for c in row
-                            if c.value is not None or c.comment
-                        ]
-                        if cells:
-                            rows.append(cells)
-                    sheets.append(
-                        {
-                            'name': sh.title,
-                            'visibility': sh.sheet_state,
-                            'rows': sh.max_row,
-                            'columns': sh.max_column,
-                            'preview': rows,
-                            'merged_ranges': [str(r) for r in sh.merged_cells.ranges],
-                            'validation_lists': [
-                                {'range': str(v.sqref), 'formula': v.formula1}
-                                for v in sh.data_validations.dataValidation
-                            ],
-                        }
-                    )
-                return {
-                    'sheets': sheets,
-                    'preview_limits': {'rows': 20, 'columns': 100},
-                    'instruction': 'Read applicable rows beyond this preview with read_sheet.',
-                }
-            finally:
-                w.close()
-
-        return await ctx.deps.action('inspect_workbook', {'path': path}, read)
+        return await ctx.deps.action('list_files', {'offset': offset, 'limit': limit}, listing)
 
     @tool
     async def read_sheet(
@@ -694,7 +633,7 @@ def register_tools(agent: Agent, readonly=False):
             if len(encode(meta).encode()) > limit // 2:
                 meta = {
                     'attachment_count': len(meta.get('attachments', [])),
-                    'instruction': 'Use query_inventory for attachment paths.',
+                    'instruction': 'Use list_files for attachment paths.',
                 }
             chunk = text[offset : offset + min(16000, max(1, limit // 2))]
             result = {
@@ -848,26 +787,20 @@ def register_tools(agent: Agent, readonly=False):
 
     @tool
     async def validate_output(ctx: RunContext[JobDeps], path: str) -> Any:
-        """Reopen output and check template sheets and existing formulas. This does not prove record completeness or recalculate Excel formulas; reconcile the actual source rows separately."""
+        """Check the output workbook: template sheets, formulas and features kept, every assigned cell still matches its source record, destination requirements met, and all sources accounted for. Completion requires a current pass. Excel formulas are not recalculated."""
 
-        return await ctx.deps.action('validate_output', {'path': path}, lambda: validate_workbook(ctx.deps, path))
+        def validate():
+            from .harness_tools import validate_job
 
-    @tool
-    async def save_memory(ctx: RunContext[JobDeps], key: str, value: str) -> Any:
-        """Save findings, source accounting, mappings and progress outside context. Pass value as plain text or a JSON-encoded string (not a raw object). Read back via list_files. Save before large operations or compaction."""
+            workbook = validate_workbook(ctx.deps, path)
+            job = validate_job(ctx.deps, path)
+            return job | {
+                'failures': [*workbook['failures'], *job['failures']][:100],
+                'failure_count': len(workbook['failures']) + job['failure_count'],
+                'workbook': {key: workbook[key] for key in ('passed', 'formulas_preserved', 'failures')},
+            }
 
-        def save():
-            p = ctx.deps.root / 'working/memory.json'
-            memory = json.loads(p.read_text()) if p.exists() else {}
-            try:
-                memory[key] = json.loads(value)
-            except (ValueError, TypeError):
-                memory[key] = value
-            atomic_bytes(p, json.dumps(memory, default=str, ensure_ascii=False).encode())
-            ctx.deps.state.put('memory', key, {'value': memory[key]})
-            return {'saved': key}
-
-        return await ctx.deps.action('save_memory', {'key': key, 'value': value}, save)
+        return await ctx.deps.action('validate_output', {'path': path}, validate)
 
     @tool
     async def save_report(ctx: RunContext[JobDeps], filename: str, text: str) -> Any:

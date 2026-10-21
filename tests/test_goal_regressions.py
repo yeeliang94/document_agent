@@ -30,7 +30,6 @@ from app.regions import RegionRole, save_role, search
 from app.requirements import OutputSpecification, check_requirements, save_requirements
 from app.runtime import Runner
 from app.state import JobState, identity
-from app.supervisor import Supervisor
 from app.tools import assign_cells, validate_workbook
 
 from goal_helpers import establish_requirements, messy_case
@@ -414,7 +413,7 @@ def test_search_pages_across_sheets_without_losing_matches(tmp_path):
 @pytest.mark.parametrize('repeat', [False, True])
 def test_worker_credits_scoped_reads_but_still_stops_repetition(tmp_path, repeat):
     store, job, deps = messy_case(tmp_path)
-    deps.settings = replace(deps.settings, subagent_requests=20)
+    deps.settings = replace(deps.settings, subagent_requests=20, max_subagents=2)
     calls = []
 
     def respond(messages, info):
@@ -462,8 +461,31 @@ def test_worker_credits_scoped_reads_but_still_stops_repetition(tmp_path, repeat
             assert result['status'] == 'completed', result
             assert result['handover']['summary'] == 'Inspected ten assigned source ranges'
             assert len(calls) == 11
-            assert deps.state.get('supervision', task['id'])['recovery'] is None
-            assert Supervisor(deps.state).turn()[1]['last_useful'] == 0
         assert not deps.state.all('assignment')
 
     asyncio.run(investigate())
+
+
+def test_assignments_for_another_output_do_not_fail_validation(tmp_path):
+    _, _, deps, path, _, dataset = payment_case(tmp_path)
+    populate_template(deps.state, dataset['id'], path, payment_destination(), 'payments')
+    other = deps.state.get('assignment', next(key for key, _ in deps.state.all('assignment')))
+    deps.state.put('assignment', 'other-output', other | {'path': 'outputs/other.xlsx'})
+    assert validate_workbook(deps, path)['passed']
+    checked = validate_job(deps, path)
+    assert checked['passed'], checked['failures']
+
+
+def test_protected_template_cells_cannot_change_however_they_were_written(tmp_path):
+    _, _, deps, path, _, dataset = payment_case(tmp_path)
+    populate_template(deps.state, dataset['id'], path, payment_destination(), 'payments')
+    assert validate_workbook(deps, path)['passed']
+    output = deps.state.root / path
+    workbook = load_workbook(output)
+    workbook['Output']['A1'] = 'Renamed header'
+    workbook['Lookup']['A1'] = 'Invented'
+    workbook.save(output)
+    workbook.close()
+    failures = validate_workbook(deps, path)['failures']
+    assert 'Protected cell changed: Output!A1' in failures
+    assert 'Protected cell changed: Lookup!A1' in failures

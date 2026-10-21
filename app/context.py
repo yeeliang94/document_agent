@@ -25,13 +25,16 @@ from pydantic_ai.usage import UsageLimits
 from .files import atomic_bytes
 from .state import encode
 
-# Compaction keeps this many recent messages intact and archives larger tool results before them.
+# Under real pressure, older tool results over this size are cleared to pointers; recent messages stay intact.
 KEEP_RECENT_MESSAGES = 6
 ARCHIVE_RESULTS_OVER_CHARS = 800
+# Shares of the usable budget at which results are cleared, and at which history is rebuilt from saved facts.
+CLEAR_AT = 0.8
+REBUILD_AT = 0.9
 
 
-# How far the measured/estimated ratio may move the estimate: never below a quarter, never far above it.
-CALIBRATION_RANGE = (0.25, 1.25)
+# How far the provider's measured count may move the local estimate. Images and JSON overhead can make it run 10x high.
+CALIBRATION_RANGE = (0.05, 1.5)
 
 
 class ContextBudgetError(Exception):
@@ -188,26 +191,28 @@ class ContextPolicy(AbstractCapability):
     def __init__(self, runner):
         self.runner = runner
 
-    def compact(self, deps, history, force=False):
-        """Replace older bulky tool results and images with pointers once history outgrows the character limit."""
-        raw = ModelMessagesTypeAdapter.dump_json(history)
-        if (len(raw) < self.runner.settings.context_chars and not force) or len(history) <= 1:
+    def clear_old_results(self, deps, history, keep):
+        """Tool-result clearing: swap every older bulky result for a pointer, in one batch.
+
+        Done rarely and all at once, because each rewrite of earlier history invalidates the provider's
+        prompt cache. Results stay retrievable from the stored pointer.
+        """
+        cutoff = max(0, len(history) - keep)
+        if cutoff == 0:
             return history
-        cutoff = max(0, len(history) - (1 if force else KEEP_RECENT_MESSAGES))
-        if cutoff == 0 and len(history) > 2:
-            cutoff = len(history) - 2
+        raw = len(ModelMessagesTypeAdapter.dump_json(history))
         older, archived = archive_payloads(deps, history[:cutoff])
         updated = [*older, *history[cutoff:]]
         size = len(ModelMessagesTypeAdapter.dump_json(updated))
-        if size < len(raw):
+        if archived:
             self.runner.store.event(
                 deps.job_id,
                 'context.compact',
-                'Compressed older tool payloads; source records retained.',
+                'Cleared older tool results; stored copies and source records retained.',
                 type='context',
-                bytes_before=len(raw),
+                bytes_before=raw,
                 bytes_after=size,
-                artifact=archived[0] if archived else 'working/history.json',
+                artifact=archived[0],
                 artifacts=archived,
             )
         return updated
@@ -279,8 +284,8 @@ class ContextPolicy(AbstractCapability):
         if force:
             # Consumed by this request only, so one actor's retry never affects another's.
             await asyncio.to_thread(deps.state.put, 'context', retry_key, {'force': False})
-        history = await asyncio.to_thread(self.compact, deps, list(request_context.messages), force)
-        usable = settings.context_tokens - 2 * settings.response_tokens
+        history = list(request_context.messages)
+        usable = settings.context_tokens - settings.response_tokens
         factor = (await asyncio.to_thread(deps.state.get, 'context', 'calibration', {})).get('factor', 1.0)
 
         def count(messages):
@@ -302,15 +307,14 @@ class ContextPolicy(AbstractCapability):
                 'Fixed instructions and tool schemas exceed DI_CONTEXT_TOKEN_LIMIT; increase the configured budget or reduce enabled capabilities.'
             )
         before, method = await asyncio.to_thread(count, history)
-        if before > usable * 0.8:
-            # Archive cheap payloads before considering a rebuild. A single fresh tool batch can exceed the budget before it becomes "old" history.
-            history, _ = await asyncio.to_thread(archive_payloads, deps, history, False)
-        archived_estimate, _ = await asyncio.to_thread(count, history)
-        previous = deps.state.get('context', deps.actor + ':usage', {})
-        # Rebuild hysteresis: a high fixed floor must not cause repeated ineffective summaries.
-        trigger = max(usable * 0.8, previous.get('rebuild_high_water', 0) + usable * 0.1)
+        if before > usable * CLEAR_AT or force:
+            history = await asyncio.to_thread(
+                self.clear_old_results, deps, history, 1 if force else KEEP_RECENT_MESSAGES
+            )
+        cleared, _ = await asyncio.to_thread(count, history)
         rebuilt = False
-        if archived_estimate > min(trigger, usable * 0.95) or force:
+        # Rebuilding replaces the agent's working memory, so it is the last resort after clearing.
+        if cleared > usable * REBUILD_AT or force:
             cut = safe_cut(history)
             # If the newest complete exchanges alone are too large, retain only the last coherent group.
             if cut == 0:
@@ -337,11 +341,16 @@ class ContextPolicy(AbstractCapability):
                 history = await asyncio.to_thread(shrink, history)
         after, method = await asyncio.to_thread(count, history)
         if after > usable:
+            # One fresh batch of reads can exceed the budget before it is old history; its results are
+            # stored, so clear them too rather than pause.
+            history = await asyncio.to_thread(self.clear_old_results, deps, history, 0)
+            after, method = await asyncio.to_thread(count, history)
+        if after > usable:
             raise ContextBudgetError(
                 'Essential instructions and the latest exchange exceed the context budget. '
                 'Reduce the request or configure DI_CONTEXT_TOKEN_LIMIT for this model.'
             )
-        if after < before:
+        if rebuilt:
             self.runner.store.event(
                 deps.job_id,
                 'context.rebuilt',
@@ -365,7 +374,6 @@ class ContextPolicy(AbstractCapability):
                     'fixed_tokens': fixed_tokens,
                     'fixed_method': fixed_method,
                     'measured': False,
-                    'rebuild_high_water': max(before, after) if rebuilt else previous.get('rebuild_high_water', 0),
                 },
             )
             path = 'working/history.json' if deps.actor == 'main' else f'working/tasks/{deps.actor}/history.json'

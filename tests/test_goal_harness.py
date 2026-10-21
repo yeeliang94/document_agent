@@ -1,4 +1,4 @@
-"""Ground-truth messy workbooks, general supervision, and killed parser regressions."""
+"""Ground-truth messy workbooks, repetition detection, and killed parser regressions."""
 
 import asyncio
 import hashlib
@@ -30,7 +30,7 @@ from app.regions import RegionRole, save_role, search
 from app.requirements import check_requirements
 from app.state import JobState, identity
 from app.store import Store
-from app.supervisor import CapabilityResult, Supervisor, normalized, repetition
+from app.supervisor import normalized, repetition
 from app.tools import JobDeps, job_lock, validate_workbook
 from app.workplan import WorkItem, WorkPlan, save_plan
 
@@ -163,38 +163,8 @@ def test_repeating_cycles_pause_despite_volatile_results(size):
     assert warning and pause
 
 
-def test_general_supervisor_dedup_flip_flops_and_unlinked_wandering(tmp_path):
+def test_work_plan_survives_restart(tmp_path):
     state = JobState(tmp_path)
-    supervisor = Supervisor(state)
-    # A text-document adapter has no Excel concepts.
-    envelope = CapabilityResult(evidence=[{'location': 'paragraph:4', 'hash': 'v1'}])
-    assert envelope.evidence
-    assert supervisor.event('interpretation_settled', 'section', 'A')
-    supervisor.turn()
-    assert supervisor.event('interpretation_settled', 'section', 'B')
-    supervisor.turn()
-    assert not supervisor.event('interpretation_settled', 'section', 'A')
-    decisions = []
-    for number in range(14):
-        supervisor.event('evidence_inspected', f'paragraph:{number}', 'v1')
-        decisions.append(supervisor.turn()[0])
-    assert 'recover' in decisions and 'pause' in decisions
-    restored = Supervisor(JobState(tmp_path))
-    assert restored.turn()[0] == 'pause'
-
-
-def test_linked_investigation_counts_only_within_the_reading_allowance_and_plan_survives_restart(tmp_path):
-    state = JobState(tmp_path)
-    supervisor = Supervisor(state, discovery_turns=10)
-    decisions = []
-    for number in range(12):
-        key = f'paragraph:{number}'
-        supervisor.event('evidence_inspected', key, 'v1')
-        supervisor.link([key])
-        decisions.append(supervisor.turn()[0])
-    # Fresh, linked reading is progress until the allowance between work results is spent.
-    # Linking evidence to a plan item cannot extend it, and recovery cannot be cleared by more reading.
-    assert decisions == ['continue'] * 9 + ['recover', 'continue', 'pause']
     state.put('evidence', 'paragraph:11', {'source_hash': 'v1'})
     plan = WorkPlan(
         objective='Summarize clauses',
@@ -206,7 +176,7 @@ def test_linked_investigation_counts_only_within_the_reading_allowance_and_plan_
     restored = JobState(tmp_path)
     assert restored.snapshot()['plan']['next_actions'] == plan.next_actions
     with pytest.raises(ValidationError):
-        WorkPlan(objective='Task', focus='Focus', items=[], next_actions=['action'] * 6)
+        WorkPlan(objective='Task', focus='Focus', items=[], next_actions=['action'] * 11)
 
 
 def test_isolated_nonreturning_process_is_killed_before_lock_release(tmp_path, monkeypatch):
@@ -254,12 +224,6 @@ def test_read_only_deadline_is_a_tool_error_not_a_pause(tmp_path, monkeypatch):
     assert job_lock(deps.job_id).acquire(blocking=False)
     job_lock(deps.job_id).release()
     assert deps.current()['status'] == status
-
-
-def test_snapshot_reports_the_supervision_clock(tmp_path):
-    state = JobState(tmp_path)
-    Supervisor(state).turn()
-    assert state.snapshot()['supervision']['turn'] == 1
 
 
 def test_unpivot_has_one_to_many_source_accounting(tmp_path):
@@ -330,9 +294,7 @@ def test_native_chart_is_visible_as_an_unsupported_material_capability(tmp_path)
     assert any('visual' in issue['reason'] for issue in deps.state.coverage()['issues'])
 
 
-@pytest.mark.parametrize('finish', ['plan', 'idle'])
-def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path, finish):
-    """'idle' replays the live run that validated, then failed to tidy its plan and only read state."""
+def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path):
     from fastapi.testclient import TestClient
     from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
     from pydantic_ai.models.function import FunctionModel
@@ -356,7 +318,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path,
             actions = [
                 ('inspect_source', {'path': 'inputs/October.xlsx'}),
                 ('inspect_source', {'path': 'template/destination.xlsx'}),
-                ('inspect_workbook', {'path': 'template/destination.xlsx'}),
+                ('read_sheet', {'path': 'template/destination.xlsx', 'sheet': 'Output'}),
             ]
         elif number == 1:
             actions = [
@@ -385,7 +347,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path,
                         },
                     )
                 )
-            ev = returns['inspect_workbook']['evidence_id']
+            ev = returns['read_sheet']['evidence_id']
             actions.append(
                 (
                     'save_output_requirements',
@@ -471,9 +433,7 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path,
         elif number == 5:
             actions = [('validate_output', {'path': 'outputs/output.xlsx'})]
         elif number == 6:
-            actions = [('validate_job', {'path': 'outputs/output.xlsx'})]
-        elif number >= 7 and finish == 'idle' and number < 20:
-            actions = [('read_job_state', {'kind': 'validation'})]
+            actions = [('validate_output', {'path': 'outputs/output.xlsx'})]
         elif number == 7:
             actions = [
                 (
@@ -495,8 +455,10 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path,
                     },
                 )
             ]
+        elif number == 8:
+            actions = [('final_result', {'summary': 'Prepared October payments.', 'status': 'complete'})]
         else:
-            raise AssertionError('Verified completed work must finalize without another model call')
+            raise AssertionError('The run should have ended with its final result')
         calls.append(actions)
         return ModelResponse(
             parts=[
@@ -520,9 +482,6 @@ def test_region_job_runs_through_actual_runtime_and_current_validation(tmp_path,
         assert client.post(f'/api/jobs/{job["id"]}/start').status_code == 200
         completed = wait_for_job(client, job['id'], statuses=('completed', 'partial', 'failed', 'paused'))
         assert completed['status'] == 'completed', completed
-        names = [event['name'] for event in client.get(f'/api/jobs/{job["id"]}/events').json()]
-        # Validated work that stops changing finishes; it is never paused as a stall.
-        assert ('progress.settled' in names) == (finish == 'idle') and 'progress.stalled' not in names
         assert client.get(f'/api/jobs/{job["id"]}/plan').json()['plan']['objective'] == 'Prepare October payments'
         assert client.get(f'/api/jobs/{job["id"]}/regions').json()['total'] >= 6
         workbook = load_workbook(io.BytesIO(client.get(f'/api/jobs/{job["id"]}/artifacts/output.xlsx').content))
@@ -568,20 +527,6 @@ def test_narrative_notes_do_not_invalidate_completed_checks(tmp_path):
     assert state.get('validation', 'current')['revision'] == state.revision()
 
 
-def test_new_user_instruction_gets_bounded_recovery_but_resume_alone_does_not(tmp_path):
-    supervisor = Supervisor(JobState(tmp_path))
-    for _ in range(7):
-        decision, _ = supervisor.turn()
-    assert decision == 'pause'
-    assert supervisor.instructions(1)
-    assert supervisor.turn()[0] == 'continue'
-    assert not supervisor.instructions(1)
-    decisions = [supervisor.turn()[0] for _ in range(6)]
-    assert 'recover' in decisions and 'pause' in decisions
-    assert not supervisor.instructions(1)
-    assert supervisor.turn()[0] == 'pause'
-
-
 def test_rebuild_hysteresis_never_suppresses_recovery_at_the_hard_budget(tmp_path):
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
     from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
@@ -593,10 +538,7 @@ def test_rebuild_hysteresis_never_suppresses_recovery_at_the_hard_budget(tmp_pat
 
     store = Store(tmp_path)
     job = store.create('payroll', '2026-10', 'Prepare a supported output', '')
-    deps = JobDeps(
-        store, job['id'], Settings(data_dir=tmp_path, context_tokens=6000, response_tokens=100, context_chars=1000000)
-    )
-    deps.state.put('context', 'main:usage', {'rebuild_high_water': 100000})
+    deps = JobDeps(store, job['id'], Settings(data_dir=tmp_path, context_tokens=6000, response_tokens=100))
 
     def no_summary(messages, info):
         raise RuntimeError('Synthetic summary outage')

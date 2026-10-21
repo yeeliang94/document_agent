@@ -447,16 +447,11 @@ class JobState:
 
         It points to details instead of copying them, so it can never be the oversized result it replaces.
         """
-        from .progress import STAGES, stage
-
         plan = self.get('plan', 'current', {})
         coverage = self.coverage()
-        current = stage(self)
         instructions = self.instructions()
         approaches = sorted((item for _, item in self.all('approach')), key=lambda item: -item['count'])
         card = {
-            'stage': current,
-            'next': STAGES[current],
             'objective': plan.get('objective', ''),
             'focus': plan.get('focus', ''),
             'work_items': [
@@ -491,7 +486,6 @@ class JobState:
                 for item in approaches[:5]
                 if item['count'] > 1
             ],
-            'reading_allowance_left': self.get('supervision', 'main', {}).get('discovery_left'),
             'details': 'Use read_job_state with a kind (plan, requirement, region_role, dataset, mapping, memory, '
             'approach, validation, instruction) and key/offset for anything listed here.',
         }
@@ -502,7 +496,6 @@ class JobState:
             'plan': self.get('plan', 'current'),
             'checkpoint': self.get('checkpoint', 'main'),
             'attempted_approaches': self.page('approach', limit=5),
-            'supervision': self.get('supervision', 'main'),
             'revision': self.revision(),
             'instruction_revision': self.revision('instruction_revision'),
             'instructions': self.instructions(),

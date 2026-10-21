@@ -33,7 +33,7 @@ def test_compaction_reuses_checkpoint_instead_of_new_copies(tmp_path):
     model, _ = scripted(
         [('read_document', {'path': 'inputs/large.txt', 'offset': i}) for i in range(8)] + [final('partial', ['test'])]
     )
-    settings = Settings(data_dir=tmp_path, api_key='k', context_chars=3000)
+    settings = Settings(data_dir=tmp_path, api_key='k', context_tokens=25000, response_tokens=100)
     with TestClient(create_app(settings, model_override=model), base_url=LOCAL) as client:
         job = create_job(client, files=[('files', ('large.txt', source, 'text/plain'))])
         client.post(f'/api/jobs/{job["id"]}/start')
@@ -48,7 +48,7 @@ def test_compacted_result_pointers_survive_checkpoint_replacement(tmp_path):
     model, _ = scripted(
         [('read_document', {'path': f'inputs/source-{i}.txt'}) for i in range(8)] + [final('partial', ['test'])]
     )
-    settings = Settings(data_dir=tmp_path, api_key='test', context_chars=3000)
+    settings = Settings(data_dir=tmp_path, api_key='test', context_tokens=25000, response_tokens=100)
     app = create_app(settings, model_override=model)
     with TestClient(app, base_url=LOCAL) as client:
         job = create_job(client, files=files)
