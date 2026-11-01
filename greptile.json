@@ -1,0 +1,9 @@
+{
+  "autoReview": [
+    "open"
+  ],
+  "triggerOnDrafts": true,
+  "strictness": 2,
+  "fixWithAI": true,
+  "instructions": "The owner is not a programmer, so write each finding in plain business English: what breaks for the user, then the fix.\n\nAlso flag these, which the owner repeatedly asks agents to fix:\n- UI clutter: eyebrow labels above titles, helper sentences under fields, captions explaining a section, repeated labels, bold body text, decorative icons, and controls that differ from the existing ones of the same type.\n- Settings or feature switches added to .env or environment variables instead of the app's Settings page. Secrets and API keys belong in .env.\n- New validation rules or document-specific prompt rules where a general principle or better agent feedback would do.\n- Secrets, API keys or internal company references committed to the repo."
+}
