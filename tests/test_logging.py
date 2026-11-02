@@ -28,12 +28,19 @@ def test_model_events_log_only_new_messages(tmp_path):
     assert all(len(e['input']) <= 2 for e in started)
 
 
-def test_compaction_reuses_checkpoint_instead_of_new_copies(tmp_path):
+def test_compaction_reuses_checkpoint_instead_of_new_copies(tmp_path, byte_context_estimator):
     source = ('Synthetic payroll source row. ' * 300).encode()
     model, _ = scripted(
         [('read_document', {'path': 'inputs/large.txt', 'offset': i}) for i in range(8)] + [final('partial', ['test'])]
     )
-    settings = Settings(data_dir=tmp_path, api_key='k', context_tokens=25000, response_tokens=100)
+    settings = Settings(
+        data_dir=tmp_path,
+        api_key='k',
+        context_tokens=65000,
+        response_tokens=100,
+        max_subagents=0,
+        python_tool=False,
+    )
     with TestClient(create_app(settings, model_override=model), base_url=LOCAL) as client:
         job = create_job(client, files=[('files', ('large.txt', source, 'text/plain'))])
         client.post(f'/api/jobs/{job["id"]}/start')
@@ -43,12 +50,19 @@ def test_compaction_reuses_checkpoint_instead_of_new_copies(tmp_path):
     assert not list((tmp_path / 'jobs' / job['id'] / 'working').glob('context-*.json'))
 
 
-def test_compacted_result_pointers_survive_checkpoint_replacement(tmp_path):
+def test_compacted_result_pointers_survive_checkpoint_replacement(tmp_path, byte_context_estimator):
     files = [('files', (f'source-{i}.txt', ('Source details. ' * 200 + f'UNIQUE_TAIL_{i}').encode())) for i in range(8)]
     model, _ = scripted(
         [('read_document', {'path': f'inputs/source-{i}.txt'}) for i in range(8)] + [final('partial', ['test'])]
     )
-    settings = Settings(data_dir=tmp_path, api_key='test', context_tokens=25000, response_tokens=100)
+    settings = Settings(
+        data_dir=tmp_path,
+        api_key='test',
+        context_tokens=65000,
+        response_tokens=100,
+        max_subagents=0,
+        python_tool=False,
+    )
     app = create_app(settings, model_override=model)
     with TestClient(app, base_url=LOCAL) as client:
         job = create_job(client, files=files)

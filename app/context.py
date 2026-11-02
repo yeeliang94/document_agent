@@ -191,7 +191,7 @@ class ContextPolicy(AbstractCapability):
     def __init__(self, runner):
         self.runner = runner
 
-    def clear_old_results(self, deps, history, keep):
+    def clear_old_results(self, deps, history, keep, images=True):
         """Tool-result clearing: swap every older bulky result for a pointer, in one batch.
 
         Done rarely and all at once, because each rewrite of earlier history invalidates the provider's
@@ -201,7 +201,7 @@ class ContextPolicy(AbstractCapability):
         if cutoff == 0:
             return history
         raw = len(ModelMessagesTypeAdapter.dump_json(history))
-        older, archived = archive_payloads(deps, history[:cutoff])
+        older, archived = archive_payloads(deps, history[:cutoff], images=images)
         updated = [*older, *history[cutoff:]]
         size = len(ModelMessagesTypeAdapter.dump_json(updated))
         if archived:
@@ -312,6 +312,16 @@ class ContextPolicy(AbstractCapability):
                 self.clear_old_results, deps, history, 1 if force else KEEP_RECENT_MESSAGES
             )
         cleared, _ = await asyncio.to_thread(count, history)
+        if cleared > usable * REBUILD_AT or force:
+            latest_cut = safe_cut(history, keep=1)
+            latest_tokens, _ = await asyncio.to_thread(count, history[latest_cut:])
+            # Clear fresh results early only if their complete exchange alone exceeds
+            # the half-budget target used when shrinking history below. Otherwise,
+            # rebuild older history first so a modest new read reaches the model intact.
+            if not latest_cut or latest_tokens > usable * 0.5:
+                # Preserve fresh images the model has not yet had a chance to inspect.
+                history = await asyncio.to_thread(self.clear_old_results, deps, history, 0, images=False)
+                cleared, _ = await asyncio.to_thread(count, history)
         rebuilt = False
         # Rebuilding replaces the agent's working memory, so it is the last resort after clearing.
         if cleared > usable * REBUILD_AT or force:
@@ -340,11 +350,6 @@ class ContextPolicy(AbstractCapability):
 
                 history = await asyncio.to_thread(shrink, history)
         after, method = await asyncio.to_thread(count, history)
-        if after > usable:
-            # One fresh batch of reads can exceed the budget before it is old history; its results are
-            # stored, so clear them too rather than pause.
-            history = await asyncio.to_thread(self.clear_old_results, deps, history, 0)
-            after, method = await asyncio.to_thread(count, history)
         if after > usable:
             raise ContextBudgetError(
                 'Essential instructions and the latest exchange exceed the context budget. '
