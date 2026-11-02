@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from pydantic_ai import BinaryContent
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -486,9 +487,12 @@ def test_essential_instructions_over_budget_pause_without_dropping_them(tmp_path
         asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
 
 
-def test_one_oversized_batch_of_reads_is_cleared_instead_of_pausing(tmp_path):
+@pytest.mark.parametrize('include_image', [False, True])
+def test_one_oversized_batch_of_reads_is_cleared_instead_of_pausing(tmp_path, byte_context_estimator, include_image):
     store, job, deps, _ = fixture_job(tmp_path)
-    deps.settings = Settings(data_dir=tmp_path, context_tokens=4000, response_tokens=100)
+    deps.settings = Settings(
+        data_dir=tmp_path, context_tokens=6200 if include_image else 5200, response_tokens=100, image_tokens=100
+    )
     model = FunctionModel(lambda messages, info: ModelResponse(parts=[TextPart('unused')]))
     runner = Runner(store, deps.settings, model)
     calls = [ToolCallPart('read_document', {}, tool_call_id=str(n)) for n in range(3)]
@@ -501,6 +505,9 @@ def test_one_oversized_batch_of_reads_is_cleared_instead_of_pausing(tmp_path):
             ]
         ),
     ]
+    image = BinaryContent(data=b'synthetic image', media_type='image/png')
+    if include_image:
+        history[-1].parts.append(UserPromptPart([image]))
     ctx = SimpleNamespace(deps=deps, messages=history.copy(), usage=RunUsage())
     request = ModelRequestContext(
         model=model, messages=history, model_settings={}, model_request_parameters=ModelRequestParameters()
@@ -509,6 +516,37 @@ def test_one_oversized_batch_of_reads_is_cleared_instead_of_pausing(tmp_path):
     assert 'END_2' not in str(result.messages)
     archives = list((deps.root / 'working/tool-results').glob('*.json'))
     assert any('END_2' in artifact.read_text() for artifact in archives)
+    assert not any(event['name'] == 'context.rebuilt' for event in store.events(job['id']))
+    if include_image:
+        assert any(
+            image in part.content
+            for message in result.messages
+            for part in message.parts
+            if isinstance(part, UserPromptPart) and isinstance(part.content, list)
+        )
+
+
+def test_older_history_pressure_rebuilds_without_clearing_a_fresh_read(tmp_path, byte_context_estimator):
+    store, job, deps, _ = fixture_job(tmp_path)
+    deps.settings = Settings(data_dir=tmp_path, context_tokens=22000, response_tokens=100)
+    model = FunctionModel(lambda messages, info: ModelResponse(parts=[TextPart('Earlier discussion summarized.')]))
+    runner = Runner(store, deps.settings, model)
+    fresh = 'Fresh source detail. ' * 150
+    history = [
+        ModelRequest(parts=[UserPromptPart('Original task')]),
+        ModelResponse(parts=[TextPart('Earlier reasoning. ' * 900)]),
+        ModelRequest(parts=[UserPromptPart('Continue with the next source.')]),
+        ModelResponse(parts=[ToolCallPart('read_document', {}, tool_call_id='fresh-read')]),
+        ModelRequest(parts=[ToolReturnPart('read_document', fresh, tool_call_id='fresh-read')]),
+    ]
+    ctx = SimpleNamespace(deps=deps, messages=history.copy(), usage=RunUsage())
+    request = ModelRequestContext(
+        model=model, messages=history, model_settings={}, model_request_parameters=ModelRequestParameters()
+    )
+    result = asyncio.run(ContextPolicy(runner).before_model_request(ctx, request))
+    returned = next(part for message in result.messages for part in message.parts if isinstance(part, ToolReturnPart))
+    assert returned.content == fresh
+    assert any(event['name'] == 'context.rebuilt' for event in store.events(job['id']))
 
 
 def test_changed_source_and_changed_output_fail_validation(tmp_path):

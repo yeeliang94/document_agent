@@ -230,7 +230,7 @@ def test_pause_checkpoints_at_tool_boundary_and_resume_completes(tmp_path):
         assert load_workbook(io.BytesIO(output.content))['Employees']['A2'].value == 'EMP001'
 
 
-def test_compaction_keeps_tool_pairs_and_archives_full_content(tmp_path):
+def test_compaction_keeps_tool_pairs_and_archives_full_content(tmp_path, byte_context_estimator):
     from pydantic_ai.messages import ModelMessagesTypeAdapter, ToolReturnPart
 
     calls = []
@@ -270,7 +270,14 @@ def test_compaction_keeps_tool_pairs_and_archives_full_content(tmp_path):
             ]
         )
 
-    settings = Settings(data_dir=tmp_path, api_key='test-key', context_tokens=25000, response_tokens=100)
+    settings = Settings(
+        data_dir=tmp_path,
+        api_key='test-key',
+        context_tokens=65000,
+        response_tokens=100,
+        max_subagents=0,
+        python_tool=False,
+    )
     with TestClient(base_url=LOCAL, app=create_app(settings, model_override=FunctionModel(respond))) as client:
         job = create_job(client, files=[('files', ('large.txt', source, 'text/plain'))])
         client.post(f'/api/jobs/{job["id"]}/start')
