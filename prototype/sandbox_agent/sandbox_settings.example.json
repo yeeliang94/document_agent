@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to sandbox_settings.json and edit. No secrets here: the key stays in the project .env.",
+  "base_url": "https://your-litellm-proxy.company.example/v1",
+  "model": "your-model-alias",
+  "provider": null,
+  "model_on_create": false
+}
