@@ -176,8 +176,16 @@ def test_provenance_must_cover_every_written_row_with_used_files(tmp_path):
     (outputs / 'provenance.json').write_text(
         json.dumps([{'file': 'j.xlsx', 'sheet': 'Journal', 'rows': '2', 'sources': ['y.csv']}]), encoding='utf-8'
     )
-    text = '\n'.join(run_checks(outputs, job, files)['issues'])
-    assert "marks it 'not_relevant'" in text and 'rows 3' in text
+    result = run_checks(outputs, job, files)
+    text = '\n'.join(result['issues'])
+    assert "marks it 'not_relevant'" in text and 'rows 2-3' in text  # a row citing a set-aside file has no source
+    assert (result['summary']['rows_sourced'], result['summary']['rows_written']) == (0, 2)
+    (outputs / 'provenance.json').write_text(
+        json.dumps([{'file': 'j.xlsx', 'sheet': 'Journal', 'rows': '2-3', 'sources': ['ghost.csv']}]), encoding='utf-8'
+    )
+    assert run_checks(outputs, job, files)['summary']['rows_sourced'] == 0  # a file that does not exist is no source
+    (outputs / 'provenance.json').unlink()
+    assert run_checks(outputs, job, files)['summary']['rows_written'] == 2  # still counted when the sources are missing
     (outputs / 'provenance.json').write_text(
         json.dumps([{'file': 'j.xlsx', 'sheet': 'Journal', 'rows': '2-3', 'sources': ['/mnt/data/packet/x.csv']}]),
         encoding='utf-8',
@@ -539,7 +547,7 @@ def test_junk_files_need_no_decision(tmp_path):
         archive.writestr('Thumbs.db', 'junk')
     from app.engine.checks import check_map
 
-    assert check_map({'a.csv': {'path': 'a.csv', 'decision': 'used', 'reason': 'r'}}, inventory(zip_path)) == []
+    assert check_map({'a.csv': {'path': 'a.csv', 'decision': 'used', 'reason': 'r'}}, inventory(zip_path)) == ([], 1)
 
 
 def test_duplicated_output_rows_lower_precision(tmp_path):

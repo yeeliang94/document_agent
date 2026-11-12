@@ -1935,9 +1935,8 @@ dialog p {
   display: inline-flex;
   gap: 3px;
   padding: 3px;
-  border: 1px solid var(--border);
   border-radius: 20px;
-  background: #fcfcf9;
+  background: #eef0ea;
 }
 .segmented button {
   padding: 6px 12px;
@@ -1946,8 +1945,22 @@ dialog p {
   color: var(--muted);
 }
 .segmented button.active {
-  background: var(--ink);
-  color: #f4f8e9;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.status.info {
+  background: #e8eef7;
+  border-color: #d6e0ee;
+  color: #3f5f8a;
+}
+.page-error {
+  font-size: 12px;
+  margin: 0;
+  padding: 24px 18px;
+}
+.checks {
+  margin-top: 14px;
 }
 .deliverable-choice {
   margin-bottom: 8px;

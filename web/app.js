@@ -1,3 +1,5 @@
+import { configure, documentMapPage, sandboxOutput, sandboxStages, segment, settingsPage } from './sandbox.js?v=20261112b';
+
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) =>
   String(value ?? '').replace(
@@ -39,12 +41,6 @@ const PAGE_TITLES = {
   map: 'Document map',
   diagnostics: 'Diagnostics',
 };
-const DECISIONS = {
-  used: ['', 'Used'],
-  reference: ['running', 'Reference'],
-  not_relevant: ['stopped', 'Not relevant'],
-  unclear: ['attention', 'Unclear'],
-};
 const FILTERS = [
   ['all', 'All'],
   ['model', 'Model'],
@@ -76,7 +72,9 @@ const state = {
   settings: null, // the Settings page values, options and connection, from /api/settings
   settingsDraft: null,
   deliverable: 'template', // a new sandbox run fills a template or builds to a format
+  settingsError: '',
   documentMap: null,
+  mapError: '',
   mapFilter: 'all',
 };
 
@@ -97,17 +95,6 @@ const fmtTime = (t) =>
 const bytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil((n || 0) / 1024)} KB`);
 const btn = (action, label, kind = '', disabled = false) =>
   `<button class="btn ${kind}" data-action="${action}" ${attr('disabled', disabled)}>${esc(label)}</button>`;
-// One two-way choice, one on/off switch and one number stepper, used everywhere they appear.
-const segment = (name, value, label, on) =>
-  `<button type="button" class="${on ? 'active' : ''}" data-segment="${name}" data-value="${esc(value)}" aria-pressed="${on}">${esc(label)}</button>`;
-const toggle = (name, on) =>
-  `<button type="button" class="switch ${on ? 'on' : ''}" data-toggle="${name}" role="switch" aria-checked="${on}" aria-label="${esc(name)}"></button>`;
-const stepper = (name, value, low, high) => `
-  <span class="stepper">
-    <button type="button" data-step="${name}" data-delta="-1" aria-label="Fewer" ${attr('disabled', value <= low)}>−</button>
-    <b>${esc(value)}</b>
-    <button type="button" data-step="${name}" data-delta="1" aria-label="More" ${attr('disabled', value >= high)}>+</button>
-  </span>`;
 
 // --- Network ---------------------------------------------------------------
 
@@ -175,7 +162,7 @@ function nav() {
   const pageButtons = (mobile) =>
     PAGES.map(
       ([id, iconName, label]) => `
-        <button class="${state.view === id ? 'active' : ''}" data-view="${id}" ${mobile ? `aria-label="${label}"` : ''}>
+        <button class="${state.view === id || (id === 'workspace' && state.view === 'map') ? 'active' : ''}" data-view="${id}" ${mobile ? `aria-label="${label}"` : ''}>
           ${icon(iconName)}${label}
         </button>`,
     ).join('');
@@ -209,7 +196,9 @@ function inputs() {
   const files = locked
     ? manifest.filter((f) => f.role !== 'template')
     : state.files.map((f) => ({ path: f.webkitRelativePath || f.name, size: f.size }));
-  const format = locked ? /\.json$/i.test(manifest.find((f) => f.role === 'template')?.path || '') : state.deliverable === 'format';
+  const format = locked
+    ? /\.json$/i.test(manifest.find((f) => f.role === 'template')?.path || '')
+    : sandboxEngine() && state.deliverable === 'format';
   const templateName =
     state.template?.name || manifest.find((f) => f.role === 'template')?.path || (format ? 'Choose format' : 'Choose workbook');
   const fileTree = files.length
@@ -306,21 +295,6 @@ function questionForm(question) {
     </form>`;
 }
 
-// The latest engine step, and which stage the run is in.
-function sandboxNow() {
-  const engine = state.events.filter((e) => e.type === 'engine');
-  const latest = engine[engine.length - 1];
-  const saved = engine.some((e) => e.name === 'engine.outputs.saved');
-  const reviewing = engine.some((e) => e.name === 'engine.review.started');
-  const stage = (label, on, done) => `<span class="status ${on ? 'running' : done ? '' : 'stopped'}">${label}</span>`;
-  return `
-    <div class="work-focus sandbox-now" aria-label="Current work">
-      <strong><i class="dot"></i>${esc(latest?.message || 'Starting the sandbox')}</strong>
-      <div class="stages">${stage('Work', !saved, saved)}${stage('Check', saved && !reviewing, reviewing)}${
-        state.job.engine_team?.reviewer ? stage('Review', reviewing, false) : ''
-      }</div>
-    </div>`;
-}
 
 function messageForm(status) {
   const disabled = attr('disabled', !inGroup('accepts_messages', status));
@@ -350,7 +324,7 @@ function activity() {
         <strong>${esc(state.job ? state.job.id : 'Ready')}</strong>
         <span class="live">${isActive() ? 'LIVE UPDATES' : ''}</span>
       </div>
-      ${sandboxEngine() && isActive() ? sandboxNow() : ''}
+      ${sandboxEngine() && isActive() ? sandboxStages() : ''}
       ${state.job?.work_plan ? `<div class="work-focus" aria-label="Current work"><strong>${esc(state.job.work_plan.focus)}</strong>${state.job.progress_checkpoint?.message ? `<p>${esc(state.job.progress_checkpoint.message)}</p>` : ''}${state.job.work_plan.items.filter(item => item.status === 'blocked').map(item => `<p class="error-message">${esc(item.blocker || item.objective)}</p>`).join('')}</div>` : ''}
       <div class="activity-body" id="activity-scroll" role="log" aria-label="Agent activity" aria-live="polite">
         ${body}${question ? questionForm(question) : ''}
@@ -404,7 +378,7 @@ function output() {
         )
         .join('')
     : '<div class="artifact-meta">No output yet.</div>';
-  if (sandboxEngine()) return sandboxOutput(job, artifacts);
+  if (sandboxEngine()) return sandboxOutput(job);
   const details = [
     ['Model', state.config?.model || '—'],
     ['Sources', job ? job.files.filter((f) => f.role !== 'template').length : state.files.length],
@@ -431,139 +405,6 @@ function output() {
         <div class="panel-body">${details}${btn('diagnostics', 'Diagnostics')}</div>
       </section>
     </aside>`;
-}
-
-function sandboxOutput(job, artifacts) {
-  const check = job?.engine_check;
-  const summary = check?.summary || {};
-  const pill = (ok, text) => `<span class="status ${ok ? '' : 'attention'}">${esc(text)}</span>`;
-  const checks = check
-    ? [
-        ['Deliverable rules', pill(!summary.deliverable_problems, summary.deliverable_problems ? `${summary.deliverable_problems} problem(s)` : 'Passed')],
-        ['Every file decided', pill(summary.files_decided === summary.files, `${summary.files_decided ?? 0} of ${summary.files ?? 0}`)],
-        ...(summary.rows_written !== undefined
-          ? [['Row sources', pill(summary.rows_sourced === summary.rows_written, `${summary.rows_sourced} of ${summary.rows_written}`)]]
-          : []),
-        ['Reviewer', check.reviews ? pill(true, check.doubts ? `${check.doubts} doubt(s) checked` : 'No doubts') : '<span class="status stopped">Not run</span>'],
-      ]
-        .map(([label, value]) => `<div class="check-row"><span>${label}</span>${value}</div>`)
-        .join('')
-    : '';
-  const team = job?.engine_team || state.settings?.values || {};
-  const details = [
-    ['Engine', 'Sandbox'],
-    ['Team', `Lead${team.max_scouts || team.scouts ? ` + ${team.max_scouts ?? team.scouts} scouts` : ''}${team.reviewer ? ' + reviewer' : ''}`],
-    ['Model calls', job?.request_count ?? '—'],
-    ['Questions asked', (job?.engine_questions || []).length],
-  ]
-    .map(detailRow)
-    .join('');
-  const issues = check && !check.passed && check.issues.length
-    ? `<div class="still-to-fix"><h3>Still to fix</h3><ul>${check.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>`
-    : '';
-  return `
-    <aside class="right-stack">
-      <section class="panel">
-        <div class="panel-head"><h2>${icon('file')} Output</h2></div>
-        <div class="panel-body">
-          ${job?.error ? `<p class="error-message">${esc(job.error)}</p>` : ''}
-          ${job?.summary ? `<p class="output-summary">${esc(job.summary)}</p>` : ''}
-          ${artifacts}
-          ${issues}
-          ${job?.artifacts?.some((a) => a.name === 'document_map.json') ? `<button class="btn map-link" data-view="map">${icon('map')} Document map</button>` : ''}
-        </div>
-      </section>
-      ${check ? `<section class="panel"><div class="panel-head"><h2>${icon('check')} Checks</h2></div><div class="panel-body">${checks}</div></section>` : ''}
-      <section class="panel session">
-        <div class="panel-head"><h2>${icon('terminal')} Run details</h2></div>
-        <div class="panel-body">${details}${btn('diagnostics', 'Diagnostics')}</div>
-      </section>
-    </aside>`;
-}
-
-function settingsPage() {
-  if (!state.settingsDraft) return '<section class="panel page-panel"><div class="empty-state">Loading settings…</div></section>';
-  const v = state.settingsDraft;
-  const options = state.settings.options;
-  const row = (label, control) => `<div class="settings-row"><span>${esc(label)}</span>${control}</div>`;
-  const select = (name, labels) =>
-    `<select data-setting="${name}" aria-label="${esc(options[name].label)}">${options[name].choices
-      .map((c) => `<option value="${esc(c)}" ${attr('selected', v[name] === c)}>${esc(labels?.[c] ?? c)}</option>`)
-      .join('')}</select>`;
-  const number = (name) =>
-    `<input type="number" data-setting="${name}" min="${options[name].low}" max="${options[name].high}" value="${esc(v[name])}" aria-label="${esc(options[name].label)}">`;
-  const sandbox = v.engine === 'sandbox';
-  const connection = state.settings.connection;
-  const panel = (title, rows) =>
-    `<section class="panel settings-panel"><div class="panel-head"><h2>${esc(title)}</h2></div><div class="panel-body">${rows}</div></section>`;
-  return `
-    <div class="settings-grid">
-      ${panel(
-        'Agent',
-        row('Engine', `<div class="segmented">${segment('engine', 'classic', 'Classic', !sandbox)}${segment('engine', 'sandbox', 'Sandbox', sandbox)}</div>`) +
-          (sandbox
-            ? row('Parallel scouts', stepper('max_scouts', v.max_scouts, options.max_scouts.low, options.max_scouts.high)) +
-              row('Independent reviewer', toggle('reviewer', v.reviewer)) +
-              row('Proof level', select('proof', { row: 'Sources for every row', none: 'None' })) +
-              row('Reasoning effort', select('effort', { low: 'Low', medium: 'Medium', high: 'High' }))
-            : ''),
-      )}
-      ${
-        sandbox
-          ? panel(
-              'Limits',
-              row('Turn limit per run', number('max_turns')) +
-                row('Time limit per run (minutes)', number('time_limit_minutes')) +
-                row('Token limit per run (thousands)', number('token_limit_thousands')) +
-                row('Hold sandbox for an answer (minutes)', number('question_wait_minutes')) +
-                row('Sandbox memory', select('sandbox_memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' })),
-            ) +
-            panel(
-              'Connection',
-              row('Endpoint', `<span class="settings-value">${esc(connection.base_url)}</span>`) +
-                row('Model', `<span class="settings-value">${esc(connection.model)}</span>`) +
-                row('LiteLLM provider header', `<input data-setting="litellm_provider" value="${esc(v.litellm_provider)}" placeholder="None" aria-label="LiteLLM provider header">`) +
-                row('Name the model when creating a sandbox', toggle('model_on_create', v.model_on_create)) +
-                (connection.warning ? `<p class="error-message settings-warning">${esc(connection.warning)}</p>` : ''),
-            )
-          : ''
-      }
-    </div>`;
-}
-
-function documentMapPage() {
-  const files = state.documentMap?.files;
-  if (!files) return '<section class="panel page-panel"><div class="empty-state">Loading the document map…</div></section>';
-  if (!files.length) return '<section class="panel page-panel"><div class="empty-state">No document map yet.</div></section>';
-  const counts = {};
-  for (const f of files) counts[f.decision] = (counts[f.decision] || 0) + 1;
-  const filters = [['all', `All · ${files.length}`], ...Object.entries(DECISIONS).filter(([k]) => counts[k]).map(([k, [, label]]) => [k, `${label} · ${counts[k]}`])];
-  const shown = files.filter((f) => state.mapFilter === 'all' || f.decision === state.mapFilter);
-  const folders = {};
-  for (const f of shown) {
-    const cut = f.path.lastIndexOf('/');
-    (folders[cut > 0 ? f.path.slice(0, cut) : '(top folder)'] ||= []).push({ ...f, name: f.path.slice(cut + 1) });
-  }
-  const rows = Object.entries(folders)
-    .map(
-      ([folder, items]) =>
-        `<tr class="folder-row"><td colspan="3">${esc(folder)}</td></tr>` +
-        items
-          .map((f) => {
-            const [tone, label] = DECISIONS[f.decision] || ['attention', f.decision || 'Missing'];
-            return `<tr><td>${esc(f.name)}</td><td><span class="status ${tone}">${esc(label)}</span></td><td>${esc(f.reason)}</td></tr>`;
-          })
-          .join(''),
-    )
-    .join('');
-  return `
-    <section class="panel page-panel">
-      <div class="panel-head">
-        <div class="filter-buttons">${filters.map(([k, label]) => `<button class="${state.mapFilter === k ? 'active' : ''}" data-map-filter="${k}">${esc(label)}</button>`).join('')}</div>
-        ${btn('workspace', 'Workspace', 'small')}
-      </div>
-      <table class="trace-table document-map"><thead><tr><th>File</th><th>Decision</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>
-    </section>`;
 }
 
 // Lower-cased JSON of each event, built once, so searching thousands of events stays quick.
@@ -749,8 +590,13 @@ function detail(event) {
 // --- Actions ---------------------------------------------------------------
 
 async function refreshSettings() {
-  state.settings = await api('/api/settings');
-  state.settingsDraft = { ...state.settings.values };
+  try {
+    state.settings = await api('/api/settings');
+    state.settingsDraft = { ...state.settings.values };
+    state.settingsError = '';
+  } catch (e) {
+    state.settingsError = `Settings could not be loaded: ${e.message}`;
+  }
 }
 
 async function refreshConfig() {
@@ -774,6 +620,8 @@ async function loadJob(id) {
 
 function resetRun() {
   state.job = null;
+  state.documentMap = null;
+  if (state.view === 'map') state.view = 'workspace';
   state.events = [];
   state.files = [];
   state.template = null;
@@ -871,11 +719,16 @@ async function openView(view) {
   try {
     if (view === 'history') state.jobs = await api('/api/jobs');
     if (view === 'settings') await refreshSettings();
-    if (view === 'map') {
+    if (view === 'map' && state.job) {
       state.documentMap = null;
+      state.mapError = '';
       state.mapFilter = 'all';
       render();
-      state.documentMap = await api(`/api/jobs/${state.job.id}/document-map`);
+      try {
+        state.documentMap = await api(`/api/jobs/${state.job.id}/document-map`);
+      } catch (e) {
+        state.mapError = `The document map could not be loaded: ${e.message}`;
+      }
     }
   } catch (e) {
     toast(e.message);
@@ -1017,11 +870,11 @@ async function poll() {
   setTimeout(poll, isActive() ? 1500 : 8000);
 }
 
+configure({ state, esc, attr, btn, icon, detailRow });
 render();
 (async () => {
   try {
-    await refreshConfig();
-    await refreshSettings();
+    await Promise.all([refreshConfig(), refreshSettings()]); // refreshSettings keeps its own error for its page
     state.jobs = await api('/api/jobs');
   } catch (e) {
     state.notice = e.message;

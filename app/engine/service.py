@@ -175,6 +175,11 @@ def resume_card(store, job: dict) -> str | None:
     return '\n\n'.join(parts)
 
 
+def shown_issues(issues: list[str], limit: int = 10) -> list[str]:
+    more = len(issues) - limit
+    return issues[:limit] + ([f'... and {more} more; see the run record.'] if more > 0 else [])
+
+
 def take_answer(job: dict) -> None:
     """Move an answered question into the job's question history (store.mutate callback)."""
     if job.get('question') and job.get('answer'):
@@ -200,7 +205,7 @@ class SandboxEngine:
         store = self.store
         store.mutate(job_id, lambda j: (take_answer(j), j.update(status='running', error=None)))
         options = store.settings()
-        team = {'scouts': options['max_scouts'], 'reviewer': options['reviewer']}
+        team = {'max_scouts': options['max_scouts'], 'reviewer': options['reviewer']}
         job = store.update(job_id, engine_team=team)
         root = store.path(job_id)
         attempt = len(list((root / 'engine').glob('run-*'))) + 1
@@ -305,13 +310,16 @@ class SandboxEngine:
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
         reviews = record.get('reviews') or []
         updates = {
+            # None when the run never reached its checks, so the screen shows no green pills for a failed start.
             'engine_check': {
                 'passed': bool(check.get('passed')),
-                'issues': (check.get('issues') or [])[:10],
+                'issues': shown_issues(check.get('issues') or []),
                 'summary': check.get('summary') or {},
                 'reviews': len(reviews),
                 'doubts': sum(len(r.get('doubts') or []) for r in reviews),
-            },
+            }
+            if check
+            else None,
             'error': error if status in ('failed', 'paused') else None,
             'artifacts': self.artifacts(job_id, status == 'completed'),
             'summary': summary,

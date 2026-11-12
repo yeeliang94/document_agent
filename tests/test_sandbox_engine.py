@@ -210,6 +210,7 @@ def test_failures_explain_the_proxy_region_and_permission_errors(tmp_path, monke
         return {
             **finished(status='failed', error='NotFoundError: Error code: 404 - container not found'),
             'summary': None,
+            'final_check': None,
         }
 
     monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
@@ -217,6 +218,7 @@ def test_failures_explain_the_proxy_region_and_permission_errors(tmp_path, monke
         job = start_sandbox_job(client)
         failed = wait_for_job(client, job['id'])
         assert failed['status'] == 'failed' and 'different regions' in failed['error']
+        assert failed['engine_check'] is None  # never checked, so no green pills
     assert 'allow the /v1/containers routes' in with_hint('PermissionDeniedError: Error code: 403')
     assert with_hint('something else') == 'something else'
 
@@ -355,11 +357,13 @@ def test_the_document_map_and_check_summary_reach_the_screens(tmp_path, monkeypa
 
     monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
     with client_for(tmp_path) as client:
-        job = start_sandbox_job(client)
-        assert client.get(f'/api/jobs/{job["id"]}/document-map').json() == {'files': []}  # not saved yet
+        client.put('/api/settings', json={'values': {'engine': 'sandbox', 'max_scouts': 3, 'reviewer': True}})
+        job = create_job(client, legacy=False)
+        assert client.get(f'/api/jobs/{job["id"]}/document-map').json() == {'files': [], 'error': None}  # not yet
+        client.post(f'/api/jobs/{job["id"]}/start')
         done = wait_for_job(client, job['id'])
         assert done['engine_check']['summary']['files_decided'] == 1
         assert done['engine_check']['reviews'] == 1 and done['engine_check']['doubts'] == 1
-        assert done['engine_team'] == {'scouts': 3, 'reviewer': True}
+        assert done['engine_team'] == {'max_scouts': 3, 'reviewer': True}
         files = client.get(f'/api/jobs/{job["id"]}/document-map').json()['files']
         assert files == [{'path': 'HR/a.txt', 'decision': 'not_relevant', 'reason': 'Other entity'}]

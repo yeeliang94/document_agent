@@ -74,12 +74,6 @@ def inventory(zip_path: Path) -> list[dict]:
     return sorted(files, key=lambda f: f['path'])
 
 
-def covered(paths: set[str], wanted: str) -> bool:
-    """A packet file counts as listed when a written path is that path or ends with it, so absolute sandbox paths
-    and paths that keep the zip's top folder both match."""
-    return any(p == wanted or p.endswith('/' + wanted) for p in paths)
-
-
 def _clean(path) -> str:
     return str(path or '').strip().replace('\\', '/').removeprefix('./')
 
@@ -203,9 +197,30 @@ def normal_decision(value) -> str:
     return str(value or '').strip().lower().replace(' ', '_').replace('-', '_')
 
 
-def map_entries(tree) -> dict[str, dict]:
+class DocumentMap(dict):
+    """Map entries by cleaned path, also found by any trailing part of the path (so "/mnt/data/packet/a/b.xlsx"
+    answers for "a/b.xlsx"). The lookup is built once, so checking thousands of files stays quick."""
+
+    def find(self, wanted: str) -> dict | None:
+        if not hasattr(self, '_tails'):
+            self._tails = {}
+            for path, entry in self.items():
+                parts = path.split('/')
+                for start in range(len(parts)):
+                    self._tails.setdefault('/'.join(parts[start:]), entry)
+            self._tails.update(self)  # an exact path always wins
+        return self._tails.get(wanted)
+
+
+def packet_path(source: str, paths: set[str]) -> str | None:
+    """The packet file a cited path refers to: the path itself or the longest packet path it ends with."""
+    parts = source.split('/')
+    return next(('/'.join(parts[i:]) for i in range(len(parts)) if '/'.join(parts[i:]) in paths), None)
+
+
+def map_entries(tree) -> DocumentMap:
     """Every object in the map that carries a "path", by its cleaned path. Flat lists and nested trees both work."""
-    found = {}
+    found = DocumentMap()
 
     def walk(node):
         if isinstance(node, dict):
@@ -224,6 +239,8 @@ def map_entries(tree) -> dict[str, dict]:
 
 
 def entry_for(entries: dict[str, dict], wanted: str) -> dict | None:
+    if isinstance(entries, DocumentMap):
+        return entries.find(wanted)
     return next((e for p, e in entries.items() if p == wanted or p.endswith('/' + wanted)), None)
 
 
@@ -237,8 +254,9 @@ def read_map(outputs: Path) -> tuple[dict[str, dict] | None, str | None]:
         return None, f'{DOCUMENT_MAP} is not valid JSON: {error}'
 
 
-def check_map(entries: dict[str, dict], files: list[dict]) -> list[str]:
-    missing, bad, unexplained = [], [], []
+def check_map(entries: dict[str, dict], files: list[dict]) -> tuple[list[str], int]:
+    """Problems with the map, and how many files that need a decision have a valid one."""
+    missing, bad, unexplained, decided = [], [], [], 0
     for f in files:
         entry = entry_for(entries, f['path'])
         if entry is None:
@@ -246,8 +264,10 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> list[str]:
                 missing.append(f['path'])
         elif normal_decision(entry.get('decision')) not in DECISIONS:
             bad.append(f'{f["path"]} ({entry.get("decision")!r})')
-        elif blank(entry.get('reason')):
-            unexplained.append(f['path'])
+        else:
+            decided += not f.get('junk')
+            if blank(entry.get('reason')):
+                unexplained.append(f['path'])
     issues = []
     if missing:
         issues.append(f'{DOCUMENT_MAP} has no entry with "path" for {len(missing)} file(s): {missing[:10]}')
@@ -255,7 +275,7 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> list[str]:
         issues.append(f'{DOCUMENT_MAP}: "decision" must be one of {list(DECISIONS)} for {bad[:10]}')
     if unexplained:
         issues.append(f'{DOCUMENT_MAP}: give a one-line "reason" for {unexplained[:10]}')
-    return issues
+    return issues, decided
 
 
 def parse_rows(rows) -> set[int]:
@@ -318,18 +338,20 @@ def _ranges(numbers: set[int]) -> str:
 
 
 def check_provenance(
-    outputs: Path, job: JobSpec, files: list[dict], entries: dict[str, dict] | None, counts: dict | None = None
-) -> list[str]:
-    """counts, when given, receives how many rows were written and how many have sources."""
-    counts = counts if counts is not None else {}
+    outputs: Path, job: JobSpec, files: list[dict], entries: dict[str, dict] | None
+) -> tuple[list[str], dict]:
+    """Problems with the row sources, and how many written rows have valid sources: every cited file is in the
+    packet and marked used or reference."""
+    written = {(d.name, sheet): rows for d in job.deliverables for sheet, rows in written_rows(outputs, d).items()}
+    counts = {'written': sum(len(rows) for rows in written.values()), 'sourced': 0}
     path = outputs / PROVENANCE
     if not path.exists():
-        return [f'{PROVENANCE} has not been saved yet.']
+        return [f'{PROVENANCE} has not been saved yet.'], counts
     try:
         records = json.loads(path.read_text(encoding='utf-8'))
         assert isinstance(records, list)
     except Exception:  # noqa: BLE001
-        return [f'{PROVENANCE} must be a JSON list of {{"file", "sheet", "rows", "sources"}} objects.']
+        return [f'{PROVENANCE} must be a JSON list of {{"file", "sheet", "rows", "sources"}} objects.'], counts
     issues, covered_rows = [], {}
     paths = {f['path'] for f in files}
     for number, record in enumerate(records):
@@ -340,28 +362,30 @@ def check_provenance(
         except Exception:  # noqa: BLE001
             issues.append(f'{PROVENANCE} item {number} needs "file", "sheet", "rows" (e.g. "2-40") and "sources".')
             continue
+        valid = bool(sources)
         if not sources:
             issues.append(f'{PROVENANCE} item {number} ({key[0]} {key[1]} rows {record["rows"]}) names no sources.')
         for source in sources:
-            match = next((p for p in paths if covered({source}, p)), None)
+            match = packet_path(source, paths)
             if match is None:
+                valid = False
                 issues.append(f'{PROVENANCE} item {number} cites {source!r}, which is not a file in the packet.')
                 continue
             entry = entry_for(entries or {}, match)
             if entry is not None and normal_decision(entry.get('decision')) not in ('used', 'reference'):
+                valid = False
                 issues.append(
                     f'{PROVENANCE} item {number} cites {match}, but {DOCUMENT_MAP} marks it '
                     f'{entry.get("decision")!r}. Mark it used or reference, or cite the right file.'
                 )
-        covered_rows.setdefault(key, set()).update(rows)
-    for deliverable in job.deliverables:
-        for sheet, rows in written_rows(outputs, deliverable).items():
-            left = rows - covered_rows.get((deliverable.name, sheet), set())
-            counts['written'] = counts.get('written', 0) + len(rows)
-            counts['sourced'] = counts.get('sourced', 0) + len(rows) - len(left)
-            if left:
-                issues.append(f'{PROVENANCE} gives no sources for {deliverable.name} "{sheet}" rows {_ranges(left)}.')
-    return issues
+        if valid:
+            covered_rows.setdefault(key, set()).update(rows)
+    for (name, sheet), rows in written.items():
+        left = rows - covered_rows.get((name, sheet), set())
+        counts['sourced'] += len(rows) - len(left)
+        if left:
+            issues.append(f'{PROVENANCE} gives no sources for {name} "{sheet}" rows {_ranges(left)}.')
+    return issues, counts
 
 
 def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row') -> dict:
@@ -370,19 +394,16 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
     for deliverable in job.deliverables:
         deliverable_issues += check_deliverable(outputs, deliverable, job.rules)
     entries, error = read_map(outputs)
-    map_issues = [error] if error else check_map(entries, files)
-    needed = [f for f in files if not f.get('junk')]
-    decided = sum(
-        1
-        for f in needed
-        if (e := entry_for(entries or {}, f['path'])) and normal_decision(e.get('decision')) in DECISIONS
-    )
-    summary = {'deliverable_problems': len(deliverable_issues), 'files_decided': decided, 'files': len(needed)}
+    map_issues, decided = ([error], 0) if error else check_map(entries, files)
+    summary = {
+        'deliverable_problems': len(deliverable_issues),
+        'files_decided': decided,
+        'files': sum(not f.get('junk') for f in files),
+    }
     provenance_issues = []
     if proof == 'row':
-        counts = {}
-        provenance_issues = check_provenance(outputs, job, files, entries, counts)
-        summary |= {'rows_sourced': counts.get('sourced', 0), 'rows_written': counts.get('written', 0)}
+        provenance_issues, counts = check_provenance(outputs, job, files, entries)
+        summary |= {'rows_sourced': counts['sourced'], 'rows_written': counts['written']}
     issues = deliverable_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
     return {'passed': not issues, 'issues': shown, 'summary': summary}

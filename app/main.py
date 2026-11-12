@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import app_settings, jobstatus
 from .config import ROOT, Settings, settings
 from .context import estimate_text
-from .engine.checks import DOCUMENT_MAP, map_entries, normal_decision
+from .engine.checks import normal_decision, read_map
 from .engine.rules import check_format_definition
 from .files import add_file, add_zip, is_junk, within
 from .runtime import Runner
@@ -369,13 +369,9 @@ def create_app(settings_override: Settings | None = None, model_override=None):
     def document_map(job_id):
         """The sandbox engine's file-by-file record: each packet file, its decision and the reason."""
         get(job_id)
-        path = store.path(job_id) / 'outputs' / DOCUMENT_MAP
-        if not path.is_file():
-            return {'files': []}
-        try:
-            entries = map_entries(json.loads(path.read_text(encoding='utf-8')))
-        except (ValueError, OSError):
-            return {'files': [], 'error': 'The document map could not be read.'}
+        entries, error = read_map(store.path(job_id) / 'outputs')
+        if entries is None:
+            return {'files': [], 'error': None if error.endswith('not been saved yet.') else error}
         files = [
             {'path': p, 'decision': normal_decision(e.get('decision')), 'reason': str(e.get('reason') or '')}
             for p, e in sorted(entries.items())
