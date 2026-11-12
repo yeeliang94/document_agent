@@ -20,10 +20,12 @@ Same as the main app:
 ## Steps
 
 1. **Set up once.** Double-click `setup.bat` in this folder. It creates the prototype's own Python environment, installs the packages, and then shows which proxy address and model it will use and where they came from.
-2. **Check the proxy.** Run `check_proxy.bat`. It tests the 7 things the agent needs, using a tiny made-up workbook, and prints PASS or FAIL for each.
-   - **Step 1 fails:** copy `sandbox_settings.example.json` to `sandbox_settings.json`. Set `"provider"` to `"openai"` or `"azure"`, whichever your proxy routes to, and try again. If it still fails, also set `"model_on_create"` to `true`.
-   - **Step 2 or 5 fails:** the proxy is probably swapping Code Interpreter for its own sandbox (LiteLLM's "interception" mode), which cannot move files yet. Ask the proxy admin whether Code Interpreter is passed through to OpenAI or Azure.
-3. **Test the agent.** Run `run_test.bat`. It builds the synthetic test packet, runs the agent through the proxy and scores the result. It usually takes 4 minutes, and up to 15 when OpenAI is slow. While code runs you see `... running code in the sandbox` lines.
+2. **Check the proxy.** Run `check_proxy.bat`. It tries both ways of using Code Interpreter with a tiny made-up workbook and prints PASS or FAIL for each step, then a 4-line summary.
+   - **Part A** is the way the agent works today: the agent creates the sandbox, uploads into it, downloads from it and deletes it.
+   - **Part B** is the automatic way: OpenAI creates the sandbox on the first code call, files go in through the Files API, and come out by download or, failing that, as text the code prints.
+   - If Part A step 1 fails with 403, the proxy blocks sandbox creation. Copying `sandbox_settings.example.json` to `sandbox_settings.json` and setting `"provider"` (`"openai"` or `"azure"`) or `"model_on_create": true` sometimes helps. Otherwise the proxy admin can allow LiteLLM's `/v1/containers` routes, or the agent can switch to the automatic way if Part B passes.
+   - Send back the whole output. Part B decides what the agent needs if Part A stays blocked.
+3. **Test the agent** (once Part A passes; today the agent needs it). Run `run_test.bat`. It builds the synthetic test packet, runs the agent through the proxy and scores the result. It usually takes 4 minutes, and up to 15 when OpenAI is slow. While code runs you see `... running code in the sandbox` lines.
 4. **Your own files** (only once approved for this use): `run_agent.bat path\to\packet.zip path\to\template.xlsx`.
 
 Each script waits for a key press before closing, so you can read or copy its output.
@@ -35,7 +37,7 @@ To use a different proxy or model for the prototype only, put `"base_url"` or `"
 
 ## What to send back
 
-- The PASS/FAIL lines from `check_proxy.bat`.
+- The whole output of `check_proxy.bat`, including the summary.
 - The last lines of `run_test.bat`: the status and the score block.
 
 None of these contain payroll data.

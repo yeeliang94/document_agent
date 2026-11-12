@@ -368,3 +368,22 @@ def test_settings_tests_leave_no_environment_behind():
     import os
 
     assert os.environ.get('OPENAI_BASE_URL') != 'https://proxy.corp/v1'
+
+
+@pytest.mark.parametrize(
+    ('outcomes', 'expected'),
+    [
+        ({'A1': False, 'B1': True, 'B2': True, 'B3': False, 'B4': True, 'B5': True}, ['as printed text only', 'yes']),
+        ({'A1': False, 'B1': True, 'B2': True, 'B3': True, 'B4': None, 'B5': None}, ['by download', 'not tested']),
+        ({'A1': False, 'B1': True, 'B2': False, 'B3': None, 'B4': None, 'B5': None}, ['not tested', 'not tested']),
+    ],
+)
+def test_proxy_check_summary_says_what_was_actually_shown(outcomes, expected, capsys):
+    import proxy_check
+
+    proxy_check.RESULTS[:] = [(f'{step} x', ok, '') for step, ok in outcomes.items()]
+    code = proxy_check.summary()
+    out = capsys.readouterr().out
+    assert f'files out:       {expected[0]}' in out and f'kept between calls: {expected[1]}' in out
+    assert code == (0 if outcomes['B2'] and (outcomes['B3'] or outcomes['B5']) else 1)
+    proxy_check.RESULTS.clear()
