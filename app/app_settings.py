@@ -38,7 +38,7 @@ class Option:
 
 OPTIONS = {
     'engine': Option('classic', 'Engine', ('classic', 'sandbox')),
-    'max_scouts': Option(4, 'Parallel scouts', low=0, high=8),
+    'max_scouts': Option(0, 'Parallel scouts', low=0, high=8),  # the experiment found one agent as accurate and faster
     'reviewer': Option(False, 'Independent reviewer'),
     'proof': Option('row', 'Proof level', ('row', 'none')),
     'effort': Option('medium', 'Reasoning effort', ('low', 'medium', 'high')),

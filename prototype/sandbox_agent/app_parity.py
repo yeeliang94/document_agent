@@ -6,7 +6,7 @@ Live and paid. Run it with the main app's Python, from the repository root:
   .venv/bin/python prototype/sandbox_agent/app_parity.py --packets prototype/sandbox_agent/runs/packets \
       --only payroll_consolidation,payroll_noise --scouts 4 --reviewer
 
-Packets with a format deliverable (no template) are skipped: the app's upload form takes a template only, for now.
+A format deliverable is uploaded in the template's place, as the app allows for sandbox jobs.
 """
 
 from __future__ import annotations
@@ -40,12 +40,13 @@ def period_of(goal: str) -> str:
 
 def run_packet(client, folder: Path, timeout: int) -> dict:
     spec = load_job(folder)
-    template = next(d for d in spec.deliverables if d.template is not None)
+    deliverable = spec.deliverables[0]
+    definition = deliverable.template or deliverable.format_path  # a template to fill, or a format to build to
     response = client.post(
         '/api/jobs',
         data={'module': spec.module, 'period': period_of(spec.goal), 'instructions': spec.goal},
         files=[
-            ('template', (template.template.name, template.template.read_bytes())),
+            ('template', (definition.name, definition.read_bytes())),
             ('files', (spec.zip.name, spec.zip.read_bytes())),
         ],
     )
@@ -67,8 +68,8 @@ def run_packet(client, folder: Path, timeout: int) -> dict:
             break
         time.sleep(3)
     key = json.loads((folder / 'answer_key.json').read_text(encoding='utf-8'))
-    output_name = f'{template.template.stem}_output.xlsx'
-    key['deliverables'] = {output_name: key['deliverables'][template.name]}
+    output_name = f'{definition.stem}_output.xlsx' if deliverable.template else f'{definition.stem}.xlsx'
+    key['deliverables'] = {output_name: key['deliverables'][deliverable.name]}
     outputs = client.app.state.store.path(job_id) / 'outputs'
     result = score(outputs, key, job.get('engine_questions') or [])
     return {
@@ -102,8 +103,8 @@ def main():
         client.put('/api/settings', json={'values': {'engine': 'sandbox', 'max_scouts': args.scouts,
                                                      'reviewer': args.reviewer}})  # fmt: skip
         for folder in folders:
-            if not any(d.template for d in load_job(folder).deliverables):
-                print(f'skip {folder.name}: format deliverable, not uploadable in the app yet')
+            if len(load_job(folder).deliverables) != 1:
+                print(f'skip {folder.name}: the app takes one deliverable per job')
                 continue
             print(f'start {folder.name}', flush=True)
             row = run_packet(client, folder, args.timeout)

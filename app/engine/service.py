@@ -114,12 +114,12 @@ class AppControl(Control):
 
 def packet_zip(root: Path, files: list[dict], target: Path) -> Path:
     """The job's source files as one zip, paths relative to inputs/. Inputs never change after upload, so the zip
-    is built once per job. Stored, not compressed: workbooks and PDFs are compressed already."""
+    is built once per job. Compressed, because OpenAI sandboxes take files of at most 50 MB."""
     if target.exists():
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix('.partial')
-    with zipfile.ZipFile(partial, 'w', zipfile.ZIP_STORED) as archive:
+    with zipfile.ZipFile(partial, 'w', zipfile.ZIP_DEFLATED) as archive:
         for entry in files:
             if entry['role'] == 'inputs':
                 archive.write(root / entry['path'], entry['path'].removeprefix('inputs/'))

@@ -709,3 +709,50 @@ def test_a_failed_review_never_sinks_a_run_that_passed_its_checks(tmp_path, monk
     assert store.record['status'] == 'complete' and store.record['error'] is None
     events = (store.dir / 'events.jsonl').read_text(encoding='utf-8')
     assert 'review.failed' in events
+
+
+def test_a_packet_over_the_upload_limit_is_split_into_whole_file_parts(tmp_path):
+    import os
+
+    from app.engine.agent import split_zip
+
+    path = tmp_path / 'packet.zip'
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_STORED) as archive:
+        for n in range(6):
+            archive.writestr(f'f{n}.bin', os.urandom(40_000))
+    parts = split_zip(path, limit=100_000)
+    assert len(parts) == 3 and all(p.stat().st_size <= 110_000 for p in parts)
+    names = [n for p in parts for n in zipfile.ZipFile(p).namelist()]
+    assert sorted(names) == [f'f{n}.bin' for n in range(6)]
+    assert split_zip(path, limit=10**9) == [path]
+    with pytest.raises(ValueError, match='cannot be uploaded'):
+        split_zip(path, limit=1_000)
+
+
+def test_a_dropped_reply_is_retried_from_the_finished_items(tmp_path, monkeypatch):
+    from openai import APIError
+
+    import app.engine.agent as engine
+
+    class Dropping(FakeStream):
+        new_items = ['one finished item']
+
+        async def stream_events(self):
+            yield SimpleNamespace(type='run_item_stream_event', name='other', item=None)
+            raise APIError('There was an issue with your request.', None, body=None)
+
+    streams = [Dropping(), Dropping(), FakeStream(final=SimpleNamespace(status='complete'))]
+    prompts = []
+
+    def run(_agent, prompt, **_kw):
+        prompts.append(prompt)
+        return streams.pop(0)
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', run)
+    store = RunStore(tmp_path)
+    result = asyncio.run(engine._drive(None, 'go', _drive_job(tmp_path), store, print, StopAfter(stop=None)))
+    assert result.final_output.status == 'complete' and prompts[1] == [{'role': 'user', 'content': 'so far'}]
+    assert (store.dir / 'events.jsonl').read_text(encoding='utf-8').count('model.retry') == 2
+    streams[:] = [Dropping(), Dropping(), Dropping()]
+    with pytest.raises(APIError):  # two retries, then the error stands
+        asyncio.run(engine._drive(None, 'go', _drive_job(tmp_path), store, print, StopAfter(stop=None)))
