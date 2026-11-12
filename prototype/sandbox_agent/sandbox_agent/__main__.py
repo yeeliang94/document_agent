@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from .agent import run_job
-from .config import add_endpoint_args, load_settings, prepare_console_and_network
+from .config import add_endpoint_args, describe, load_settings, prepare_console_and_network
 from .packet import build
 from .score import score
 
@@ -26,6 +26,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest='command', required=True)
     fixture = sub.add_parser('fixture', help='generate the synthetic test packet')
     fixture.add_argument('out', type=Path)
+    show = sub.add_parser('settings', help='show which endpoint and model a run would use, and where they come from')
+    add_endpoint_args(show)
     run = sub.add_parser('run', help='run the agent')
     run.add_argument('--zip', type=Path, required=True)
     run.add_argument('--template', type=Path, required=True)
@@ -40,12 +42,15 @@ def main() -> None:
     run.add_argument('--memory', default='4g', choices=['1g', '4g', '16g', '64g'])
     args = parser.parse_args()
     prepare_console_and_network()
+    if args.command == 'settings':
+        print(describe(load_settings(args)))
+        return
     if args.command == 'fixture':
         key = build(args.out)
         print(f'{len(key["files"])} files, {len(key["employees"])} expected rows -> {args.out}')
         return
     settings = load_settings(args)
-    print(f'Endpoint {settings.base_url}, model {settings.model}')
+    print(describe(settings))
     store = asyncio.run(
         run_job(
             args.zip,

@@ -3,9 +3,9 @@ sandbox agent needs. Sends only a generated two-row synthetic workbook. Costs on
 
   Windows: check_proxy.bat        macOS/Linux: .venv/bin/python proxy_check.py
 
-The endpoint and model come from sandbox_settings.json; flags such as --base-url, --model, --provider openai|azure
-and --model-on-create override it for one run. The key comes from OPENAI_API_KEY in the project .env, or
-PROXY_API_KEY.
+The endpoint, model and key come from OPENAI_BASE_URL, OPENAI_MODEL and OPENAI_API_KEY in the project .env, as for
+the main app. sandbox_settings.json (optional) and flags such as --provider openai|azure and --model-on-create add the
+LiteLLM options or override them for one run.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from agents import Agent, CodeInterpreterTool, ModelSettings, Runner, set_tracin
 from openai.types.shared import Reasoning
 from openpyxl import Workbook, load_workbook
 
-from sandbox_agent.config import Settings, add_endpoint_args, load_settings, prepare_console_and_network
+from sandbox_agent.config import Settings, add_endpoint_args, describe, load_settings, prepare_console_and_network
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -54,7 +54,7 @@ async def main() -> int:
     settings = load_settings(args)
     client = settings.client()
     set_tracing_disabled(True)
-    print(f'Endpoint {settings.base_url}, model {settings.model}\n')
+    print(describe(settings) + '\n')
 
     step = '1 create a sandbox (POST /containers)'
     try:

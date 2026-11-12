@@ -42,14 +42,21 @@ if errorlevel 1 (
   set "RC=1"
   goto finish
 )
-if not exist "sandbox_settings.json" (
-  copy /y "sandbox_settings.example.json" "sandbox_settings.json" >nul
-  echo.
-  echo Created sandbox_settings.json. Put in your LiteLLM proxy address and model alias, save, then run check_proxy.bat.
-  start "" notepad "sandbox_settings.json"
-) else (
-  echo Setup complete. Next: check_proxy.bat
+if not exist "..\..\.env" (
+  echo The project .env is missing. Run the main app's start.bat once ^(it creates .env^), then put your proxy key,
+  echo address and model alias in it: OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_MODEL. Then run setup.bat again.
+  set "RC=1"
+  goto finish
 )
+echo.
+echo This prototype uses the same proxy settings as the main app:
+".venv\Scripts\python.exe" -m sandbox_agent settings
+if errorlevel 1 (
+  set "RC=1"
+  goto finish
+)
+echo.
+echo Setup complete. Next: check_proxy.bat
 
 :finish
 popd

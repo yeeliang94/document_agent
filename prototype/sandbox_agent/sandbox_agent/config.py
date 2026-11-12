@@ -1,8 +1,10 @@
-"""Settings.
+"""Settings, read the same way as the main app.
 
-- The API key comes from the project's .env (or PROXY_API_KEY), the only secret.
-- The endpoint and model come from sandbox_settings.json next to this package, so a Windows enterprise machine can
-  point at its LiteLLM proxy once. Command-line flags override the file for one run.
+- OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_MODEL come from the project's .env (or the real environment, which wins,
+  as in the main app). So the Windows enterprise machine's proxy is configured once, for both.
+- sandbox_settings.json is optional. It holds the LiteLLM extras the main app has no setting for (provider,
+  model_on_create) and can override the endpoint or model for this prototype only.
+- Command-line flags override both for one run.
 """
 
 import argparse
@@ -12,6 +14,7 @@ import sys
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
+from urllib.parse import urlparse
 
 import truststore
 from agents.models.openai_responses import OpenAIResponsesModel
@@ -24,6 +27,8 @@ SETTINGS_FILE = PROTOTYPE_DIR / 'sandbox_settings.json'
 DEFAULT_MODEL = 'gpt-6-luna'
 DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 PLACEHOLDER_HOST = 'your-litellm-proxy'
+LOOPBACK = ('127.0.0.1', 'localhost', '::1')  # as in app/config.py
+PUBLIC_HOST = 'api.openai.com'
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,8 @@ class Settings:
     model: str = DEFAULT_MODEL
     provider: str | None = None  # LiteLLM proxies: sent as the custom-llm-provider header
     model_on_create: bool = False  # LiteLLM proxies with model_list credentials: name the model when creating a sandbox
+    origin: str = field(default='', compare=False)  # where base_url came from, for display
+    model_origin: str = field(default='', compare=False)
 
     @cached_property
     def _client(self) -> AsyncOpenAI:
@@ -93,27 +100,69 @@ def prepare_console_and_network():
             stream.reconfigure(errors='replace')
 
 
+def check_base_url(url: str):
+    """The main app's rule: HTTPS, or plain HTTP only to this machine."""
+    parsed = urlparse(url)
+    if not parsed.hostname or not (
+        parsed.scheme == 'https' or (parsed.scheme == 'http' and parsed.hostname in LOOPBACK)
+    ):
+        raise SystemExit(f'The endpoint {url!r} must use HTTPS, or plain HTTP only to this machine.')
+
+
+def _filled(value) -> bool:
+    return value is not None and not (isinstance(value, str) and not value.strip())
+
+
 def load_settings(args: argparse.Namespace | None = None, settings_file: Path = SETTINGS_FILE) -> Settings:
-    load_dotenv(PROJECT_ROOT / '.env')
+    already_set = {name for name in ('OPENAI_BASE_URL', 'OPENAI_MODEL') if _filled(os.environ.get(name))}
+    load_dotenv(PROJECT_ROOT / '.env')  # like the main app: a real environment variable wins over .env
     key = os.environ.get('PROXY_API_KEY') or os.environ.get('OPENAI_API_KEY', '')
     if not key:
         raise SystemExit('Add OPENAI_API_KEY to the project .env, or set PROXY_API_KEY.')
-    chosen = read_settings_file(settings_file)
+    file_values = read_settings_file(settings_file)
+    chosen, origin = {}, {}
+    for name, env_name in (('base_url', 'OPENAI_BASE_URL'), ('model', 'OPENAI_MODEL')):
+        if _filled(os.environ.get(env_name)):
+            where = 'Windows environment variable' if env_name in already_set else '.env'
+            chosen[name], origin[name] = os.environ[env_name].strip(), f'{env_name} ({where})'
     for name in ('base_url', 'model', 'provider', 'model_on_create'):
+        if _filled(file_values.get(name)):
+            chosen[name], origin[name] = file_values[name], settings_file.name
         value = getattr(args, name, None) if args is not None else None
-        if value is not None:
-            chosen[name] = value
+        if _filled(value):
+            chosen[name], origin[name] = value, 'command line'
     base_url = chosen.get('base_url')
     if not base_url or PLACEHOLDER_HOST in base_url:
         # Never fall back to public OpenAI silently: on the enterprise machine that would bypass the approved proxy.
         raise SystemExit(
-            f'Set "base_url" in {settings_file.name} to your proxy (copy {settings_file.stem}.example.json), '
+            'Set OPENAI_BASE_URL in the project .env to your proxy, as for the main app, '
             f'or pass --base-url {DEFAULT_BASE_URL} to use OpenAI directly.'
         )
+    check_base_url(base_url)
     return Settings(
         api_key=key,
         base_url=base_url,
         model=chosen.get('model') or DEFAULT_MODEL,
         provider=chosen.get('provider') or None,
         model_on_create=chosen.get('model_on_create') is True,
+        origin=origin.get('base_url', ''),
+        model_origin=origin.get('model', f'default ({DEFAULT_MODEL})'),
     )
+
+
+def describe(settings: Settings) -> str:
+    """What a run will use and where each value came from, with a warning when it is not a company proxy."""
+    lines = [
+        f'Endpoint: {settings.base_url}  (from {settings.origin})',
+        f'Model:    {settings.model}  (from {settings.model_origin})',
+    ]
+    if settings.provider or settings.model_on_create:
+        lines.append(
+            f'LiteLLM:  provider header {settings.provider or "none"}, model on sandbox create {settings.model_on_create}'
+        )
+    if urlparse(settings.base_url).hostname == PUBLIC_HOST:
+        lines.append(
+            'WARNING:  this is public OpenAI, not a company proxy. On the enterprise machine, set OPENAI_BASE_URL in '
+            '.env to the proxy address, as for the main app.'
+        )
+    return '\n'.join(lines)

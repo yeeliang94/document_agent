@@ -218,39 +218,64 @@ def test_one_client_per_run_and_model_on_create():
     assert Settings(api_key='k').sandbox_create_extra is None
 
 
-def test_settings_file_sets_the_proxy_and_flags_override_it(tmp_path, monkeypatch):
+def _settings_env(tmp_path, monkeypatch, env_text):
+    """Point load_settings at a throwaway project .env, with no leftovers from the real one."""
+    import sandbox_agent.config as config
+
+    for name in ('OPENAI_BASE_URL', 'OPENAI_MODEL', 'OPENAI_API_KEY', 'PROXY_API_KEY'):
+        monkeypatch.setenv(name, '')  # records the original value, so load_dotenv's writes are undone afterwards
+        monkeypatch.delenv(name)
+    (tmp_path / '.env').write_text(env_text, encoding='utf-8')
+    monkeypatch.setattr(config, 'PROJECT_ROOT', tmp_path)
     import argparse
 
-    from sandbox_agent.config import add_endpoint_args, load_settings
-
-    monkeypatch.setenv('PROXY_API_KEY', 'proxy-key')
-    path = tmp_path / 'sandbox_settings.json'
-    body = '{"base_url": "https://proxy.corp/v1", "model": "alias", "provider": "azure", "model_on_create": true}'
-    path.write_bytes(b'\xef\xbb\xbf' + body.encode())  # Notepad's byte-order mark must not break it
     parser = argparse.ArgumentParser()
-    add_endpoint_args(parser)
-    from_file = load_settings(parser.parse_args([]), path)
-    assert (from_file.base_url, from_file.model, from_file.provider, from_file.model_on_create) == (
-        'https://proxy.corp/v1', 'alias', 'azure', True)  # fmt: skip
-    assert from_file.api_key == 'proxy-key'
-    overridden = load_settings(parser.parse_args(['--model', 'other']), path)
-    assert overridden.model == 'other' and overridden.base_url == 'https://proxy.corp/v1'
-    path.write_text('{"base_url": "x", "api_key": "no"}', encoding='utf-8')
-    with pytest.raises(SystemExit, match='unknown keys'):
-        load_settings(parser.parse_args([]), path)
-    with pytest.raises(SystemExit, match='Set "base_url"'):  # never a silent fallback to public OpenAI
-        load_settings(parser.parse_args([]), tmp_path / 'missing.json')
-    explicit = load_settings(parser.parse_args(['--base-url', 'https://api.openai.com/v1']), tmp_path / 'missing.json')
-    assert explicit.base_url == 'https://api.openai.com/v1'
-    example = tmp_path / 'example.json'
-    example.write_text('{"base_url": "https://your-litellm-proxy.company.example/v1"}', encoding='utf-8')
-    with pytest.raises(SystemExit, match='Set "base_url"'):
-        load_settings(parser.parse_args([]), example)
-    example.write_text('{"base_url": "https://p/v1", "model_on_create": "false"}', encoding='utf-8')
-    with pytest.raises(SystemExit, match='true or false'):
-        load_settings(parser.parse_args([]), example)
-    example.write_text('{"base_url": "https://p/v1", "model_on_create": true}', encoding='utf-8')
-    assert load_settings(parser.parse_args(['--no-model-on-create']), example).model_on_create is False
+    config.add_endpoint_args(parser)
+    return config.load_settings, parser
+
+
+def test_proxy_comes_from_the_main_app_env_like_the_app(tmp_path, monkeypatch):
+    load_settings, parser = _settings_env(
+        tmp_path, monkeypatch, 'OPENAI_API_KEY=k\nOPENAI_BASE_URL=https://proxy.corp/v1\nOPENAI_MODEL=alias\n'
+    )
+    settings = load_settings(parser.parse_args([]), tmp_path / 'no_file.json')
+    assert (settings.base_url, settings.model, settings.origin) == (
+        'https://proxy.corp/v1',
+        'alias',
+        'OPENAI_BASE_URL (.env)',
+    )
+    assert load_settings(parser.parse_args(['--model', 'other']), tmp_path / 'no_file.json').model == 'other'
+
+
+def test_settings_file_adds_litellm_options_and_can_override(tmp_path, monkeypatch):
+    load_settings, parser = _settings_env(
+        tmp_path, monkeypatch, 'OPENAI_API_KEY=k\nOPENAI_BASE_URL=https://proxy.corp/v1\n'
+    )
+    path = tmp_path / 'sandbox_settings.json'
+    path.write_bytes(b'\xef\xbb\xbf' + b'{"provider": "azure", "model_on_create": true}')  # Notepad's byte-order mark
+    settings = load_settings(parser.parse_args([]), path)
+    assert (settings.base_url, settings.provider, settings.model_on_create) == ('https://proxy.corp/v1', 'azure', True)
+    assert load_settings(parser.parse_args(['--no-model-on-create']), path).model_on_create is False
+    path.write_text('{"base_url": "https://other.corp/v1"}', encoding='utf-8')
+    assert load_settings(parser.parse_args([]), path).origin == 'sandbox_settings.json'
+    for body, message in [
+        ('{"api_key": "no"}', 'unknown keys'),
+        ('{"model_on_create": "false"}', 'true or false'),
+        ('{"base_url": "http://proxy.corp/v1"}', 'must use HTTPS'),
+    ]:
+        path.write_text(body, encoding='utf-8')
+        with pytest.raises(SystemExit, match=message):
+            load_settings(parser.parse_args([]), path)
+    path.write_text('{"base_url": "http://localhost:4000/v1"}', encoding='utf-8')
+    assert load_settings(parser.parse_args([]), path).base_url == 'http://localhost:4000/v1'  # the app allows loopback
+
+
+def test_no_endpoint_anywhere_never_means_public_openai(tmp_path, monkeypatch):
+    load_settings, parser = _settings_env(tmp_path, monkeypatch, 'OPENAI_API_KEY=k\n')
+    with pytest.raises(SystemExit, match='Set OPENAI_BASE_URL'):
+        load_settings(parser.parse_args([]), tmp_path / 'no_file.json')
+    explicit = load_settings(parser.parse_args(['--base-url', 'https://api.openai.com/v1']), tmp_path / 'no_file.json')
+    assert explicit.origin == 'command line'
 
 
 def test_an_output_open_in_excel_gives_a_clear_message(tmp_path, monkeypatch):
@@ -319,3 +344,27 @@ def test_code_progress_is_shown_while_a_long_reply_runs(tmp_path):
         json.loads(line)['event'] for line in (store.dir / 'events.jsonl').read_text(encoding='utf-8').splitlines()
     ]
     assert events == ['code.started', 'code.finished']
+
+
+def test_origin_labels_and_public_warning(tmp_path, monkeypatch):
+    from sandbox_agent.config import describe
+
+    load_settings, parser = _settings_env(
+        tmp_path, monkeypatch, 'OPENAI_API_KEY=k\nOPENAI_BASE_URL=https://api.openai.com/v1\n'
+    )
+    monkeypatch.setenv('OPENAI_MODEL', 'from-windows')  # a real environment variable beats .env, as in the main app
+    (tmp_path / 's.json').write_text('{"model": "  "}', encoding='utf-8')  # blank values count as unset
+    settings = load_settings(parser.parse_args([]), tmp_path / 's.json')
+    text = describe(settings)
+    assert (
+        'OPENAI_BASE_URL (.env)' in text and 'from-windows  (from OPENAI_MODEL (Windows environment variable))' in text
+    )
+    assert 'WARNING:  this is public OpenAI' in text
+    proxy = load_settings(parser.parse_args(['--base-url', 'https://proxy.corp/v1']), tmp_path / 's.json')
+    assert 'WARNING' not in describe(proxy)
+
+
+def test_settings_tests_leave_no_environment_behind():
+    import os
+
+    assert os.environ.get('OPENAI_BASE_URL') != 'https://proxy.corp/v1'
