@@ -418,7 +418,8 @@ def build(out: Path, seed: int = 20261031) -> dict:
             'module': 'ap',
             'title': 'AP invoice upload, November 2026',
             'goal': 'Please prepare the November 2026 AP invoice upload for entities SG01 and MY01 from the invoices '
-            'in the packet. Fill in our upload template, one row per invoice or credit note.',
+            'in the packet. Fill in our upload template, one row per invoice or credit note. Invoices reach us as '
+            'PDFs and through the supplier portal; a portal record is a valid invoice even without a PDF copy.',
             'zip': 'packet.zip',
             'deliverables': [{'name': 'ap_upload.xlsx', 'template': 'ap_upload_template.xlsx'}],
         },

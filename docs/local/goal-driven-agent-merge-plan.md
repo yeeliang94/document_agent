@@ -2,7 +2,7 @@
 
 Date: 12 November 2026
 Branch: `sandbox-agent-prototype`
-Status: Plan only. No code changed.
+Status: Phases 1 to 5 built; see section 9 for results and what waits on you.
 Builds on: [harness efficacy review](harness-efficacy-review-2026-11.md), the prototype in `prototype/sandbox_agent/`, and the proxy results from the Windows machine (explicit sandboxes work with the EMEA address and the `openai.eu` model alias).
 
 ## 1 The goal in one paragraph
@@ -131,3 +131,24 @@ Each phase ends with a check that must pass before the next starts. Phases 1 and
 - Whether the reviewer agent stays (Phase 2 decides).
 - Which agent library the new engine uses (the Phase 3 spike decides).
 - Whether scouts are chosen by the harness or the model (Phase 2 decides).
+
+## 9 Progress (12 November 2026)
+
+### Phase 0 defaults used until you decide
+- **Data:** synthetic packets only. No real payroll data has gone to OpenAI.
+- **Proof:** "each written row names its source files, and every file has a decision". This is a Settings-page value (`proof`), so it can be switched off or made stricter later.
+- **Proxy:** the EMEA address with the `openai.eu.gpt-6-luna` alias, as Copilot found. Still to confirm with the GenAI team.
+
+### Phase 3 spike result
+The app's current agent library (Pydantic AI 2.57) only supports sandboxes that OpenAI creates automatically. Your proxy needs the harness to create them itself. So the new engine uses the OpenAI Agents SDK 0.24, which is now in `requirements.txt`. The OpenAI library moves from 3.33 to 3.49, the version the prototype was tested with.
+
+### Where things are
+| Phase | State |
+|---|---|
+| 1 Test set | Done. Six packets, each with an answer key. Each packet's perfect output passes every check and scores 100%. |
+| 2 Team design | Experiment run; results below. |
+| 3 Engine in the app | Done behind the switch. The engine lives in `app/engine/`, and the prototype runs the same code. Settings are stored and served by `/api/settings`. |
+| 4 Pauses and limits | Done. Pause, cancel, new instructions mid-run, questions that hold the sandbox and then park the job, resume in a fresh sandbox, and clear proxy error messages. |
+| 5 Screens | HTML prototype ready for approval: `docs/local/prototypes/sandbox-engine-screens.html`. No app screen has changed. |
+| 6 Switch-over | Waits on real approved packets and your go-ahead. |
+| 7 Windows | Scripts ready (`run_test.bat`, `run_scorecard.bat`). Waits on a run on the Windows machine. |

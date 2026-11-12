@@ -150,7 +150,7 @@ How to work:
 - Before finishing, re-open what you saved and check it against the sources: rows per group, totals, duplicates, and anything that should have been excluded.
 - Call save_outputs to copy your outputs to the user's run folder. It checks them on the user's machine and lists any problems. Fix them and call it again. You are done when save_outputs passes.
 
-Finish with status "complete" only if save_outputs passed on your final files. List anything unresolved in open_questions."""
+Finish with status "complete" only if save_outputs passed on your final files. List anything unresolved in open_questions. Write the summary for a finance user: name files plainly, without sandbox paths or links."""
 
 REVIEWER = """You are an independent reviewer. Another agent prepared the deliverables for the job below. Automatic checks have already confirmed the format, the template rules and that every file has a decision. Your job is to find results that are valid but wrong: a superseded or draft file used instead of the final one, rows that should have been excluded or are missing, wrong period, wrong entity, wrong currency or rate, numbers that do not match their sources, duplicated records, an instruction in the packet that was not followed.
 
