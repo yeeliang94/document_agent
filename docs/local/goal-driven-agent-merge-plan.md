@@ -142,13 +142,52 @@ Each phase ends with a check that must pass before the next starts. Phases 1 and
 ### Phase 3 spike result
 The app's current agent library (Pydantic AI 2.57) only supports sandboxes that OpenAI creates automatically. Your proxy needs the harness to create them itself. So the new engine uses the OpenAI Agents SDK 0.24, which is now in `requirements.txt`. The OpenAI library moves from 3.33 to 3.49, the version the prototype was tested with.
 
+### Phase 2 result: one agent, scouts and reviewer optional
+36 runs on the six synthetic packets: shapes A, B and C, twice each, against OpenAI directly with `gpt-6-luna`.
+
+| Shape | Complete | Cell accuracy | Row recall | File decisions right | Minutes | Input tokens |
+|---|---|---|---|---|---|---|
+| A, lead agent only | 12/12 | 100% | 99.4% | 98.1% | 2.5 | 64k |
+| B, with scouts | 12/12 | 100% | 98.2% | 92.7% | 3.4 | 79k |
+| C, scouts and reviewer | 12/12 | 100% | 97.6% | 96.9% | 5.5 | 133k |
+
+- Every run asked the one question it should have (6 of 6), and none of them asked it wrongly.
+- The row misses all came from one unclear packet goal: should portal-only invoices count? That goal is now explicit, and the accounts-payable packet scores 100% through the app.
+
+**The five questions:**
+1. *When do scouts beat one agent?* Never, up to 122 files and 55 MB. One agent was faster at every size tested.
+2. *Who decides on scouts?* The model. Given the choice, it used them in only 3 of 12 runs. Scouts now default to off, and the Settings page can turn them on for larger real packets.
+3. *What should a scout profile hold?* No change is needed until scouts prove useful on real packets.
+4. *Does the reviewer catch real errors?* Not in these runs. It raised 5 doubts, mostly false alarms. Two came from not knowing the user's answers, which it is now told. In an earlier run it did catch a real rounding issue in the test's own answer key. It stays available, off by default, at about twice the cost.
+5. *How to split scouts?* Not needed yet.
+
+**Chosen:** shape A by default.
+
+**Caveat:** synthetic packets are cleaner than real ones. Repeat this on approved real packets in Phase 6.
+
+### Phase 3 result: the app matches the prototype
+All six packets went through the real app on the sandbox engine, and their final runs scored 100% on rows and cells:
+- the question packet: its question went through the app's normal answer form
+- the journal packet: uploaded as a format
+- the large packet: 122 files
+
+**Three earlier app runs failed or fell short. Each cause is fixed and its packet was re-run:**
+- **Invoices:** an unclear packet goal cost 3 of 14 invoices.
+- **Large packet:** OpenAI sandboxes refuse files over 50 MB. The packet is compressed again, and packets still over the limit are split into parts. The split is tested offline only; no live packet was large enough to need it.
+- **Question packet:** OpenAI dropped a streamed reply mid-run. The agent now carries on from where it was, up to twice. That retry is tested offline; the live re-run did not hit a drop.
+
 ### Where things are
 | Phase | State |
 |---|---|
 | 1 Test set | Done. Six packets, each with an answer key. Each packet's perfect output passes every check and scores 100%. |
-| 2 Team design | Experiment run; results below. |
-| 3 Engine in the app | Done behind the switch. The engine lives in `app/engine/`, and the prototype runs the same code. Settings are stored and served by `/api/settings`. |
-| 4 Pauses and limits | Done. Pause, cancel, new instructions mid-run, questions that hold the sandbox and then park the job, resume in a fresh sandbox, and clear proxy error messages. |
-| 5 Screens | HTML prototype ready for approval: `docs/local/prototypes/sandbox-engine-screens.html`. No app screen has changed. |
-| 6 Switch-over | Waits on real approved packets and your go-ahead. |
+| 2 Team design | Done. Shape A by default; the numbers are above. |
+| 3 Engine in the app | Done behind the switch. The engine lives in `app/engine/`, and the prototype runs the same code. Settings are stored and served by `/api/settings`, which also warns when model and endpoint regions differ. Format deliverables can be uploaded as a `.json` format. |
+| 4 Pauses and limits | Done. Pause, cancel, new instructions mid-run, and questions that hold the sandbox and then park the job. Resume works in a fresh sandbox without losing saved outputs. Turn, time and token limits are Settings-page values. Proxy errors say what to change. |
+| 5 Screens | HTML prototype ready for approval: `docs/local/prototypes/sandbox-engine-screens.html`. No app screen has changed, so the engine switch and the new settings can only be set through `/api/settings` until the screens are built. |
+| 6 Switch-over | Waits on approved real packets and your go-ahead. |
 | 7 Windows | Scripts ready (`run_test.bat`, `run_scorecard.bat`). Waits on a run on the Windows machine. |
+
+### Not verified
+- Nothing has run through your proxy or on Windows. The batch scripts were not run.
+- Pausing and cancelling were tested with stand-ins for OpenAI, not in a live run.
+- Real payroll data has not been used.
