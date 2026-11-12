@@ -23,7 +23,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import range_boundaries
 
 from .jobspec import Deliverable, JobSpec
-from .rules import blank, check_format, check_rules, table
+from .rules import _key, blank, check_format, check_rules, table
 
 JUNK_NAMES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 MAX_UNCOMPRESSED = 2 * 1024**3
@@ -119,11 +119,11 @@ def _validation_issues(template, out) -> list[str]:
                     for cell in row:
                         value = cell.value
                         if value in (None, ''):
-                            if not rule.allow_blank and _row_used(target, cell.row):
+                            if not rule.allow_blank and _row_written(sheet, target, cell.row):
                                 issues.append(
                                     f'{sheet.title}!{cell.coordinate} is blank; the template requires a value.'
                                 )
-                        elif allowed is not None and _fold(value) not in {_fold(a) for a in allowed}:
+                        elif allowed is not None and _key(value) not in {_key(a) for a in allowed}:
                             issues.append(
                                 f'{sheet.title}!{cell.coordinate} = {value!r} is not in its dropdown {allowed}.'
                             )
@@ -134,13 +134,10 @@ def _validation_issues(template, out) -> list[str]:
     return issues
 
 
-def _fold(value):
-    """Excel's dropdowns ignore case and surrounding spaces."""
-    return value.strip().casefold() if isinstance(value, str) else value
-
-
-def _row_used(ws, row: int) -> bool:
-    return any(c.value not in (None, '') for c in ws[row])
+def _row_written(template_sheet, ws, row: int) -> bool:
+    """The agent wrote into this row: some cell holds a value where the template's cell was blank. A row the
+    template already filled (labels, formulas) is not the agent's, so its blank validated cells are not required."""
+    return any(not blank(c.value) and blank(template_sheet.cell(row, c.column).value) for c in ws[row])
 
 
 def _duplicate_rows(template, out) -> list[str]:
@@ -245,7 +242,8 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> list[str]:
     for f in files:
         entry = entry_for(entries, f['path'])
         if entry is None:
-            missing.append(f['path'])
+            if not f.get('junk'):  # system clutter such as Thumbs.db needs no decision
+                missing.append(f['path'])
         elif _decision(entry.get('decision')) not in DECISIONS:
             bad.append(f'{f["path"]} ({entry.get("decision")!r})')
         elif blank(entry.get('reason')):

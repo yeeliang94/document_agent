@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from . import app_settings, jobstatus
 from .config import ROOT, Settings, settings
 from .context import estimate_text
+from .engine.rules import check_format_definition
 from .files import add_file, add_zip, is_junk, within
 from .runtime import Runner
 from .store import DEFAULT_CONTEXT, MODULE_LABELS, Store, clean
@@ -151,14 +152,22 @@ def create_app(settings_override: Settings | None = None, model_override=None):
     class SettingsInput(BaseModel):
         values: dict = Field(default_factory=dict)
 
+    def settings_page(values):
+        connection = {
+            'base_url': conf.base_url,
+            'model': conf.model,
+            'warning': app_settings.region_warning(conf.base_url, conf.model),
+        }
+        return {'values': values, 'options': app_settings.describe(), 'connection': connection}
+
     @api.get('/api/settings')
     def app_settings_get():
-        return {'values': store.settings(), 'options': app_settings.describe()}
+        return settings_page(store.settings())
 
     @api.put('/api/settings')
     def app_settings_put(body: SettingsInput):
         try:
-            return {'values': store.save_settings(body.values), 'options': app_settings.describe()}
+            return settings_page(store.save_settings(body.values))
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
 
@@ -179,14 +188,17 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             raise HTTPException(400, 'Unknown module')
         if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', period):
             raise HTTPException(400, 'Use a reporting month in YYYY-MM format')
-        if not template.filename or not template.filename.lower().endswith('.xlsx'):
-            raise HTTPException(400, 'Choose an .xlsx output template')
+        engine = store.settings()['engine']
+        # The sandbox engine also builds a workbook from a written format (.json, see app/engine/rules.py).
+        allowed = ('.xlsx', '.json') if engine == 'sandbox' else ('.xlsx',)
+        if not template.filename or not template.filename.lower().endswith(allowed):
+            raise HTTPException(400, 'Choose an .xlsx output template' + (' or a .json format' if engine == 'sandbox' else ''))
         if not files:
             raise HTTPException(400, 'Choose source files')
         if len(instructions) > MAX_TEXT_CHARS or len(context) > MAX_TEXT_CHARS:
             raise HTTPException(400, 'Instructions are too long')
         job_id = store.create(module, period, instructions, context or store.profile(module))['id']
-        store.update(job_id, engine=store.settings()['engine'])
+        store.update(job_id, engine=engine)
         try:
             manifest = await save_uploads(store.path(job_id), template, files)
             mark_duplicates(manifest)
@@ -231,8 +243,12 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 raise ValueError('Expanded submission exceeds configured file or size limits')
         if not any(entry['role'] == 'inputs' for entry in manifest):
             raise ValueError('Choose source files')
-        # Fail early for corrupt/encrypted/non-workbook template.
-        load_workbook(root / manifest[0]['path'], read_only=True).close()
+        # Fail early for a corrupt/encrypted/non-workbook template, or a format the engine cannot read.
+        definition = root / manifest[0]['path']
+        if definition.suffix.lower() == '.json':
+            check_format_definition(json.loads(definition.read_text(encoding='utf-8-sig')))
+        else:
+            load_workbook(definition, read_only=True).close()
         return manifest
 
     @api.get('/api/jobs/{job_id}')
@@ -285,8 +301,12 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         store.update(job_id, answer=body.answer)
         store.state(job_id).instruction(body.answer, 'answer')
         store.event(job_id, 'user.answer', body.answer, type='user')
-        # A sandbox run still holding its sandbox picks the answer up itself; otherwise a new run resumes the job.
-        if not (runner.active == job_id and j.get('engine') == 'sandbox'):
+        if j.get('engine') == 'sandbox':
+            # A run still holding its sandbox picks the answer up itself. Otherwise, or once that run has ended, the
+            # runner queues the job; the answer was saved first, so whichever side looks last finds it.
+            if runner.active != job_id:
+                await runner.resume_if_answered(job_id)
+        else:
             await runner.submit(job_id)
         return get(job_id)
 

@@ -25,6 +25,7 @@ from .delegation import Delegation
 from .engine.service import SandboxEngine
 from .files import atomic_bytes
 from .harness_tools import register_harness_tools
+from .jobstatus import stop_status
 from .state import UNSETTLED_TASKS, identity
 from .store import Store, clean
 from .tools import JobDeps, register_tools
@@ -130,9 +131,6 @@ def add_user_instructions(request: ModelRequest, pending: list[str]):
         request.parts.append(UserPromptPart(text))
 
 
-def stop_status(status: str) -> str | None:
-    """The status a run settles in when the user stopped it, or None to keep going."""
-    return {'pausing': 'paused', 'cancelled': 'cancelled'}.get(status)
 
 
 class Runner:
@@ -205,9 +203,29 @@ class Runner:
                 await self.delegation.stop(job_id)
                 self.active = None
                 self.queue.task_done()
+                await self.resume_if_answered(job_id)
+
+    async def resume_if_answered(self, job_id):
+        """Queue a sandbox job whose question was answered after its run stopped holding the sandbox. Safe to call
+        from both the answer endpoint and the worker: only the first call that finds the answer queues the job."""
+        queued = []
+
+        def claim(job):
+            if job.get('engine') == 'sandbox' and job['status'] == 'waiting' and job.get('answer'):
+                job.update(status='queued', error=None)
+                queued.append(True)
+
+        self.store.mutate(job_id, claim)
+        if queued:
+            self.store.event(job_id, 'job.queued', 'Queued with your answer', type='job')
+            await self.queue.put(job_id)
 
     async def run_with_limit(self, job_id):
-        deadline = asyncio.timeout(self.settings.job_timeout)
+        limit = self.settings.job_timeout
+        if self.store.get(job_id).get('engine') == 'sandbox':
+            # The engine stops itself at the Settings-page limit and saves; this outer limit is only a backstop.
+            limit = self.store.settings()['time_limit_minutes'] * 60 + 300
+        deadline = asyncio.timeout(limit)
         try:
             async with deadline:
                 await self.run(job_id)

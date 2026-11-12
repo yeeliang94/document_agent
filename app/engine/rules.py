@@ -69,6 +69,7 @@ def type_ok(kind: str, value) -> bool:
 
 
 def _key(value) -> str:
+    """A comparable form, as Excel compares list values: case and spaces ignored, 1 and '1' alike."""
     if _number(value) and float(value).is_integer():
         return str(int(value))
     return str(value).strip().casefold()
@@ -227,3 +228,54 @@ def describe_rules(rules: list[dict]) -> list[str]:
         'allowed': lambda r: f'In "{r["sheet"]}", {r["column"]} is one of {r["values"]}.',
     }
     return [words[r['type']](r) for r in rules if r.get('type') in words]
+
+
+RULE_KEYS = {
+    'balanced': ('sheet', 'debit', 'credit'),
+    'one_side': ('sheet', 'columns'),
+    'required': ('sheet', 'columns'),
+    'unique': ('sheet', 'columns'),
+    'allowed': ('sheet', 'column', 'values'),
+}
+
+
+def check_rule_definitions(rules) -> None:
+    """Refuse rules the checks cannot apply, so a setup mistake is reported to the person, not to the agent."""
+    if not isinstance(rules, list):
+        raise ValueError('"rules" must be a list.')
+    for number, rule in enumerate(rules, start=1):
+        kind = rule.get('type') if isinstance(rule, dict) else None
+        if kind not in RULE_KEYS:
+            raise ValueError(f'Rule {number} has unknown type {kind!r}; use one of {sorted(RULE_KEYS)}.')
+        missing = [k for k in RULE_KEYS[kind] if not rule.get(k)]
+        if missing:
+            raise ValueError(f'Rule {number} ({kind}) needs {missing}.')
+
+
+def check_format_definition(spec) -> None:
+    """Refuse a format the checks cannot apply: no sheets, columns without names, unknown types or rule types, or
+    rules that name a column the format does not have."""
+    if not isinstance(spec, dict) or not isinstance(spec.get('sheets'), list) or not spec['sheets']:
+        raise ValueError('A format needs a "sheets" list with at least one sheet.')
+    columns = {}
+    for sheet in spec['sheets']:
+        if not isinstance(sheet, dict) or not sheet.get('name') or not isinstance(sheet.get('columns'), list):
+            raise ValueError('Each format sheet needs a "name" and a "columns" list.')
+        names = []
+        for column in sheet['columns']:
+            if not isinstance(column, dict) or not column.get('name'):
+                raise ValueError(f'Sheet "{sheet["name"]}": each column needs a "name".')
+            if column.get('type', 'text') not in TYPES:
+                raise ValueError(
+                    f'Sheet "{sheet["name"]}": column "{column["name"]}" type must be one of {list(TYPES)}.'
+                )
+            names.append(column['name'])
+        columns[sheet['name']] = set(names)
+    check_rule_definitions(spec.get('rules', []))
+    for rule in spec.get('rules', []):
+        named = [rule.get(k) for k in ('debit', 'credit', 'column') if rule.get(k)] + list(rule.get('columns', []))
+        if rule['sheet'] not in columns:
+            raise ValueError(f'Rule {rule["type"]} names sheet "{rule["sheet"]}", which the format does not have.')
+        unknown = [c for c in named if c not in columns[rule['sheet']]]
+        if unknown:
+            raise ValueError(f'Rule {rule["type"]} on "{rule["sheet"]}" names columns {unknown} the format lacks.')

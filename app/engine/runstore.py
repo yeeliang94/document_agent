@@ -14,6 +14,7 @@ runs/<run id>/
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 import uuid
@@ -41,8 +42,12 @@ class RunStore:
         return self._outputs
 
     def add_input(self, source: Path) -> Path:
+        """Keep the exact input with the run. A hard link costs no space; a copy is the fallback across drives."""
         target = self.dir / 'input' / source.name
-        shutil.copy2(source, target)
+        try:
+            os.link(source, target)
+        except OSError:
+            shutil.copy2(source, target)
         return target
 
     def event(self, name: str, **data):

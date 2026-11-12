@@ -26,6 +26,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .rules import check_format_definition, check_rule_definitions
+
 DEFAULT_ANSWER = (
     'No further information is available right now. Make the most reasonable choice, record it in notes.md and list '
     'it in open_questions.'
@@ -38,11 +40,6 @@ class Deliverable:
     template: Path | None = None
     format: dict | None = None
     format_path: Path | None = None
-
-    def describe(self) -> str:
-        if self.template is not None:
-            return f'{self.name}: fill a copy of the template {self.template.name}'
-        return f'{self.name}: a new workbook built to the format {self.format_path.name if self.format_path else ""}'
 
 
 @dataclass(frozen=True)
@@ -92,8 +89,17 @@ def load_job(path: Path) -> JobSpec:
             deliverables.append(Deliverable(item['name'], template=folder / item['template']))
         else:
             spec_path = folder / item['format']
-            deliverables.append(Deliverable(item['name'], format=_read_json(spec_path), format_path=spec_path))
+            spec = _read_json(spec_path)
+            try:
+                check_format_definition(spec)
+            except ValueError as error:
+                raise SystemExit(f'{spec_path.name}: {error}') from error
+            deliverables.append(Deliverable(item['name'], format=spec, format_path=spec_path))
     answers = _read_json(folder / data['user_answers']) if data.get('user_answers') else []
+    try:
+        check_rule_definitions(data.get('rules', []))
+    except ValueError as error:
+        raise SystemExit(f'{path}: {error}') from error
     job = JobSpec(
         id=data['id'],
         module=data.get('module', 'payroll'),

@@ -88,7 +88,7 @@ def test_checks_catch_broken_output(packet, tmp_path):
     text = '\n'.join(check(out, target)['issues'])
     for expected in [
         'Entity Summary!B2 was', 'Lists!A3 was', 'visibility changed', 'I2', 'must be a number',
-        "'Legal' is not in its dropdown", 'G4 is blank', 'duplicates row 5', 'no entry with "path" for 11 file',
+        "'Legal' is not in its dropdown", 'G4 is blank', 'duplicates row 5', 'no entry with "path" for 10 file',
         '"decision" must be one of',
     ]:  # fmt: skip
         assert expected in text, expected
@@ -504,3 +504,208 @@ def test_proxy_check_summary_says_what_was_actually_shown(outcomes, expected, ca
     assert f'files out:       {expected[0]}' in out and f'kept between calls: {expected[1]}' in out
     assert code == (0 if outcomes['B2'] and (outcomes['B3'] or outcomes['B5']) else 1)
     proxy_check.RESULTS.clear()
+
+
+def test_dropdowns_compare_like_excel_and_template_rows_are_not_the_agents(tmp_path):
+    template = tmp_path / 't.xlsx'
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Data'
+    ws.append(['Code', 'Grade', 'Total'])
+    ws.append(['Subtotal', None, '=SUM(C3:C9)'])  # a template row with a validated blank cell
+    rule = DataValidation(type='list', formula1='"1,2,3"', allow_blank=False)
+    rule.add('B2:B100')
+    ws.add_data_validation(rule)
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    ws.append(['A', 2, 5])  # the number 2 matches the text "2" in the dropdown, as in Excel
+    ws.append(['B', None, 6])  # the agent wrote this row and left a required cell blank
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    assert run_checks(outputs, job, inventory(job.zip), proof='none')['issues'] == [
+        'Data!B4 is blank; the template requires a value.'
+    ]
+
+
+def test_junk_files_need_no_decision(tmp_path):
+    zip_path = tmp_path / 'p.zip'
+    with zipfile.ZipFile(zip_path, 'w') as archive:
+        archive.writestr('a.csv', 'x')
+        archive.writestr('Thumbs.db', 'junk')
+    from app.engine.checks import check_map
+
+    assert check_map({'a.csv': {'path': 'a.csv', 'decision': 'used', 'reason': 'r'}}, inventory(zip_path)) == []
+
+
+def test_duplicated_output_rows_lower_precision(tmp_path):
+    from sandbox_agent.score import score_sheet
+
+    wb = Workbook()
+    wb.active.title = 'S'
+    wb.active.append(['ID', 'Amount'])
+    wb.active.append(['A', 1])
+    wb.active.append(['A', 1])
+    spec = {'key': ['ID'], 'fields': ['Amount'], 'rows': [{'ID': 'A', 'Amount': 1}]}
+    assert score_sheet(wb, 'S', spec)['rows_extra'] == 1
+
+
+def test_broken_formats_and_rules_are_refused_before_a_run():
+    from app.engine.rules import check_format_definition, check_rule_definitions
+
+    check_format_definition(JOURNAL)
+    for broken, message in [
+        ({'sheets': []}, 'at least one sheet'),
+        ({'sheets': [{'name': 'J', 'columns': [{'name': 'A', 'type': 'money'}]}]}, 'type must be one of'),
+        ({**JOURNAL, 'rules': [{'type': 'balanced', 'sheet': 'Journal', 'debit': 'Dr', 'credit': 'Credit'}]}, 'lacks'),
+        ({**JOURNAL, 'rules': [{'type': 'sums_to', 'sheet': 'Journal'}]}, 'unknown type'),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            check_format_definition(broken)
+    with pytest.raises(ValueError, match='needs'):
+        check_rule_definitions([{'type': 'unique', 'sheet': 'S'}])
+
+
+class FakeStream:
+    """Stands in for one streamed SDK run: a few events, then a result."""
+
+    def __init__(self, final=None, turns=3, tokens=100):
+        self.final_output, self.current_turn = final, turns
+        self.context_wrapper = SimpleNamespace(
+            usage=SimpleNamespace(requests=1, input_tokens=tokens, output_tokens=0, input_tokens_details=None,
+                                  output_tokens_details=None))  # fmt: skip
+        self.cancelled = None
+
+    async def stream_events(self):
+        for _ in range(3):
+            yield SimpleNamespace(type='run_item_stream_event', name='other', item=None)
+
+    def cancel(self, mode):
+        self.cancelled = mode
+
+    def to_input_list(self):
+        return [{'role': 'user', 'content': 'so far'}]
+
+
+class StopAfter(SimpleNamespace):
+    def stop_requested(self):
+        return self.stop
+
+    def new_messages(self):
+        return []
+
+
+def _drive_job(tmp_path, **limits):
+    return SimpleNamespace(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60,
+                           max_tokens=10_000, **limits)  # fmt: skip
+
+
+def test_a_cancel_wins_even_when_the_agent_has_just_finished(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    done = SimpleNamespace(status='complete')
+    monkeypatch.setattr(engine.Runner, 'run_streamed', lambda *a, **k: FakeStream(final=done))
+    store = RunStore(tmp_path)
+    with pytest.raises(engine.RunStopped) as stopped:
+        asyncio.run(engine._drive(None, 'go', _drive_job(tmp_path), store, print, StopAfter(stop='cancelled')))
+    assert stopped.value.status == 'cancelled'
+    # a pause that arrives as the agent finishes lets the finished result stand
+    result = asyncio.run(engine._drive(None, 'go', _drive_job(tmp_path), store, print, StopAfter(stop='paused')))
+    assert result.final_output is done
+
+
+def test_turn_and_token_limits_hold_across_continuations(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    seen = []
+
+    def run(*_, max_turns, **__):
+        seen.append(max_turns)
+        return FakeStream(final=SimpleNamespace(status='complete'), turns=7, tokens=12_000)
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', run)
+    job = _drive_job(tmp_path)
+    job.turns_used = 50
+    store = RunStore(tmp_path)
+    with pytest.raises(engine.LimitReached, match='token limit'):
+        asyncio.run(engine._drive(None, 'go', job, store, print, StopAfter(stop=None)))
+    assert seen == [10] and job.turns_used == 57  # only the turns left were offered
+    job.turns_used = 60
+    with pytest.raises(engine.LimitReached, match='60-turn limit'):
+        asyncio.run(engine._drive(None, 'go', job, store, print, StopAfter(stop=None)))
+
+
+class FakeSandbox:
+    def __init__(self, files=None):
+        self.id, self.files = 'cntr_test', files or {}
+
+    async def upload_file(self, local, name=None):
+        return f'/mnt/data/{name or local.name}'
+
+    async def upload_bytes(self, name, data):
+        return f'/mnt/data/{name}'
+
+    async def list_files(self):
+        return [{'id': p, 'path': p} for p in self.files]
+
+    async def download_id(self, file_id):
+        return self.files[file_id]
+
+    async def status(self):
+        return 'running'
+
+
+def _run_with_fakes(tmp_path, monkeypatch, box, drive, review=None, **options):
+    import contextlib
+
+    import app.engine.agent as engine
+
+    @contextlib.asynccontextmanager
+    async def opened(*_, **__):
+        yield box
+
+    monkeypatch.setattr(engine.Sandbox, 'open', opened)
+    monkeypatch.setattr(engine, '_drive', drive)
+    if review:
+        monkeypatch.setattr(engine, 'review', review)
+    zip_path = tmp_path / 'p.zip'
+    with zipfile.ZipFile(zip_path, 'w') as archive:
+        archive.writestr('a.csv', 'x')
+    template = tmp_path / 't.xlsx'
+    Workbook().save(template)
+    spec = JobSpec(
+        id='j', module='payroll', goal='g', zip=zip_path, deliverables=(Deliverable('o.xlsx', template=template),)
+    )
+    return asyncio.run(run_job(spec, Settings(api_key='k'), tmp_path / 'runs', echo=lambda _: None, **options))
+
+
+def test_a_resumed_run_that_stops_early_keeps_the_saved_outputs(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    outputs = tmp_path / 'job-outputs'
+    outputs.mkdir()
+    (outputs / 'o.xlsx').write_bytes(b'last good workbook')
+
+    async def stopped(*_args, **_kw):
+        raise engine.RunStopped('paused', FakeStream())
+
+    store = _run_with_fakes(tmp_path, monkeypatch, FakeSandbox(), stopped, resume='Continue.', outputs=outputs)
+    assert store.record['status'] == 'paused'
+    assert (outputs / 'o.xlsx').read_bytes() == b'last good workbook'
+
+
+def test_a_failed_review_never_sinks_a_run_that_passed_its_checks(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    async def finished(*_args, **_kw):
+        return FakeStream(final=engine.JobSummary(status='complete', summary='done'))
+
+    async def broken_review(*_args, **_kw):
+        raise engine.MaxTurnsExceeded('Max turns (20) exceeded')
+
+    monkeypatch.setattr(engine, '_check', lambda job: {'passed': True, 'issues': []})
+    store = _run_with_fakes(tmp_path, monkeypatch, FakeSandbox(), finished, broken_review, review_on=True)
+    assert store.record['status'] == 'complete' and store.record['error'] is None
+    events = (store.dir / 'events.jsonl').read_text(encoding='utf-8')
+    assert 'review.failed' in events

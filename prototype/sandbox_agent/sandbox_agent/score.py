@@ -74,18 +74,20 @@ def score_sheet(wb, sheet: str, spec: dict) -> dict:
         return {'rows_expected': len(spec['rows']), 'rows_found': 0, 'rows_extra': 0, 'sheet_missing': True,
                 'cells_right': 0, 'cells_total': 0}  # fmt: skip
     _, rows = table(wb[sheet], spec.get('header_row', 1))
-    got = {}
+    got, repeats = {}, 0
     for _, values in rows:
         if all(blank(values.get(c)) for c in spec['key']):
             continue
-        got.setdefault(row_key(values, spec['key']), values)
+        key = row_key(values, spec['key'])
+        repeats += key in got  # a duplicated row is an extra row, not a free one
+        got.setdefault(key, values)
     want = {row_key(r, spec['key']): r for r in spec['rows']}
     matched = set(want) & set(got)
     by_field = {f: sum(same(want[k].get(f), got[k].get(f)) for k in matched) for f in spec['fields']}
     return {
         'rows_expected': len(want),
         'rows_found': len(matched),
-        'rows_extra': len(set(got) - set(want)),
+        'rows_extra': len(set(got) - set(want)) + repeats,
         'missing': sorted('/'.join(k) for k in set(want) - set(got))[:20],
         'extra': sorted('/'.join(k) for k in set(got) - set(want))[:20],
         'cells_right': sum(by_field.values()),

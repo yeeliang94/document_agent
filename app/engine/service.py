@@ -17,7 +17,9 @@ import time
 import zipfile
 from pathlib import Path
 
+from ..jobstatus import stop_status
 from ..modules import MODULE_LABELS
+from ..store import clean
 from .agent import Control, run_job
 from .endpoint import Settings as Endpoint
 from .jobspec import Answerer, Deliverable, JobSpec
@@ -76,26 +78,28 @@ def with_hint(error: str | None) -> str | None:
 
 
 class AppControl(Control):
-    """Reads the job record, at most once a second, to learn about pauses, cancels and new instructions."""
+    """Reads the job record at most once a second, to learn about pauses, cancels and new instructions."""
 
     def __init__(self, store, job_id: str):
         self.store, self.job_id = store, job_id
         self.waiting = False  # set when a question timed out: stop and wait for the answer
         self._checked = 0.0
-        self._stop: str | None = None
+        self._job: dict = {}
+
+    def _current(self) -> dict:
+        now = time.monotonic()
+        if now - self._checked >= POLL_SECONDS:
+            self._checked = now
+            self._job = self.store.get(self.job_id)
+        return self._job
 
     def stop_requested(self) -> str | None:
         if self.waiting:
             return 'waiting'
-        now = time.monotonic()
-        if now - self._checked >= POLL_SECONDS:
-            self._checked = now
-            status = self.store.get(self.job_id)['status']
-            self._stop = {'pausing': 'paused', 'cancelled': 'cancelled'}.get(status)
-        return self._stop
+        return stop_status(self._current().get('status', ''))
 
     def new_messages(self) -> list[str]:
-        if not self.store.get(self.job_id).get('pending_messages'):
+        if not self._current().get('pending_messages'):
             return []
         taken: list[str] = []
 
@@ -104,22 +108,35 @@ class AppControl(Control):
             job['pending_messages'] = []
 
         self.store.mutate(self.job_id, take)
+        self._job = {**self._job, 'pending_messages': []}
         return taken
 
 
 def packet_zip(root: Path, files: list[dict], target: Path) -> Path:
-    """The job's source files as one zip, paths relative to inputs/, as the engine expects."""
+    """The job's source files as one zip, paths relative to inputs/. Inputs never change after upload, so the zip
+    is built once per job. Stored, not compressed: workbooks and PDFs are compressed already."""
+    if target.exists():
+        return target
     target.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+    partial = target.with_suffix('.partial')
+    with zipfile.ZipFile(partial, 'w', zipfile.ZIP_STORED) as archive:
         for entry in files:
             if entry['role'] == 'inputs':
                 archive.write(root / entry['path'], entry['path'].removeprefix('inputs/'))
+    partial.replace(target)
     return target
 
 
 def job_spec(store, job: dict) -> JobSpec:
+    """A template (.xlsx) makes a fill-the-template deliverable; a format (.json, see engine/rules.py) makes a
+    workbook built to that format."""
     root = store.path(job['id'])
-    template = root / next(e['path'] for e in job['files'] if e['role'] == 'template')
+    definition = root / next(e['path'] for e in job['files'] if e['role'] == 'template')
+    if definition.suffix.lower() == '.json':
+        spec = json.loads(definition.read_text(encoding='utf-8-sig'))
+        deliverable = Deliverable(f'{definition.stem}.xlsx', format=spec, format_path=definition)
+    else:
+        deliverable = Deliverable(f'{definition.stem}_output.xlsx', template=definition)
     module = MODULE_LABELS.get(job['module'], job['module'])
     goal = (job.get('instructions') or '').strip() or f'Prepare the {module} deliverable from the supplied files.'
     return JobSpec(
@@ -127,7 +144,7 @@ def job_spec(store, job: dict) -> JobSpec:
         module=job['module'],
         goal=f'{goal}\nReporting month: {job["period"]}.',
         zip=packet_zip(root, job['files'], root / 'working' / 'engine' / 'packet.zip'),
-        deliverables=(Deliverable(f'{template.stem}_output.xlsx', template=template),),
+        deliverables=(deliverable,),
         context=job.get('context') or '',
     )
 
@@ -150,14 +167,20 @@ def resume_card(store, job: dict) -> str | None:
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
     asked = job.get('engine_questions') or []
-    if job.get('question') and job.get('answer'):
-        asked = [*asked, {'question': job['question']['text'], 'answer': job['answer']}]
     if asked:
         parts.append(
             "Questions you asked and the user's answers:\n"
             + '\n'.join(f'- Q: {q["question"]}\n  A: {q["answer"]}' for q in asked)
         )
     return '\n\n'.join(parts)
+
+
+def take_answer(job: dict) -> None:
+    """Move an answered question into the job's question history (store.mutate callback)."""
+    if job.get('question') and job.get('answer'):
+        asked = job.get('engine_questions') or []
+        job['engine_questions'] = [*asked, {'question': job['question']['text'], 'answer': job['answer']}]
+    job.update(question=None, answer=None)
 
 
 class SandboxEngine:
@@ -175,16 +198,13 @@ class SandboxEngine:
 
     async def run(self, job_id: str):
         store = self.store
-        job = store.update(job_id, status='running', error=None)
+        store.mutate(job_id, lambda j: (take_answer(j), j.update(status='running', error=None)))
+        job = store.get(job_id)
         options = store.settings()
         root = store.path(job_id)
         attempt = len(list((root / 'engine').glob('run-*'))) + 1
         resume = resume_card(store, job)
-        spec = job_spec(store, job)
-        questions = list(job.get('engine_questions') or [])
-        if job.get('question') and job.get('answer'):
-            questions.append({'question': job['question']['text'], 'answer': job['answer']})
-        store.update(job_id, question=None, answer=None, engine_questions=questions)
+        spec = await asyncio.to_thread(job_spec, store, job)
         control = AppControl(store, job_id)
 
         def on_event(name: str, data: dict):
@@ -194,50 +214,58 @@ class SandboxEngine:
                 store.event(job_id, 'engine.' + name, message(data), type='engine', level=level, run=attempt)
 
         async def ask(question: str) -> str:
-            store.update(job_id, status='waiting', question={'text': question, 'call_id': 'sandbox'}, answer=None)
+            stopped = []
+
+            def post(j):
+                if j['status'] in ('pausing', 'cancelled'):
+                    stopped.append(j['status'])
+                else:
+                    j.update(status='waiting', question={'text': question, 'call_id': 'sandbox'}, answer=None)
+
+            store.mutate(job_id, post)
+            if stopped:
+                return 'The user stopped the job. End your turn now.'
             deadline = time.monotonic() + options['question_wait_minutes'] * SECONDS_PER_MINUTE
-            while time.monotonic() < deadline:
+            while True:
                 current = store.get(job_id)
                 if current['status'] == 'cancelled':
-                    control.waiting = False
-                    return 'The user cancelled the job. Stop now.'
+                    return 'The user cancelled the job. End your turn now.'
                 if current.get('answer'):
                     answer = current['answer']
-
-                    def answered(j, answer=answer):
-                        asked = [*(j.get('engine_questions') or []), {'question': question, 'answer': answer}]
-                        j.update(status='running', question=None, answer=None, engine_questions=asked)
-
-                    store.mutate(job_id, answered)
+                    store.mutate(job_id, lambda j: (take_answer(j), j.update(status='running')))
                     return answer
+                if time.monotonic() >= deadline:  # checked after one last look, so an answer just in time counts
+                    break
                 await asyncio.sleep(POLL_SECONDS)
             control.waiting = True
-            store.update(job_id, status='waiting', question={'text': question, 'call_id': 'sandbox'})
             return (
-                'The user has not answered yet. Stop now and end your turn with status partial; the job resumes '
-                'with their answer in a fresh sandbox.'
+                'The user has not answered yet. End your turn now with status partial; the job resumes with their '
+                'answer in a fresh sandbox.'
             )
 
-        run = await run_job(
-            spec,
-            self.endpoint(options),
-            root / 'engine',
-            run_id=f'run-{attempt:02d}',
-            outputs=root / 'outputs',
-            on_event=on_event,
-            control=control,
-            resume=resume,
-            answerer=Answerer(ask=ask),
-            max_scouts=options['max_scouts'],
-            review_on=options['reviewer'],
-            proof=options['proof'],
-            effort=options['effort'],
-            memory=options['sandbox_memory'],
-            max_turns=options['max_turns'],
-            timeout_seconds=max(60, self.settings.job_timeout - 30),
-            echo=lambda _: None,
-        )
-        self.settle(job_id, run.record, control.waiting)
+        record = (
+            await run_job(
+                spec,
+                self.endpoint(options),
+                root / 'engine',
+                run_id=f'run-{attempt:02d}',
+                outputs=root / 'outputs',
+                on_event=on_event,
+                control=control,
+                resume=resume,
+                answerer=Answerer(ask=ask, log=list(job.get('engine_questions') or [])),
+                max_scouts=options['max_scouts'],
+                review_on=options['reviewer'],
+                proof=options['proof'],
+                effort=options['effort'],
+                memory=options['sandbox_memory'],
+                max_turns=options['max_turns'],
+                max_tokens=options['token_limit_thousands'] * 1000,
+                timeout_seconds=options['time_limit_minutes'] * 60,
+                echo=lambda _: None,
+            )
+        ).record
+        self.settle(job_id, record, control.waiting)
 
     def artifacts(self, job_id: str, validated: bool) -> list[dict]:
         outputs = self.store.path(job_id) / 'outputs'
@@ -252,21 +280,21 @@ class SandboxEngine:
 
     def settle(self, job_id: str, record: dict, waiting: bool):
         store = self.store
-        engine_status = 'waiting' if waiting else record['status']
         check = record.get('final_check') or {}
         summary = (record.get('summary') or {}).get('summary', '')
         unresolved = (record.get('summary') or {}).get('open_questions', [])
         status = {
-            'complete': 'completed',
+            'complete': 'completed',  # run_job already turns a complete claim with failing checks into partial
             'partial': 'partial',
-            'stopped': 'paused',  # a turn or time limit: saved work is kept and the user can resume
+            'stopped': 'partial',  # a turn, time or token limit: saved work is kept and the user can continue
             'paused': 'paused',
             'cancelled': 'cancelled',
-            'waiting': 'waiting',
-        }.get(engine_status, 'failed')
-        error = with_hint(record.get('error'))
-        if status == 'completed' and not check.get('passed'):
-            status = 'partial'
+        }.get(record['status'], 'failed')
+        if waiting:
+            status = 'waiting'
+        error = clean(with_hint(record.get('error')) or '') or None
+        if status == 'partial' and error:
+            summary = (summary + '\n' if summary else '') + error
         if status == 'partial' and check.get('issues'):
             summary += '\nThe last check still lists problems; see the run record.'
         if status in ('completed', 'partial'):
@@ -275,7 +303,6 @@ class SandboxEngine:
         tokens = record.get('usage') or {}
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
         updates = {
-            'status': status,
             'error': error if status in ('failed', 'paused') else None,
             'artifacts': self.artifacts(job_id, status == 'completed'),
             'summary': summary,
@@ -286,9 +313,18 @@ class SandboxEngine:
                 'output_tokens': sum(p.get('output_tokens', 0) for p in parts),
             },
         }
-        if status != 'waiting':
-            updates['question'] = None
-        store.update(job_id, **updates)
-        level = 'ERROR' if status == 'failed' else 'INFO'
-        message = {'failed': error or 'The run failed.', 'waiting': 'Waiting for your answer.'}.get(status, summary)
-        store.event(job_id, 'job.' + status, message or status, type='job', level=level)
+        final = {}
+
+        def apply(job):
+            # A cancel the run did not see in time still wins; nothing the run reports overrides it.
+            final['status'] = 'cancelled' if job['status'] == 'cancelled' else status
+            job.update(updates, status=final['status'])
+            if final['status'] != 'waiting':
+                job['question'] = None
+
+        store.mutate(job_id, apply)
+        level = 'ERROR' if final['status'] == 'failed' else 'INFO'
+        message = {'failed': error or 'The run failed.', 'waiting': 'Waiting for your answer.'}.get(
+            final['status'], summary
+        )
+        store.event(job_id, 'job.' + final['status'], message or final['status'], type='job', level=level)

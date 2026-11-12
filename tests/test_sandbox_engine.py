@@ -1,6 +1,7 @@
 """The app side of the sandbox engine: settings, routing, questions, pauses and how a run settles. The engine run itself
 is replaced by a fake here; prototype/sandbox_agent/tests covers the engine, and live runs cover OpenAI."""
 
+import asyncio
 import json
 import time
 import zipfile
@@ -220,17 +221,118 @@ def test_failures_explain_the_proxy_region_and_permission_errors(tmp_path, monke
     assert with_hint('something else') == 'something else'
 
 
-def test_a_complete_claim_with_failing_checks_is_partial(tmp_path, monkeypatch):
+def test_a_partial_run_keeps_its_workbook_as_a_draft(tmp_path, monkeypatch):
     async def behaviour(outputs, **_):
         write_output(outputs)
-        return finished(passed=False)
+        return {**finished(status='partial', passed=False), 'error': 'Reached the 60-turn limit.'}
 
     monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
     with client_for(tmp_path) as client:
         job = start_sandbox_job(client)
         done = wait_for_job(client, job['id'])
-        assert done['status'] == 'partial'
+        assert done['status'] == 'partial' and 'turn limit' in done['summary']
         assert next(a for a in done['artifacts'] if a['name'] == 'template_output.xlsx')['status'] == 'draft'
+
+
+def test_a_limit_stop_is_partial_and_can_continue(tmp_path, monkeypatch):
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        return {**finished(status='stopped', passed=False), 'error': 'Reached the token limit of 3,000,000.'}
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        done = wait_for_job(client, job['id'])
+        assert done['status'] == 'partial' and 'token limit' in done['summary']
+        assert (tmp_path / 'jobs' / job['id'] / 'outputs' / 'processing_summary.txt').exists()
+
+
+def test_an_answer_sent_while_the_run_winds_down_still_resumes_the_job(tmp_path, monkeypatch):
+    """The question wait ends, the user answers while the run is still saving, and the job must not be stranded."""
+    winding_down = {}
+
+    async def first(answerer, outputs, **_):
+        write_output(outputs)
+        await answerer.answer('Which salary is right for EMP001?')  # times out
+        winding_down['now'] = True
+        while not winding_down.get('answered'):  # the user answers before this run has finished
+            await asyncio.sleep(0.01)
+        return finished(status='partial')
+
+    async def second(**_):
+        return finished()
+
+    runs = iter([first, second])
+
+    async def behaviour(**kwargs):
+        return await next(runs)(**kwargs)
+
+    fake = FakeRun(behaviour)
+    monkeypatch.setattr(service, 'run_job', fake)
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0.01)
+    monkeypatch.setattr(service, 'SECONDS_PER_MINUTE', 0.1)
+    with client_for(tmp_path) as client:
+        client.put('/api/settings', json={'values': {'question_wait_minutes': 1}})
+        job = start_sandbox_job(client)
+        deadline = time.monotonic() + 10
+        while not winding_down.get('now') and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert client.post(f'/api/jobs/{job["id"]}/answer', json={'answer': 'Use 4,500.'}).status_code == 200
+        winding_down['answered'] = True
+        done = wait_for_job(client, job['id'])
+        assert done['status'] == 'completed' and len(fake.calls) == 2
+        assert 'A: Use 4,500.' in fake.calls[1].resume
+
+
+def test_a_cancel_during_the_last_turn_is_not_overwritten(tmp_path, monkeypatch):
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        store = Store(tmp_path)
+        job_id = next(iter(j['id'] for j in store.jobs()))
+        store.update(job_id, status='cancelled')  # the user cancels as the agent finishes
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        assert wait_for_job(client, job['id'], statuses=('cancelled', 'completed'))['status'] == 'cancelled'
+
+
+def test_settings_show_the_endpoint_and_warn_about_regions(tmp_path):
+    settings = Settings(data_dir=tmp_path, api_key='k', base_url='https://genai-emea.example.com/v1',
+                        model='openai.global.gpt-6-luna')  # fmt: skip
+    with TestClient(base_url=LOCAL, app=create_app(settings)) as client:
+        connection = client.get('/api/settings').json()['connection']
+        assert connection['model'] == 'openai.global.gpt-6-luna' and '"global"' in connection['warning']
+        bad = client.put('/api/settings', json={'values': {'litellm_provider': 'openai\nX-Evil: 1'}})
+        assert bad.status_code == 400
+
+
+def test_a_format_upload_makes_a_built_workbook_deliverable(tmp_path, monkeypatch):
+    fmt = {'sheets': [{'name': 'Journal', 'columns': [{'name': 'Ref', 'type': 'text', 'required': True}]}]}
+
+    async def behaviour(outputs, **_):
+        return finished()
+
+    fake = FakeRun(behaviour)
+    monkeypatch.setattr(service, 'run_job', fake)
+    with client_for(tmp_path) as client:
+        client.put('/api/settings', json={'values': {'engine': 'sandbox'}})
+        files = [('files', ('a.csv', b'x', 'text/csv'))]
+        upload = {'module': 'ap', 'period': '2026-11', 'instructions': 'Build the journal.'}
+        broken = client.post('/api/jobs', data=upload, files=[('template', ('j.json', b'{"sheets": []}')), *files])
+        assert broken.status_code == 400 and 'at least one sheet' in broken.json()['detail']
+        job = client.post(
+            '/api/jobs', data=upload, files=[('template', ('journal.json', json.dumps(fmt).encode())), *files]
+        )
+        assert job.status_code == 201
+        client.post(f'/api/jobs/{job.json()["id"]}/start')
+        wait_for_job(client, job.json()['id'])
+        deliverable = fake.calls[0].spec.deliverables[0]
+        assert deliverable.name == 'journal.xlsx' and deliverable.format == fmt
+        client.put('/api/settings', json={'values': {'engine': 'classic'}})
+        refused = client.post('/api/jobs', data=upload, files=[('template', ('journal.json', b'{}')), *files])
+        assert refused.status_code == 400
 
 
 def test_resume_card_is_empty_before_any_run(tmp_path):
