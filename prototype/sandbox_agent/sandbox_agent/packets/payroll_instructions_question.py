@@ -147,7 +147,13 @@ def build(out: Path, seed: int = 20261031) -> dict:
     changes = [
         {'p': conflict, 'date': '2026-11-01', 'old': conflict['salary'], 'new': 6500.0, 'reason': 'Market Adjustment'},
         {'p': promo, 'date': '2026-11-01', 'old': promo['salary'], 'new': promo_new, 'reason': 'Promotion'},
-        {'p': role_change, 'date': '2026-11-16', 'old': role_change['salary'], 'new': role_new, 'reason': 'Role Change'},
+        {
+            'p': role_change,
+            'date': '2026-11-16',
+            'old': role_change['salary'],
+            'new': role_new,
+            'reason': 'Role Change',
+        },
     ]
     leavers = [
         {'p': leaver_a, 'last': '2026-11-20', 'note': 'Pay out 3 days unused annual leave'},
@@ -172,7 +178,13 @@ def build(out: Path, seed: int = 20261031) -> dict:
             f'- {p["id"]} {p["name"]}, starts {_long(p["start"])}, {p["department"]}, monthly salary SGD {p["salary"]:,.0f}'
             for p in main
         ]
-        + ['', 'Contracts are signed and filed. Bank details will follow from the employees directly.', '', 'Thanks,', 'TA team'],
+        + [
+            '',
+            'Contracts are signed and filed. Bank details will follow from the employees directly.',
+            '',
+            'Thanks,',
+            'TA team',
+        ],
     )
     late = joiners[2]
     (packet / TXT_LATE_JOINER).write_text(

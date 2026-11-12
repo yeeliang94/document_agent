@@ -22,6 +22,7 @@ from .config import Settings
 from .context import ContextBudgetError, ContextPolicy, calibrate, request_retry
 from .datasets import recover_operation
 from .delegation import Delegation
+from .engine.service import SandboxEngine
 from .files import atomic_bytes
 from .harness_tools import register_harness_tools
 from .state import UNSETTLED_TASKS, identity
@@ -144,6 +145,7 @@ class Runner:
         self.active = None
         self._model = None
         self.delegation = Delegation(self)
+        self.sandbox = SandboxEngine(store, settings)
 
     async def start(self):
         for job in self.store.jobs():
@@ -245,6 +247,9 @@ class Runner:
     # --- One run ----------------------------------------------------------
 
     async def run(self, job_id):
+        if self.store.get(job_id).get('engine') == 'sandbox':
+            await self.sandbox.run(job_id)
+            return
         job = self.store.update(job_id, status='running', error=None)
         state = self.store.state(job_id)
         state.inventory(job['files'])

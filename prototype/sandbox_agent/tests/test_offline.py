@@ -168,7 +168,9 @@ def test_provenance_must_cover_every_written_row_with_used_files(tmp_path):
     job = _tiny_job(tmp_path, Deliverable('j.xlsx', format=JOURNAL, format_path=spec_path))
     outputs = tmp_path / 'outputs'
     outputs.mkdir()
-    _journal([['PAY-1', '2026-11-20', '2100', 100, 0], ['PAY-1', '2026-11-20', '1010', 0, 100]]).save(outputs / 'j.xlsx')
+    _journal([['PAY-1', '2026-11-20', '2100', 100, 0], ['PAY-1', '2026-11-20', '1010', 0, 100]]).save(
+        outputs / 'j.xlsx'
+    )
     _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
     files = inventory(job.zip)
     (outputs / 'provenance.json').write_text(
@@ -301,7 +303,9 @@ def test_a_bad_upload_is_recorded_as_failed(tmp_path):
     bad.write_text('this is not a zip', encoding='utf-8')
     template = tmp_path / 't.xlsx'
     Workbook().save(template)
-    spec = JobSpec(id='bad', module='payroll', goal='g', zip=bad, deliverables=(Deliverable('o.xlsx', template=template),))
+    spec = JobSpec(
+        id='bad', module='payroll', goal='g', zip=bad, deliverables=(Deliverable('o.xlsx', template=template),)
+    )
     store = run_job(spec, Settings(api_key='unused'), tmp_path / 'runs', echo=lambda _: None)
     store = asyncio.run(store)
     record = json.loads((store.dir / 'run.json').read_text(encoding='utf-8'))

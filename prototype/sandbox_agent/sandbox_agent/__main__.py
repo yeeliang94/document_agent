@@ -1,10 +1,10 @@
 """Command line.
 
-  python -m sandbox_agent packets runs/packets                  build every test packet and self-test it
-  python -m sandbox_agent run --job runs/packets/payment_journal --shape C
-  python -m sandbox_agent run --zip my.zip --template my_template.xlsx --goal "Prepare ..."
-  python -m sandbox_agent experiment --packets runs/packets --shapes A,B,C --repeats 1
-  python -m sandbox_agent settings                              show the endpoint and model a run would use
+python -m sandbox_agent packets runs/packets                  build every test packet and self-test it
+python -m sandbox_agent run --job runs/packets/payment_journal --shape C
+python -m sandbox_agent run --zip my.zip --template my_template.xlsx --goal "Prepare ..."
+python -m sandbox_agent experiment --packets runs/packets --shapes A,B,C --repeats 1
+python -m sandbox_agent settings                              show the endpoint and model a run would use
 """
 
 from __future__ import annotations
@@ -31,10 +31,14 @@ SUMMARY_KEYS = ('row_recall', 'row_precision', 'cell_accuracy', 'relevance_accur
 
 def _run_options(parser: argparse.ArgumentParser):
     add_endpoint_args(parser)
-    parser.add_argument('--shape', default='B', choices=sorted(SHAPES), help='A lead only, B with scouts, C with scouts and reviewer')
+    parser.add_argument(
+        '--shape', default='B', choices=sorted(SHAPES), help='A lead only, B with scouts, C with scouts and reviewer'
+    )
     parser.add_argument('--max-scouts', type=int, help='override the shape: 0 turns parallel scouts off')
     parser.add_argument('--review', action=argparse.BooleanOptionalAction, default=None, help='override the shape')
-    parser.add_argument('--proof', default='row', choices=['row', 'none'], help='row: every written row names its sources')
+    parser.add_argument(
+        '--proof', default='row', choices=['row', 'none'], help='row: every written row names its sources'
+    )
     parser.add_argument('--scout-model')
     parser.add_argument('--effort', default='medium', choices=['none', 'low', 'medium', 'high', 'xhigh'])
     parser.add_argument('--max-turns', type=int, default=60)
@@ -93,7 +97,9 @@ def main() -> None:
     run.add_argument('--template', type=Path)
     run.add_argument('--goal', help='what the run should produce (with --zip and --template)')
     run.add_argument('--module', default='payroll')
-    run.add_argument('--answer-key', type=Path, help='score against this key (default: answer_key.json beside job.json)')
+    run.add_argument(
+        '--answer-key', type=Path, help='score against this key (default: answer_key.json beside job.json)'
+    )
     run.add_argument('--ask', choices=['scripted', 'console'], default='scripted', help='who answers the agent')
     run.add_argument('--runs', type=Path, default=HERE / 'runs')
     _run_options(run)
@@ -139,9 +145,7 @@ def main() -> None:
     else:
         parser.error('give --job, or --zip with --template and --goal')
     answerer = Answerer(spec.answers, ask=_console_ask if args.ask == 'console' else None)
-    store = asyncio.run(
-        run_job(spec, settings, args.runs, shape=args.shape, answerer=answerer, **_options(args))
-    )
+    store = asyncio.run(run_job(spec, settings, args.runs, shape=args.shape, answerer=answerer, **_options(args)))
     key_path = args.answer_key or (spec.folder / 'answer_key.json' if spec.folder else None)
     if key_path and key_path.exists():
         result = score(store.outputs, json.loads(key_path.read_text(encoding='utf-8')), store.record.get('questions'))

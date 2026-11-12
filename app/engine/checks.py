@@ -380,7 +380,9 @@ def describe_template(path: Path) -> str:
         headers = [str(c.value) for c in ws[1] if not blank(c.value)] if ws.max_row else []
         formulas = sum(1 for row in ws.iter_rows() for c in row if isinstance(c.value, str) and c.value.startswith('='))
         state = '' if ws.sheet_state == 'visible' else f' ({ws.sheet_state})'
-        lines.append(f'Sheet "{ws.title}"{state}: row 1 {headers[:20]}' + (f', {formulas} formula cells' if formulas else ''))
+        lines.append(
+            f'Sheet "{ws.title}"{state}: row 1 {headers[:20]}' + (f', {formulas} formula cells' if formulas else '')
+        )
         for rule in ws.data_validations.dataValidation:
             what = f'dropdown from {rule.formula1}' if rule.type == 'list' else f'{rule.type} only'
             lines.append(f'  - {rule.sqref}: {what}' + ('' if rule.allow_blank else ', required on used rows'))

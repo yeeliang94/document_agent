@@ -99,7 +99,10 @@ def summary(rows: list[dict]) -> str:
     failures = [r for r in rows if r['status'] != 'complete']
     if failures:
         lines += ['## Runs that did not complete', '']
-        lines += [f'- {r["packet"]} / {r["shape"]} ({r["run"]}): {r["status"]}, {r["error"] or "see run.json"}' for r in failures]
+        lines += [
+            f'- {r["packet"]} / {r["shape"]} ({r["run"]}): {r["status"]}, {r["error"] or "see run.json"}'
+            for r in failures
+        ]
     return '\n'.join(lines) + '\n'
 
 
@@ -113,7 +116,9 @@ async def experiment(
     logs.mkdir()
     jobs = sorted(p.parent for p in packets.glob('*/job.json') if not only or p.parent.name in only)
     if not jobs:
-        raise SystemExit(f'No packets with job.json under {packets}. Build them with: python -m sandbox_agent packets {packets}')
+        raise SystemExit(
+            f'No packets with job.json under {packets}. Build them with: python -m sandbox_agent packets {packets}'
+        )
     plan = [(job, shape) for _ in range(repeats) for job in jobs for shape in shapes]
     gate = asyncio.Semaphore(concurrency)
     results_path = folder / 'results.jsonl'

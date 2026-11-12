@@ -126,7 +126,9 @@ def _change_log(path: Path, entity: str, items: list[dict]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', newline='', encoding='utf-8') as handle:
         writer = csv.writer(handle)
-        writer.writerow(['log_id', 'entity', 'emp_id', 'emp_name', 'change', 'effective', 'value_myr', 'approved_by', 'note'])
+        writer.writerow(
+            ['log_id', 'entity', 'emp_id', 'emp_name', 'change', 'effective', 'value_myr', 'approved_by', 'note']
+        )
         for n, item in enumerate(items, start=1):
             writer.writerow([f'CL-{entity}-{n:03d}', entity, item['p']['id'], item['p']['name'], item['change'],
                              _short(item['date']), f'{item["amount"]:.2f}', item.get('by', 'HR Manager'),
@@ -319,7 +321,9 @@ def build(out: Path, seed: int = 20261031) -> dict:
             _change_log(keep(f'{entity}/{folder_month}/Change_log_{entity}_{tag}.csv'), entity, log)
         if entity == 'MY01' or (entity == 'MY02' and folder_month == '2026-10'):
             ot = [{'p': p, 'hours': rng.randint(4, 16), 'amount': round(rng.uniform(120, 480), 2)} for p in staff[:2]]
-            _attendance(keep(f'{entity}/{folder_month}/Timesheets/{entity}_{tag}_attendance.xlsx'), entity, label, staff, ot)
+            _attendance(
+                keep(f'{entity}/{folder_month}/Timesheets/{entity}_{tag}_attendance.xlsx'), entity, label, staff, ot
+            )
     _eml(
         keep('MY01/2026-11/Emails/Loan deduction - MY01 November.eml'),
         'Finance Ops MY <finops-my@example.test>',
@@ -360,7 +364,9 @@ def build(out: Path, seed: int = 20261031) -> dict:
         writer.writerow(['journal', 'account', 'description', 'debit', 'credit'])
         for n in range(40):
             value = round(rng.uniform(100, 9000), 2)
-            writer.writerow([f'JV-10-{n:03d}', rng.choice(['6100', '6110', '2100', '1010']), 'Payroll accrual', value, 0])
+            writer.writerow(
+                [f'JV-10-{n:03d}', rng.choice(['6100', '6110', '2100', '1010']), 'Payroll accrual', value, 0]
+            )
     write_pdf(
         keep('HR/Benefits/Medical_insurance_renewal_2027.pdf'),
         ['Group medical insurance renewal - policy year 2027', 'Premiums change from 1 January 2027.',

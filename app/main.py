@@ -285,7 +285,9 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         store.update(job_id, answer=body.answer)
         store.state(job_id).instruction(body.answer, 'answer')
         store.event(job_id, 'user.answer', body.answer, type='user')
-        await runner.submit(job_id)
+        # A sandbox run still holding its sandbox picks the answer up itself; otherwise a new run resumes the job.
+        if not (runner.active == job_id and j.get('engine') == 'sandbox'):
+            await runner.submit(job_id)
         return get(job_id)
 
     @api.post('/api/jobs/{job_id}/message')

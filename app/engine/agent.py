@@ -540,8 +540,7 @@ async def run_job(
                 remote=remote,
             )
             inputs_text = '\n'.join(
-                f'- {"template" if d.template else "format"} for {d.name}: '
-                f'{remote[(d.template or d.format_path).name]}'
+                f'- {"template" if d.template else "format"} for {d.name}: {remote[(d.template or d.format_path).name]}'
                 for d in spec.deliverables
             )
             tools = [CodeInterpreterTool(tool_config={'type': 'code_interpreter', 'container': main.id}), ask_user]

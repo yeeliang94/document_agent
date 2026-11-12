@@ -25,8 +25,10 @@ Same as the main app:
    - **Part B** is the automatic way: OpenAI creates the sandbox on the first code call, files go in through the Files API, and come out by download or, failing that, as text the code prints.
    - If Part A step 1 fails with 403, the proxy blocks sandbox creation. Copying `sandbox_settings.example.json` to `sandbox_settings.json` and setting `"provider"` (`"openai"` or `"azure"`) or `"model_on_create": true` sometimes helps. Otherwise the proxy admin can allow LiteLLM's `/v1/containers` routes, or the agent can switch to the automatic way if Part B passes.
    - Send back the whole output. Part B decides what the agent needs if Part A stays blocked.
-3. **Test the agent** (once Part A passes; today the agent needs it). Run `run_test.bat`. It builds the synthetic test packet, runs the agent through the proxy and scores the result. It usually takes 4 minutes, and up to 15 when OpenAI is slow. While code runs you see `... running code in the sandbox` lines.
-4. **Your own files** (only once approved for this use): `run_agent.bat path\to\packet.zip path\to\template.xlsx`.
+   - If a step fails with "container not found", the model alias and the address are in different regions. The EMEA address works with the `openai.eu.gpt-6-luna` alias.
+3. **Test the agent.** Run `run_test.bat`. It builds the six synthetic test packets once, runs the agent on the payroll packet through the proxy and scores the result. It usually takes 5 minutes, and up to 15 when OpenAI is slow. Name another packet to try it: `run_test.bat payment_journal`. While code runs you see `... running code in the sandbox` lines.
+4. **The full scorecard** (Phase 7, about an hour, paid): `run_scorecard.bat`. It runs every packet and writes a comparison table under `runs\experiments\`. Send back its `summary.md`.
+5. **Your own files** (only once approved for this use): `run_agent.bat path\to\packet.zip path\to\template.xlsx "What the run should produce"`. If the agent asks a question, type the answer in the window.
 
 Each script waits for a key press before closing, so you can read or copy its output.
 - Every run is saved under `runs\<run id>\`. The README says what each file holds.
@@ -39,5 +41,6 @@ To use a different proxy or model for the prototype only, put `"base_url"` or `"
 
 - The whole output of `check_proxy.bat`, including the summary.
 - The last lines of `run_test.bat`: the status and the score block.
+- `summary.md` from `run_scorecard.bat`, when you run it.
 
 None of these contain payroll data.

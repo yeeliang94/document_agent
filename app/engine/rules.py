@@ -84,14 +84,18 @@ def check_format(wb, spec: dict, label: str) -> list[str]:
     for sheet in spec.get('sheets', []):
         name = sheet['name']
         if name not in wb.sheetnames:
-            issues.append(f'{label}: sheet "{name}" is missing (the format needs sheets {[s["name"] for s in spec["sheets"]]}).')
+            issues.append(
+                f'{label}: sheet "{name}" is missing (the format needs sheets {[s["name"] for s in spec["sheets"]]}).'
+            )
             continue
         header_row = sheet.get('header_row', 1)
         columns = sheet.get('columns', [])
         headers, rows = table(wb[name], header_row)
         wanted = [c['name'] for c in columns]
         if list(headers)[: len(wanted)] != wanted:
-            issues.append(f'{label}: "{name}" row {header_row} must hold the headers {wanted} in this order; it holds {list(headers)}.')
+            issues.append(
+                f'{label}: "{name}" row {header_row} must hold the headers {wanted} in this order; it holds {list(headers)}.'
+            )
             continue
         if not rows:
             issues.append(f'{label}: "{name}" has no data rows.')
@@ -140,7 +144,9 @@ def check_rules(wb, rules: list[dict], label: str) -> list[str]:
             issues.append(f'{label}: rule {rule["type"]} needs sheet "{sheet}", which is missing.')
             continue
         headers, rows = table(wb[sheet], rule.get('header_row', 1))
-        needed = [rule.get(k) for k in ('debit', 'credit', 'group_by', 'column') if rule.get(k)] + rule.get('columns', [])
+        needed = [rule.get(k) for k in ('debit', 'credit', 'group_by', 'column') if rule.get(k)] + rule.get(
+            'columns', []
+        )
         absent = [c for c in needed if c not in headers]
         if absent:
             issues.append(f'{label}: rule {rule["type"]} on "{sheet}" needs column(s) {absent}, which are missing.')
@@ -154,7 +160,9 @@ def check_rules(wb, rules: list[dict], label: str) -> list[str]:
             tolerance = rule.get('tolerance', 0.01)
             for group, diff in totals.items():
                 if abs(diff) > tolerance:
-                    issues.append(f'{label}: {sheet} {group}: debits and credits differ by {diff:,.2f}; they must balance.')
+                    issues.append(
+                        f'{label}: {sheet} {group}: debits and credits differ by {diff:,.2f}; they must balance.'
+                    )
         elif kind == 'one_side':
             first, second = rule['columns']
             for number, values in rows:
@@ -173,7 +181,9 @@ def check_rules(wb, rules: list[dict], label: str) -> list[str]:
             for number, values in rows:
                 value = values.get(rule['column'])
                 if not blank(value) and _key(value) not in allowed:
-                    issues.append(f'{label}: {sheet}!{rule["column"]} row {number} = {value!r} is not one of {rule["values"]}.')
+                    issues.append(
+                        f'{label}: {sheet}!{rule["column"]} row {number} = {value!r} is not one of {rule["values"]}.'
+                    )
         else:
             issues.append(f'{label}: unknown rule type {kind!r}.')
     return issues
@@ -194,7 +204,9 @@ def describe_format(spec: dict) -> str:
                 extras.append(f'matches {c["pattern"]}')
             if 'min' in c:
                 extras.append(f'at least {c["min"]}')
-            lines.append(f'  - {c["name"]} ({", ".join(extras)})' + (f': {c["description"]}' if c.get('description') else ''))
+            lines.append(
+                f'  - {c["name"]} ({", ".join(extras)})' + (f': {c["description"]}' if c.get('description') else '')
+            )
         for combo in sheet.get('unique', []):
             lines.append(f'  No two rows share {combo}.')
     lines += describe_rules(spec.get('rules', []))
@@ -205,8 +217,10 @@ def describe_format(spec: dict) -> str:
 
 def describe_rules(rules: list[dict]) -> list[str]:
     words = {
-        'balanced': lambda r: f'In "{r["sheet"]}", {r["debit"]} and {r["credit"]} balance'
-        + (f' within each {r["group_by"]}.' if r.get('group_by') else '.'),
+        'balanced': lambda r: (
+            f'In "{r["sheet"]}", {r["debit"]} and {r["credit"]} balance'
+            + (f' within each {r["group_by"]}.' if r.get('group_by') else '.')
+        ),
         'one_side': lambda r: f'In "{r["sheet"]}", each row has exactly one of {r["columns"][0]} or {r["columns"][1]}.',
         'required': lambda r: f'In "{r["sheet"]}", {r["columns"]} are never blank.',
         'unique': lambda r: f'In "{r["sheet"]}", no two rows share {r["columns"]}.',

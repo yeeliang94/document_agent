@@ -180,7 +180,9 @@ def _pdf_lines(rng: random.Random, doc: Doc) -> list[str]:
     vendor = doc.vendor
     bill_name, bill_address = ENTITIES[doc.entity]
     wording, _ = TAX[vendor.tax]
-    title = 'CREDIT NOTE' if doc.kind == 'Credit Note' else ('TAX INVOICE' if vendor.tax.startswith('SG') else 'INVOICE')
+    title = (
+        'CREDIT NOTE' if doc.kind == 'Credit Note' else ('TAX INVOICE' if vendor.tax.startswith('SG') else 'INVOICE')
+    )
     lines = [vendor.name, vendor.address, '', title, '',
              f'{"Credit Note" if doc.kind == "Credit Note" else "Invoice"} No: {doc.number}',
              f'Date: {_date_text(rng, doc.issued)}']  # fmt: skip
@@ -204,7 +206,12 @@ def _pdf_lines(rng: random.Random, doc: Doc) -> list[str]:
 
 def _pdf_path(doc: Doc, n: int) -> str:
     safe = doc.number.replace('/', '_')
-    styles = [f'{safe}.pdf', f'Invoice_{safe}.pdf', f'scan_{n:03d}_{safe}.pdf', f'{doc.vendor.prefix.strip("-/").replace("/", "_")} inv {safe}.pdf']
+    styles = [
+        f'{safe}.pdf',
+        f'Invoice_{safe}.pdf',
+        f'scan_{n:03d}_{safe}.pdf',
+        f'{doc.vendor.prefix.strip("-/").replace("/", "_")} inv {safe}.pdf',
+    ]
     name = f'Credit note {safe}.pdf' if doc.kind == 'Credit Note' else styles[n % len(styles)]
     return f'{doc.vendor.folder}/{name}'
 
@@ -352,10 +359,14 @@ def build(out: Path, seed: int = 20261031) -> dict:
     _write_po_list(path(PO_LIST), docs, rng)
     write_pdf(
         path(BROCHURE),
-        ['Arcturus Cloud Platform - 2027 product brochure', '', 'Scale without limits.',
-         'New in 2027: managed analytics, regional storage in Singapore and Kuala Lumpur, and 24/7 premium support.',
-         'Plans: Starter, Business, Enterprise. Ask your account manager about multi-year discounts.',
-         'This brochure is for information only and is not an invoice or an offer.'],  # fmt: skip
+        [
+            'Arcturus Cloud Platform - 2027 product brochure',
+            '',
+            'Scale without limits.',
+            'New in 2027: managed analytics, regional storage in Singapore and Kuala Lumpur, and 24/7 premium support.',
+            'Plans: Starter, Business, Enterprise. Ask your account manager about multi-year discounts.',
+            'This brochure is for information only and is not an invoice or an offer.',
+        ],  # fmt: skip
     )
     _write_last_month(path(LAST_MONTH), rng)
     path(JUNK).write_bytes(b'\x00\x00\x00\x01Bud1' + b'\x00' * 120)

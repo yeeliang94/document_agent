@@ -136,11 +136,7 @@ class Answerer:
         else:
             text = question.casefold()
             reply = next(
-                (
-                    a['answer']
-                    for a in self.scripted
-                    if any(str(k).casefold() in text for k in a.get('keywords', []))
-                ),
+                (a['answer'] for a in self.scripted if any(str(k).casefold() in text for k in a.get('keywords', []))),
                 DEFAULT_ANSWER,
             )
         self.log.append({'question': question, 'answer': reply})

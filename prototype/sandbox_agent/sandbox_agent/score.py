@@ -108,8 +108,14 @@ def score(outputs: Path, key: dict, questions: list[dict] | None = None) -> dict
             sheets[sheet] = (
                 score_sheet(wb, sheet, sheet_spec)
                 if wb is not None
-                else {'rows_expected': len(sheet_spec['rows']), 'rows_found': 0, 'rows_extra': 0, 'cells_right': 0,
-                      'cells_total': 0, 'workbook_missing': True}  # fmt: skip
+                else {
+                    'rows_expected': len(sheet_spec['rows']),
+                    'rows_found': 0,
+                    'rows_extra': 0,
+                    'cells_right': 0,
+                    'cells_total': 0,
+                    'workbook_missing': True,
+                }  # fmt: skip
             )
             s = sheets[sheet]
             totals['expected'] += s['rows_expected']

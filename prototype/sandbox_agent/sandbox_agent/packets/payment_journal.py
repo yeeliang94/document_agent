@@ -171,7 +171,9 @@ def _write_aging(path: Path, suppliers, items, rng):
     wb = Workbook()
     summary = wb.active
     summary.title = 'Summary'
-    _title(summary, ['Accounts payable - open items aging', f'Run date: {EXPORT_DATE:%d %b %Y}', 'Source: ERP AP module'])
+    _title(
+        summary, ['Accounts payable - open items aging', f'Run date: {EXPORT_DATE:%d %b %Y}', 'Source: ERP AP module']
+    )
     header(summary, ['Currency', 'Open items', 'Open amount'])
     for currency in ('SGD', 'USD', 'EUR'):
         rows = [i for i in items if not i.late and by_id[i.sid].currency == currency]
@@ -240,7 +242,7 @@ def _write_late(email: Path, attachment: Path, suppliers, items, duplicate: Item
         'Attachment: late_invoices_20Nov.csv\n\n'
         'Hi,\n\n'
         'Attached are the invoices that came in after the aging export was run on Friday. They are approved in the\n'
-        'workflow and should go in Thursday\'s run if they are due. Some of these may already be in the system,\n'
+        "workflow and should go in Thursday's run if they are due. Some of these may already be in the system,\n"
         'so please check before adding them.\n\n'
         'Thanks\n',
         encoding='utf-8',
@@ -265,14 +267,14 @@ def _write_memo(path: Path):
             'before 20 November 2026. Invoices that are pending or rejected in the log are not paid.',
             '2. Invoices due after 20 November 2026 wait for the December run, even when they are approved.',
             '3. Do not pay suppliers flagged ON HOLD in the supplier master.',
-            '4. Approved credit notes are netted against the same supplier\'s invoices in this run; pay the net amount.',
+            "4. Approved credit notes are netted against the same supplier's invoices in this run; pay the net amount.",
             '5. Include the late invoices sent by the AP clerk, but never pay the same invoice twice.',
             'Journal',
             '6. Raise one journal per supplier and currency, with the reference PAY-2026-11-<Supplier ID> '
             '(for example PAY-2026-11-S1234).',
             '7. Line 1 debits the AP control account 2100 with the net amount paid to the supplier. Line 2 credits '
             'the bank account for the payment currency: SGD 1010, USD 1020, EUR 1030.',
-            '8. Use the supplier\'s pay currency from the supplier master. Amounts stay in that currency; no FX '
+            "8. Use the supplier's pay currency from the supplier master. Amounts stay in that currency; no FX "
             'conversion.',
             '9. Journal date for every line: 20 November 2026.',
             'Please have the journal ready for my review by Wednesday 18 November.',
@@ -338,7 +340,7 @@ def _write_noise_pdfs(statement: Path, contract: Path, rng, freight: str):
             '1. Services. The Supplier provides sea and air freight forwarding as ordered by the Customer.',
             '2. Fees. Fees follow the rate card in Schedule 2, reviewed annually.',
             '3. Payment. The Customer pays undisputed invoices within 30 days of receipt.',
-            '4. Liability. Each party\'s liability is capped at the fees paid in the prior 12 months.',
+            "4. Liability. Each party's liability is capped at the fees paid in the prior 12 months.",
             '5. Termination. Either party may terminate on 90 days written notice.',
             'Signed for and on behalf of both parties.',
         ],
@@ -372,7 +374,9 @@ def build(out: Path, seed: int = 20261031) -> dict:
     _write_journal_like(path(DRAFT), suppliers, rng, '', '', 'DRAFT v1 - payment run proposal 20 Nov 2026')
     freight = next(s.name for s in suppliers if s.name.startswith('Halcyon'))
     _write_noise_pdfs(path(STATEMENT), path(CONTRACT), rng, freight)
-    path(JUNK).write_text('[.ShellClassInfo]\r\nIconResource=C:\\Windows\\System32\\shell32.dll,4\r\n', encoding='utf-8')
+    path(JUNK).write_text(
+        '[.ShellClassInfo]\r\nIconResource=C:\\Windows\\System32\\shell32.dll,4\r\n', encoding='utf-8'
+    )
     zip_packet(packet, out / 'packet.zip')
 
     rows, paid = [], []

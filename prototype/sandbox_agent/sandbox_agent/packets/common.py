@@ -46,9 +46,7 @@ def write_json(path: Path, data):
 
 def write_docx(path: Path, paragraphs: list[str]):
     """A minimal Word document: one paragraph per item. Opens in Word and python-docx."""
-    body = ''.join(
-        f'<w:p><w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r></w:p>' for text in paragraphs
-    )
+    body = ''.join(f'<w:p><w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r></w:p>' for text in paragraphs)
     document = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -80,7 +78,13 @@ def write_pdf(path: Path, lines: list[str]):
     """A minimal one-page text PDF (Helvetica, 10 pt). Text is extractable with pypdf. Keep to about 60 lines."""
 
     def pdf_text(text: str) -> str:
-        return text.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)').encode('latin-1', 'replace').decode('latin-1')
+        return (
+            text.replace('\\', '\\\\')
+            .replace('(', '\\(')
+            .replace(')', '\\)')
+            .encode('latin-1', 'replace')
+            .decode('latin-1')
+        )
 
     stream = 'BT /F1 10 Tf 50 800 Td 13 TL ' + ' '.join(f'({pdf_text(line)}) Tj T*' for line in lines) + ' ET'
     objects = [
