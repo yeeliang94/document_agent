@@ -17,16 +17,17 @@ The answer key is written outside the packet, so the agent never sees it.
 from __future__ import annotations
 
 import csv
-import json
 import random
-import zipfile
 from dataclasses import dataclass
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
+
+from .common import packet_files, write_json, zip_packet
 
 PERIOD_END = date(2026, 10, 31)
 FX_OCT = {'SGD': 0.7712, 'MYR': 0.2241, 'GBP': 1.2905, 'EUR': 1.0874, 'USD': 1.0}
@@ -461,7 +462,7 @@ def build_reference(root: Path, rng: random.Random):
         '2. Use only FINAL submissions. Drafts and superseded versions must be ignored.\n'
         '3. Exclude employees whose leaving date is on or before 31 October 2026. Include joiners who start in October.\n'
         '4. Allowances are the total of all fixed allowances for the month (car, transport, meal, phone, housing, shift, stipend, Zulagen).\n'
-        '5. Convert base salary to USD with the October 2026 month-average rate. Round to 2 decimals.\n'
+        '5. Convert base salary to USD with the October 2026 month-average rate. Round half up to 2 decimals.\n'
         '6. Department names must be in English: Sales, Operations, Finance, Engineering, People.\n'
         '7. Fill the File Map with every file in this packet and its role.\n',
         encoding='utf-8',
@@ -518,8 +519,28 @@ def build_template(path: Path):
     wb.save(path)
 
 
+GOAL = (
+    'Consolidate the October 2026 group payroll. Fill the template from the packet: one Employees row per active '
+    'employee across every entity, the File Map with every file in the packet and its role, and leave the Entity '
+    'Summary formulas to calculate. Follow the close instructions document inside the packet.'
+)
+EMPLOYEE_COLUMNS = {
+    'entity': 'Entity', 'employee_id': 'Employee ID', 'name': 'Employee Name', 'department': 'Department',
+    'currency': 'Currency', 'base_local': 'Base Salary (Local)', 'allowances_local': 'Allowances (Local)',
+    'fx_rate': 'FX Rate to USD', 'base_usd': 'Base Salary (USD)',
+}  # fmt: skip
+SUPERSEDED = 'Region_APAC/Singapore/Payroll/2026/10_October/SG01_Payroll_Oct2026_v1_DRAFT_superseded.xlsx'
+NOT_RELEVANT = ['Group Finance/GL/exports/GL_detail_Oct2026.xlsx', 'Region_APAC/Singapore/Thumbs.db']
+
+
+def _cents(amount: float, rate: float) -> float:
+    """amount x rate with accounting rounding: half a cent rounds up (float maths would round 3327.885 down)."""
+    exact = Decimal(str(amount)) * Decimal(str(rate))
+    return float(exact.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+
 def build(out: Path, seed: int = 20261031) -> dict:
-    """Write packet/, packet.zip, output_template.xlsx and answer_key.json under out/."""
+    """Write packet/, packet.zip, output_template.xlsx, job.json and answer_key.json under out/."""
     rng = random.Random(seed)
     packet = out / 'packet'
     if packet.exists():
@@ -530,47 +551,52 @@ def build(out: Path, seed: int = 20261031) -> dict:
         people += builder(packet, rng)
     build_reference(packet, rng)
     build_template(out / 'output_template.xlsx')
-    with zipfile.ZipFile(out / 'packet.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-        for file in sorted(packet.rglob('*')):
-            if file.is_file():
-                archive.write(file, file.relative_to(out).as_posix())
+    zip_packet(packet, out / 'packet.zip')
     rows = []
     for person in people:
         if not person.included:
             continue
         rate = FX_OCT[person.currency]
-        rows.append(
-            {
-                'entity': person.entity,
-                'employee_id': person.emp_id,
-                'name': person.name,
-                'department': person.department,
-                'currency': person.currency,
-                'base_local': person.base,
-                'allowances_local': round(person.allowances, 2),
-                'fx_rate': rate,
-                'base_usd': round(person.base * rate, 2),
-            }
-        )
-    files = sorted(file.relative_to(packet).as_posix() for file in packet.rglob('*') if file.is_file())
+        values = {
+            'entity': person.entity, 'employee_id': person.emp_id, 'name': person.name,
+            'department': person.department, 'currency': person.currency, 'base_local': person.base,
+            'allowances_local': round(person.allowances, 2), 'fx_rate': rate,
+            'base_usd': _cents(person.base, rate),
+        }  # fmt: skip
+        rows.append({EMPLOYEE_COLUMNS[k]: v for k, v in values.items()})
+    files = packet_files(packet)
+    decisions = {f: 'used' for f in files}
+    decisions[SUPERSEDED] = 'not_relevant'
+    decisions['Group Finance/Reference Data/fx_rates_2026.xlsx'] = 'reference'
+    decisions['Group Finance/Instructions/October close instructions.txt'] = 'reference'
+    for path in NOT_RELEVANT:
+        decisions[path] = 'not_relevant'
     key = {
-        'employees': rows,
-        'files': files,
-        'roles': {
-            'Region_APAC/Singapore/Payroll/2026/10_October/SG01_Payroll_Oct2026_v1_DRAFT_superseded.xlsx': 'superseded',
-            'Group Finance/GL/exports/GL_detail_Oct2026.xlsx': 'not relevant',
-            'Group Finance/Reference Data/fx_rates_2026.xlsx': 'reference',
-            'Group Finance/Instructions/October close instructions.txt': 'instructions',
+        'deliverables': {
+            'filled_output.xlsx': {
+                'sheets': {
+                    'Employees': {
+                        'key': ['Entity', 'Employee ID'],
+                        'fields': [c for c in EMPLOYEE_COLUMNS.values() if c not in ('Entity', 'Employee ID')],
+                        'rows': rows,
+                    }
+                }
+            }
         },
+        'files': decisions,
+        'questions': [],
         'excluded_leavers': [p.emp_id for p in people if not p.included],
     }
-    (out / 'answer_key.json').write_text(json.dumps(key, indent=2), encoding='utf-8')
+    write_json(out / 'answer_key.json', key)
+    write_json(
+        out / 'job.json',
+        {
+            'id': 'payroll_consolidation',
+            'module': 'payroll',
+            'title': 'Group payroll consolidation, October 2026',
+            'goal': GOAL,
+            'zip': 'packet.zip',
+            'deliverables': [{'name': 'filled_output.xlsx', 'template': 'output_template.xlsx'}],
+        },
+    )
     return key
-
-
-if __name__ == '__main__':
-    import sys
-
-    target = Path(sys.argv[1] if len(sys.argv) > 1 else 'runs/fixture')
-    result = build(target)
-    print(f'{len(result["files"])} files, {len(result["employees"])} expected employee rows -> {target}')

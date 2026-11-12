@@ -22,11 +22,15 @@ from pathlib import Path
 
 
 class RunStore:
-    def __init__(self, root: Path, run_id: str | None = None):
+    def __init__(self, root: Path, run_id: str | None = None, outputs: Path | None = None, on_event=None):
+        """outputs: where saved outputs live, when not in the run folder (the app keeps them in the job folder).
+        on_event(name, data): also receives every event (the app shows them in its activity feed)."""
         self.id = run_id or datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
         self.dir = root / self.id
-        for sub in ('input', 'outputs', 'scouts', 'code'):
-            (self.dir / sub).mkdir(parents=True, exist_ok=True)
+        self._outputs = outputs or self.dir / 'outputs'
+        self.on_event = on_event
+        for folder in (self.dir / 'input', self._outputs, self.dir / 'scouts', self.dir / 'code'):
+            folder.mkdir(parents=True, exist_ok=True)
         self.started = time.monotonic()
         self._code_count = 0
         self.record: dict = {'id': self.id, 'status': 'running', 'started_at': _now()}
@@ -34,7 +38,7 @@ class RunStore:
 
     @property
     def outputs(self) -> Path:
-        return self.dir / 'outputs'
+        return self._outputs
 
     def add_input(self, source: Path) -> Path:
         target = self.dir / 'input' / source.name
@@ -45,6 +49,8 @@ class RunStore:
         line = {'t': round(time.monotonic() - self.started, 2), 'at': _now(), 'event': name, **data}
         with open(self.dir / 'events.jsonl', 'a', encoding='utf-8') as handle:
             handle.write(json.dumps(line, default=str) + '\n')
+        if self.on_event is not None:
+            self.on_event(name, data)
 
     def write_json(self, relative: str, data) -> Path:
         path = self.dir / relative
@@ -65,7 +71,7 @@ class RunStore:
     def replace_outputs(self, files: dict[str, bytes]) -> list[str]:
         """Make outputs/ exactly this set of files. Writes to a staging folder first, so a failure leaves the
         previous outputs untouched, and files the agent deleted do not linger."""
-        staging = self.dir / 'outputs.staging'
+        staging = self.outputs.with_name(self.outputs.name + '.staging')
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir()
         for relative, data in files.items():
@@ -75,7 +81,7 @@ class RunStore:
                 raise ValueError(f'Refusing to save outside the outputs folder: {relative}')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-        previous = self.dir / 'outputs.previous'
+        previous = self.outputs.with_name(self.outputs.name + '.previous')
         shutil.rmtree(previous, ignore_errors=True)
         try:
             _rename(self.outputs, previous)

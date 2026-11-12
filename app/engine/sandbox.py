@@ -13,7 +13,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from .config import Settings
+from .endpoint import Settings
 
 DATA_DIR = '/mnt/data'
 

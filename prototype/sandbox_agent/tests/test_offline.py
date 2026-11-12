@@ -8,70 +8,69 @@ from types import SimpleNamespace
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
+from sandbox_agent import packets
+from sandbox_agent.experiment import summary
+from sandbox_agent.score import score_questions
+from sandbox_agent.selftest import perfect_outputs, selftest
 
-from sandbox_agent.agent import _slug, _tool_error, digest, folder_zip, run_job, sync_outputs
-from sandbox_agent.checks import inventory, run_checks
-from sandbox_agent.config import Settings
-from sandbox_agent.packet import build
-from sandbox_agent.score import score
-from sandbox_agent.store import RunStore
+from app.engine.agent import _slug, _tool_error, ask, digest, folder_zip, run_job, sync_outputs
+from app.engine.checks import inventory, run_checks
+from app.engine.endpoint import Settings
+from app.engine.goal import goal_card
+from app.engine.jobspec import DEFAULT_ANSWER, Answerer, Deliverable, JobSpec, load_job
+from app.engine.rules import check_format, check_rules
+from app.engine.runstore import RunStore
 
 WORKBOOK = 'filled_output.xlsx'
 
 
 @pytest.fixture(scope='module')
 def packet(tmp_path_factory):
-    out = tmp_path_factory.mktemp('fixture')
-    key = build(out)
-    return out, key
+    out = tmp_path_factory.mktemp('packets')
+    key = packets.build('payroll_consolidation', out)
+    return out / 'payroll_consolidation', key
 
 
-def perfect_output(out, key, target):
-    wb = load_workbook(out / 'output_template.xlsx')
-    for r in key['employees']:
-        wb['Employees'].append(
-            [r['entity'], r['employee_id'], r['name'], r['department'], r['currency'],
-             r['base_local'], r['allowances_local'], r['fx_rate'], r['base_usd']]
-        )  # fmt: skip
-    for path in key['files']:
-        wb['File Map'].append([path, path.rsplit('.', 1)[-1], '', key['roles'].get(path, 'payroll input'), '', ''])
-    target.mkdir(parents=True, exist_ok=True)
-    wb.save(target / WORKBOOK)
-    hierarchy = {'files': [{'path': '/mnt/data/packet/packet/' + p} for p in key['files']]}  # absolute paths match too
-    (target / 'document_hierarchy.json').write_text(json.dumps(hierarchy), encoding='utf-8')
+def job_of(folder):
+    return load_job(folder)
 
 
-def check(out, target):
-    return run_checks(target, out / 'output_template.xlsx', inventory(out / 'packet.zip'), WORKBOOK)
+def check(folder, target):
+    return run_checks(target, job_of(folder), inventory(folder / 'packet.zip'))
 
 
 def test_packet_is_nested_and_messy(packet):
     out, key = packet
     files = inventory(out / 'packet.zip')
-    assert [f['path'] for f in files] == key['files']
+    assert [f['path'] for f in files] == sorted(key['files'])
     assert all(f['member'] == 'packet/' + f['path'] for f in files)
     assert max(f['path'].count('/') for f in files) >= 5
     assert any(f['junk'] for f in files)
     sg = load_workbook(out / 'packet' / 'Region_APAC/Singapore/Payroll/2026/10_October/SG01_Payroll_Oct2026_FINAL.xlsx')
     assert sg['_codes'].sheet_state == 'hidden' and len(sg.sheetnames) == 5
     assert len(key['excluded_leavers']) == 3  # left 3, 20 and 31 Oct; the 14 Nov leaver stays in
-    assert len(key['employees']) == 48 + 37 + 63 + 29 + 41 - 3
+    rows = key['deliverables'][WORKBOOK]['sheets']['Employees']['rows']
+    assert len(rows) == 48 + 37 + 63 + 29 + 41 - 3
 
 
 def test_perfect_output_passes_checks_and_scores_full_marks(packet, tmp_path):
     out, key = packet
-    run = tmp_path / 'run'
-    perfect_output(out, key, run / 'outputs')
-    assert check(out, run / 'outputs') == {'passed': True, 'issues': []}
-    result = score(run, out / 'answer_key.json')
-    assert result['row_recall'] == 1 and result['row_precision'] == 1 and result['cell_accuracy'] == 1
-    assert all(result['key_roles_correct'].values())
+    result = selftest(job_of(out), key, tmp_path / 'outputs')
+    assert result['passed'], result
+    assert result['score']['relevance_accuracy'] == 1
+
+
+@pytest.mark.parametrize('name', [n for n in packets.available() if n != 'large_packet'])
+def test_every_packet_is_consistent(name, tmp_path):
+    key = packets.build(name, tmp_path)
+    result = selftest(load_job(tmp_path / name), key, tmp_path / 'perfect')
+    assert result['passed'], result['check']['issues'][:5]
 
 
 def test_checks_catch_broken_output(packet, tmp_path):
     out, key = packet
     target = tmp_path / 'outputs'
-    perfect_output(out, key, target)
+    perfect_outputs(job_of(out), key, target)
     wb = load_workbook(target / WORKBOOK)
     wb['Entity Summary']['B2'] = 46  # formula replaced by a value
     wb['Lists']['A3'] = 'renamed role'  # hidden reference value changed
@@ -81,13 +80,31 @@ def test_checks_catch_broken_output(packet, tmp_path):
     wb['Employees']['G4'] = None  # required number left blank
     wb['Employees'].append(list(next(wb['Employees'].iter_rows(min_row=5, max_row=5, values_only=True))))
     wb.save(target / WORKBOOK)
-    (target / 'document_hierarchy.json').write_text('{"files": [{"path": "nope.xlsx"}]}', encoding='utf-8')
+    (target / 'document_map.json').write_text(
+        '{"files": [{"path": "Region_AMER/USA/payroll/2026/Q4/october/us01_payroll_register_2026-10.csv", '
+        '"decision": "maybe", "reason": "x"}]}',
+        encoding='utf-8',
+    )
     text = '\n'.join(check(out, target)['issues'])
     for expected in [
         'Entity Summary!B2 was', 'Lists!A3 was', 'visibility changed', 'I2', 'must be a number',
-        "'Legal' is not in its dropdown", 'G4 is blank', 'duplicates row 5', 'does not include 12 file',
+        "'Legal' is not in its dropdown", 'G4 is blank', 'duplicates row 5', 'no entry with "path" for 11 file',
+        '"decision" must be one of',
     ]:  # fmt: skip
         assert expected in text, expected
+
+
+def _tiny_job(tmp_path, deliverable, rules=()):
+    zip_path = tmp_path / 'p.zip'
+    with zipfile.ZipFile(zip_path, 'w') as archive:
+        archive.writestr('x.csv', 'a')
+        archive.writestr('y.csv', 'b')
+    return JobSpec(id='t', module='ap', goal='g', zip=zip_path, deliverables=(deliverable,), rules=tuple(rules))
+
+
+def _save_map(outputs, decisions):
+    files = [{'path': p, 'decision': d, 'reason': 'because'} for p, d in decisions.items()]
+    (outputs / 'document_map.json').write_text(json.dumps({'files': files}), encoding='utf-8')
 
 
 def test_checks_work_on_any_template(tmp_path):
@@ -99,23 +116,118 @@ def test_checks_work_on_any_template(tmp_path):
     rule.add('A2:A100')
     wb.active.add_data_validation(rule)
     wb.save(template)
-    zip_path = tmp_path / 'p.zip'
-    with zipfile.ZipFile(zip_path, 'w') as archive:
-        archive.writestr('x.csv', 'a')
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
     outputs = tmp_path / 'outputs'
     outputs.mkdir()
     wb.active.append(['A', 'free text is fine'])
     wb.active.append(['C', 1])
     wb.save(outputs / 'out.xlsx')
-    (outputs / 'document_hierarchy.json').write_text('[{"path": "x.csv"}]', encoding='utf-8')
-    issues = run_checks(outputs, template, inventory(zip_path), 'out.xlsx')['issues']
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not relevant'})
+    issues = run_checks(outputs, job, inventory(job.zip), proof='none')['issues']
     assert issues == ["Data!A3 = 'C' is not in its dropdown ['A', 'B']."]
+
+
+JOURNAL = {
+    'sheets': [{'name': 'Journal', 'columns': [
+        {'name': 'Ref', 'type': 'text', 'required': True, 'pattern': '^PAY-'},
+        {'name': 'Date', 'type': 'date', 'required': True},
+        {'name': 'Account', 'type': 'text', 'allowed': ['2100', '1010']},
+        {'name': 'Debit', 'type': 'number', 'min': 0},
+        {'name': 'Credit', 'type': 'number', 'min': 0}], 'unique': [['Ref', 'Account']]}],
+    'rules': [{'type': 'balanced', 'sheet': 'Journal', 'debit': 'Debit', 'credit': 'Credit', 'group_by': 'Ref'},
+              {'type': 'one_side', 'sheet': 'Journal', 'columns': ['Debit', 'Credit']}],
+}  # fmt: skip
+
+
+def _journal(rows):
+    wb = Workbook()
+    wb.active.title = 'Journal'
+    wb.active.append(['Ref', 'Date', 'Account', 'Debit', 'Credit'])
+    for row in rows:
+        wb.active.append(row)
+    return wb
+
+
+def test_a_format_deliverable_is_checked_against_its_specification():
+    good = _journal([['PAY-1', '2026-11-20', '2100', 100, 0], ['PAY-1', '2026-11-20', 1010, 0, 100]])
+    assert check_format(good, JOURNAL, 'j.xlsx') == [] and check_rules(good, JOURNAL['rules'], 'j.xlsx') == []
+    bad = _journal([['X-1', 'soon', '9999', -5, 0], ['X-1', '2026-11-20', '9999', 3, 3]])
+    text = '\n'.join(check_format(bad, JOURNAL, 'j.xlsx') + check_rules(bad, JOURNAL['rules'], 'j.xlsx'))
+    for expected in ['does not match the pattern', "'soon' must be a date", 'is not one of', 'below the minimum',
+                     'repeats', 'differ by', 'exactly one of Debit or Credit']:  # fmt: skip
+        assert expected in text, expected
+    wrong_headers = Workbook()
+    wrong_headers.active.title = 'Journal'
+    wrong_headers.active.append(['Account', 'Ref'])
+    assert 'must hold the headers' in check_format(wrong_headers, JOURNAL, 'j.xlsx')[0]
+
+
+def test_provenance_must_cover_every_written_row_with_used_files(tmp_path):
+    spec_path = tmp_path / 'format.json'
+    spec_path.write_text(json.dumps(JOURNAL), encoding='utf-8')
+    job = _tiny_job(tmp_path, Deliverable('j.xlsx', format=JOURNAL, format_path=spec_path))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    _journal([['PAY-1', '2026-11-20', '2100', 100, 0], ['PAY-1', '2026-11-20', '1010', 0, 100]]).save(outputs / 'j.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    files = inventory(job.zip)
+    (outputs / 'provenance.json').write_text(
+        json.dumps([{'file': 'j.xlsx', 'sheet': 'Journal', 'rows': '2', 'sources': ['y.csv']}]), encoding='utf-8'
+    )
+    text = '\n'.join(run_checks(outputs, job, files)['issues'])
+    assert "marks it 'not_relevant'" in text and 'rows 3' in text
+    (outputs / 'provenance.json').write_text(
+        json.dumps([{'file': 'j.xlsx', 'sheet': 'Journal', 'rows': '2-3', 'sources': ['/mnt/data/packet/x.csv']}]),
+        encoding='utf-8',
+    )
+    assert run_checks(outputs, job, files) == {'passed': True, 'issues': []}
 
 
 def test_missing_outputs_are_reported(packet, tmp_path):
     out, _ = packet
-    issues = run_checks(tmp_path, out / 'output_template.xlsx', [], WORKBOOK)['issues']
-    assert issues == [f'{WORKBOOK} has not been saved yet.', 'document_hierarchy.json has not been saved yet.']
+    issues = run_checks(tmp_path, job_of(out), [])['issues']
+    assert issues == [f'{WORKBOOK} has not been saved yet.', 'document_map.json has not been saved yet.',
+                      'provenance.json has not been saved yet.']  # fmt: skip
+
+
+def test_goal_card_states_goal_rules_and_done(packet, tmp_path):
+    out, _ = packet
+    job = job_of(out)
+    card = goal_card(job, {'output_template.xlsx': '/mnt/data/t.xlsx'}, 'row')
+    for expected in ['# Goal', 'Consolidate the October 2026', 'House rules for payroll', '/mnt/data/t.xlsx',
+                     'Sheet "Lists" (hidden)', 'dropdown from', 'provenance.json']:  # fmt: skip
+        assert expected in card, expected
+    spec_path = tmp_path / 'f.json'
+    spec_path.write_text(json.dumps(JOURNAL), encoding='utf-8')
+    journal = _tiny_job(tmp_path, Deliverable('j.xlsx', format=JOURNAL, format_path=spec_path))
+    card = goal_card(journal, {'f.json': '/mnt/data/f.json'}, 'none')
+    assert 'balance within each Ref' in card and 'provenance.json' not in card
+
+
+def test_scripted_answers_and_the_question_limit(tmp_path):
+    answerer = Answerer(({'keywords': ['E104'], 'answer': 'Use 6,500.'},))
+    assert asyncio.run(answerer.answer('Which salary is right for e104?')) == 'Use 6,500.'
+    assert asyncio.run(answerer.answer('Anything else?')) == DEFAULT_ANSWER
+    store = RunStore(tmp_path)
+    job = SimpleNamespace(store=store, answerer=answerer)
+    assert asyncio.run(ask(job, 'Third?')) == DEFAULT_ANSWER
+    reply = asyncio.run(ask(job, 'Fourth?'))
+    assert 'limit' in reply and len(answerer.log) == 3
+
+
+def test_questions_are_scored_by_keywords():
+    expected = [{'topic': 'salary', 'keywords': ['E104']}]
+    assert score_questions(expected, [{'question': 'What about E104?'}])['asked_expected'] is True
+    assert score_questions(expected, [])['asked_expected'] is False
+    assert score_questions([], [{'question': 'x'}])['unneeded_questions'] == 1
+
+
+def test_experiment_summary_groups_by_shape_and_packet():
+    row = {'packet': 'p', 'shape': 'A', 'run': 'r', 'status': 'complete', 'error': None, 'seconds': 120,
+           'requests': 10, 'input_tokens': 5000, 'row_recall': 1.0, 'row_precision': 1.0, 'cell_accuracy': 0.9,
+           'relevance_accuracy': 1.0, 'asked_expected': None, 'unneeded_questions': 0}  # fmt: skip
+    text = summary([row, {**row, 'shape': 'B', 'status': 'partial', 'error': 'turn limit'}])
+    assert '| A | 1 | 1/1 | 1.000 | 1.000 | 0.900' in text and 'turn limit' in text
 
 
 def test_inventory_handles_zip_without_top_folder(tmp_path):
@@ -189,7 +301,8 @@ def test_a_bad_upload_is_recorded_as_failed(tmp_path):
     bad.write_text('this is not a zip', encoding='utf-8')
     template = tmp_path / 't.xlsx'
     Workbook().save(template)
-    store = run_job(bad, template, Settings(api_key='unused'), tmp_path / 'runs', echo=lambda _: None)
+    spec = JobSpec(id='bad', module='payroll', goal='g', zip=bad, deliverables=(Deliverable('o.xlsx', template=template),))
+    store = run_job(spec, Settings(api_key='unused'), tmp_path / 'runs', echo=lambda _: None)
     store = asyncio.run(store)
     record = json.loads((store.dir / 'run.json').read_text(encoding='utf-8'))
     assert record['status'] == 'failed' and 'BadZipFile' in record['error']
@@ -310,14 +423,14 @@ def test_a_failed_swap_puts_the_last_good_outputs_back(tmp_path, monkeypatch):
         return real_rename(self, target)
 
     monkeypatch.setattr(Path, 'rename', flaky)
-    monkeypatch.setattr('sandbox_agent.store.time.sleep', lambda _: None)
+    monkeypatch.setattr('app.engine.runstore.time.sleep', lambda _: None)
     with pytest.raises(PermissionError):
         store.replace_outputs({'a.xlsx': b'new'})
     assert (store.outputs / 'a.xlsx').read_bytes() == b'old'
 
 
 def test_a_slow_scout_is_cut_off_and_the_rest_still_return(tmp_path, monkeypatch):
-    import sandbox_agent.agent as agent_module
+    import app.engine.agent as agent_module
 
     async def fake_scout(job, folder, focus):
         if folder == 'slow':
@@ -334,7 +447,7 @@ def test_a_slow_scout_is_cut_off_and_the_rest_still_return(tmp_path, monkeypatch
 
 
 def test_code_progress_is_shown_while_a_long_reply_runs(tmp_path):
-    from sandbox_agent.agent import _log_stream
+    from app.engine.agent import _log_stream
 
     store, lines = RunStore(tmp_path), []
     for kind in ('response.code_interpreter_call.in_progress', 'response.code_interpreter_call.completed'):

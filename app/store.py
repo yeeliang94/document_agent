@@ -7,14 +7,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import app_settings
+from .modules import DEFAULT_CONTEXT, MODULE_LABELS  # noqa: F401 - re-exported for main.py
 from .state import JobState
-
-DEFAULT_CONTEXT = {
-    'payroll': 'Prepare the monthly payroll ingestion workbook from the supplied files. Match employee IDs; reconcile joiners, changes, allowances, one-time payments and resignations. Read template instructions and lookup tabs. Preserve formulas. Investigate conflicts and ask when material facts are missing. Continue independent records.',
-    'ap': 'Prepare the accounts payable upload. Match supplier IDs and invoice numbers, identify duplicates, reconcile amounts, and preserve the supplied template. Ask about material unresolved conflicts.',
-}
-
-MODULE_LABELS = {'payroll': 'Payroll', 'ap': 'Accounts payable'}
 
 
 def now():
@@ -49,6 +44,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
                 CREATE TABLE IF NOT EXISTS profiles(module TEXT PRIMARY KEY, context TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
             """)
             for module, context in DEFAULT_CONTEXT.items():
                 c.execute('INSERT OR IGNORE INTO profiles VALUES (?,?)', (module, context))
@@ -189,3 +185,22 @@ class Store:
     def save_profile(self, module, context):
         with self.connect() as c:
             c.execute('UPDATE profiles SET context=? WHERE module=?', (context, module))
+
+    def settings(self):
+        """Settings-page values over their defaults."""
+        values = app_settings.defaults()
+        with self.connect() as c:
+            for name, value in c.execute('SELECT name, value FROM settings').fetchall():
+                if name in values:
+                    values[name] = json.loads(value)
+        return values
+
+    def save_settings(self, changes):
+        checked = app_settings.validate(changes)
+        with self.connect() as c:
+            for name, value in checked.items():
+                c.execute(
+                    'INSERT INTO settings VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value',
+                    (name, json.dumps(value)),
+                )
+        return self.settings()

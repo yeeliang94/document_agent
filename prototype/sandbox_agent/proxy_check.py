@@ -24,7 +24,6 @@ import sys
 from agents import Agent, CodeInterpreterTool, ModelSettings, Runner, set_tracing_disabled
 from openai.types.shared import Reasoning
 from openpyxl import Workbook, load_workbook
-
 from sandbox_agent.config import Settings, add_endpoint_args, describe, load_settings, prepare_console_and_network
 
 RESULTS: list[tuple[str, bool | None, str]] = []  # ok is None for a step that could not be tried

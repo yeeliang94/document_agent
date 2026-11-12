@@ -19,7 +19,7 @@ from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
-from . import jobstatus
+from . import app_settings, jobstatus
 from .config import ROOT, Settings, settings
 from .context import estimate_text
 from .files import add_file, add_zip, is_junk, within
@@ -148,6 +148,20 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         store.save_profile(module, body.context)
         return {'id': module, 'context': body.context}
 
+    class SettingsInput(BaseModel):
+        values: dict = Field(default_factory=dict)
+
+    @api.get('/api/settings')
+    def app_settings_get():
+        return {'values': store.settings(), 'options': app_settings.describe()}
+
+    @api.put('/api/settings')
+    def app_settings_put(body: SettingsInput):
+        try:
+            return {'values': store.save_settings(body.values), 'options': app_settings.describe()}
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+
     @api.get('/api/jobs')
     async def jobs():
         return store.summaries()
@@ -172,6 +186,7 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if len(instructions) > MAX_TEXT_CHARS or len(context) > MAX_TEXT_CHARS:
             raise HTTPException(400, 'Instructions are too long')
         job_id = store.create(module, period, instructions, context or store.profile(module))['id']
+        store.update(job_id, engine=store.settings()['engine'])
         try:
             manifest = await save_uploads(store.path(job_id), template, files)
             mark_duplicates(manifest)
