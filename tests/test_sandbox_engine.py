@@ -367,3 +367,62 @@ def test_the_document_map_and_check_summary_reach_the_screens(tmp_path, monkeypa
         assert done['engine_team'] == {'max_scouts': 3, 'reviewer': True}
         files = client.get(f'/api/jobs/{job["id"]}/document-map').json()['files']
         assert files == [{'path': 'HR/a.txt', 'decision': 'not_relevant', 'reason': 'Other entity'}]
+
+
+def test_parallel_questions_reach_the_user_one_at_a_time(tmp_path, monkeypatch):
+    answers = {}
+
+    async def behaviour(answerer, outputs, **_):
+        write_output(outputs)
+        first, second = await asyncio.gather(
+            answerer.answer('Which salary is right for EMP001?'), answerer.answer('Which rate applies to EMP002?')
+        )
+        answers.update(first=first, second=second)
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0.01)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        for reply in ('Use 4,500.', 'Use the November rate.'):
+            asked = wait_for_job(client, job['id'], statuses=('waiting',))['question']['text']
+            client.post(f'/api/jobs/{job["id"]}/answer', json={'answer': reply})
+            deadline = time.monotonic() + 5
+            while client.get(f'/api/jobs/{job["id"]}').json().get('question', {}) and time.monotonic() < deadline:
+                current = client.get(f'/api/jobs/{job["id"]}').json()
+                if (current.get('question') or {}).get('text') != asked:
+                    break
+                time.sleep(0.01)
+        done = wait_for_job(client, job['id'])
+        assert [q['answer'] for q in done['engine_questions']] == ['Use 4,500.', 'Use the November rate.']
+        assert answers == {'first': 'Use 4,500.', 'second': 'Use the November rate.'}
+
+
+def test_a_time_limit_during_a_question_keeps_the_question_for_the_user(tmp_path, monkeypatch):
+    async def behaviour(answerer, outputs, **_):
+        write_output(outputs)
+        try:
+            await asyncio.wait_for(answerer.answer('Which salary is right for EMP001?'), 0.1)
+        except TimeoutError:
+            pass
+        return {**finished(status='stopped', passed=False), 'error': 'Reached the 30-minute time limit.'}
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0.01)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        parked = wait_for_job(client, job['id'], statuses=('waiting', 'partial'))
+        assert parked['status'] == 'waiting' and parked['question']['text'] == 'Which salary is right for EMP001?'
+
+
+def test_instructions_given_during_a_run_carry_into_a_resumed_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0)
+    store = Store(tmp_path)
+    job = store.create('payroll', '2026-10', 'x', 'y')
+    store.update(job['id'], pending_messages=['Use the November FX rate.'])
+    assert AppControl(store, job['id']).new_messages() == ['Use the November FX rate.']
+    run = store.path(job['id']) / 'engine' / 'run-01'
+    run.mkdir(parents=True)
+    (run / 'run.json').write_text(json.dumps({'status': 'paused'}), encoding='utf-8')
+    card = resume_card(store, store.get(job['id']))
+    assert '- Use the November FX rate.' in card and 'override the goal' in card

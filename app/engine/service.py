@@ -106,6 +106,8 @@ class AppControl(Control):
         def take(job):
             taken.extend(job.get('pending_messages') or [])
             job['pending_messages'] = []
+            # Kept for good: a resumed run in a fresh sandbox must still follow them.
+            job['engine_instructions'] = [*(job.get('engine_instructions') or []), *taken]
 
         self.store.mutate(self.job_id, take)
         self._job = {**self._job, 'pending_messages': []}
@@ -166,6 +168,12 @@ def resume_card(store, job: dict) -> str | None:
     notes = root / 'outputs' / 'notes.md'
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
+    told = job.get('engine_instructions') or []
+    if told:
+        parts.append(
+            'Instructions the user gave during earlier runs. They still apply, and override the goal where they '
+            'differ:\n' + '\n'.join(f'- {m}' for m in told)
+        )
     asked = job.get('engine_questions') or []
     if asked:
         parts.append(
@@ -219,7 +227,17 @@ class SandboxEngine:
                 level = 'WARN' if name in WARNINGS else 'INFO'
                 store.event(job_id, 'engine.' + name, message(data), type='engine', level=level, run=attempt)
 
+        one_question = asyncio.Lock()  # the agent may call tools in parallel; the user sees one question at a time
+
         async def ask(question: str) -> str:
+            async with one_question:
+                if control.waiting:  # an earlier question is already parked for the user
+                    return (
+                        'Another question is waiting for the user. End your turn now; the job resumes with the answer.'
+                    )
+                return await ask_one(question)
+
+        async def ask_one(question: str) -> str:
             stopped = []
 
             def post(j):
@@ -232,17 +250,22 @@ class SandboxEngine:
             if stopped:
                 return 'The user stopped the job. End your turn now.'
             deadline = time.monotonic() + options['question_wait_minutes'] * SECONDS_PER_MINUTE
-            while True:
-                current = store.get(job_id)
-                if current['status'] == 'cancelled':
-                    return 'The user cancelled the job. End your turn now.'
-                if current.get('answer'):
-                    answer = current['answer']
-                    store.mutate(job_id, lambda j: (take_answer(j), j.update(status='running')))
-                    return answer
-                if time.monotonic() >= deadline:  # checked after one last look, so an answer just in time counts
-                    break
-                await asyncio.sleep(POLL_SECONDS)
+            try:
+                while True:
+                    current = store.get(job_id)
+                    if current['status'] == 'cancelled':
+                        return 'The user cancelled the job. End your turn now.'
+                    if current.get('answer'):
+                        answer = current['answer']
+                        store.mutate(job_id, lambda j: (take_answer(j), j.update(status='running')))
+                        return answer
+                    if time.monotonic() >= deadline:  # checked after one last look, so an answer just in time counts
+                        break
+                    await asyncio.sleep(POLL_SECONDS)
+            except asyncio.CancelledError:
+                # The run's own time limit ended the wait: keep the question, so the user's answer resumes the job.
+                control.waiting = True
+                raise
             control.waiting = True
             return (
                 'The user has not answered yet. End your turn now with status partial; the job resumes with their '

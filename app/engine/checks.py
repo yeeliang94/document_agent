@@ -121,11 +121,47 @@ def _validation_issues(template, out) -> list[str]:
                             issues.append(
                                 f'{sheet.title}!{cell.coordinate} = {value!r} is not in its dropdown {allowed}.'
                             )
-                        elif rule.type in ('decimal', 'whole') and (
-                            isinstance(value, bool) or not isinstance(value, (int, float))
-                        ):
-                            issues.append(f'{sheet.title}!{cell.coordinate} = {value!r} must be a number.')
+                        elif rule.type in ('decimal', 'whole'):
+                            problem = _number_problem(rule, value)
+                            if problem:
+                                issues.append(f'{sheet.title}!{cell.coordinate} = {value!r} {problem}.')
     return issues
+
+
+def _bound(formula):
+    """A validation limit as a number, or None when it is a cell reference or formula the check cannot evaluate."""
+    try:
+        return float(str(formula).lstrip('='))
+    except (TypeError, ValueError):
+        return None
+
+
+NUMBER_RULES = {
+    'between': (lambda v, a, b: a <= v <= b, 'must be between {a} and {b}'),
+    'notBetween': (lambda v, a, b: not a <= v <= b, 'must not be between {a} and {b}'),
+    'equal': (lambda v, a, b: v == a, 'must equal {a}'),
+    'notEqual': (lambda v, a, b: v != a, 'must not equal {a}'),
+    'greaterThan': (lambda v, a, b: v > a, 'must be greater than {a}'),
+    'lessThan': (lambda v, a, b: v < a, 'must be less than {a}'),
+    'greaterThanOrEqual': (lambda v, a, b: v >= a, 'must be {a} or more'),
+    'lessThanOrEqual': (lambda v, a, b: v <= a, 'must be {a} or less'),
+}
+
+
+def _number_problem(rule, value) -> str | None:
+    """What is wrong with a value under a template's number rule, as Excel would judge it, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 'must be a number'
+    if rule.type == 'whole' and not float(value).is_integer():
+        return 'must be a whole number'
+    test, words = NUMBER_RULES.get(rule.operator or 'between', (None, None))
+    low, high = _bound(rule.formula1), _bound(rule.formula2)
+    if test is None or low is None or ('between' in (rule.operator or 'between').lower() and high is None):
+        return None  # a limit given by a cell or formula is not evaluated here
+    if not test(value, low, high):
+        show = lambda n: f'{n:g}'  # noqa: E731
+        return words.format(a=show(low), b=show(high) if high is not None else '')
+    return None
 
 
 def _row_written(template_sheet, ws, row: int) -> bool:

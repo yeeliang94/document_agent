@@ -767,3 +767,30 @@ def test_a_dropped_reply_is_retried_from_the_finished_items(tmp_path, monkeypatc
     streams[:] = [Dropping(), Dropping(), Dropping()]
     with pytest.raises(APIError):  # two retries, then the error stands
         asyncio.run(engine._drive(None, 'go', _drive_job(tmp_path), store, print, StopAfter(stop=None)))
+
+
+def test_number_rules_in_the_template_are_enforced_as_excel_would(tmp_path):
+    template = tmp_path / 't.xlsx'
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Pay'
+    ws.append(['Amount', 'Month'])
+    amounts = DataValidation(type='decimal', operator='greaterThanOrEqual', formula1='0')
+    amounts.add('A2:A100')
+    months = DataValidation(type='whole', operator='between', formula1='1', formula2='12')
+    months.add('B2:B100')
+    for rule in (amounts, months):
+        ws.add_data_validation(rule)
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    for row in ([-500, 1.5], [10, 13], [0, 12]):
+        ws.append(row)
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    assert run_checks(outputs, job, inventory(job.zip), proof='none')['issues'] == [
+        'Pay!A2 = -500 must be 0 or more.',
+        'Pay!B2 = 1.5 must be a whole number.',
+        'Pay!B3 = 13 must be between 1 and 12.',
+    ]
