@@ -199,7 +199,7 @@ def check_deliverable(outputs: Path, deliverable: Deliverable, job_rules) -> lis
     return issues + check_rules(wb, rules, deliverable.name)
 
 
-def _decision(value) -> str:
+def normal_decision(value) -> str:
     return str(value or '').strip().lower().replace(' ', '_').replace('-', '_')
 
 
@@ -244,7 +244,7 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> list[str]:
         if entry is None:
             if not f.get('junk'):  # system clutter such as Thumbs.db needs no decision
                 missing.append(f['path'])
-        elif _decision(entry.get('decision')) not in DECISIONS:
+        elif normal_decision(entry.get('decision')) not in DECISIONS:
             bad.append(f'{f["path"]} ({entry.get("decision")!r})')
         elif blank(entry.get('reason')):
             unexplained.append(f['path'])
@@ -317,7 +317,11 @@ def _ranges(numbers: set[int]) -> str:
     return ', '.join(parts[:8]) + (' ...' if len(parts) > 8 else '')
 
 
-def check_provenance(outputs: Path, job: JobSpec, files: list[dict], entries: dict[str, dict] | None) -> list[str]:
+def check_provenance(
+    outputs: Path, job: JobSpec, files: list[dict], entries: dict[str, dict] | None, counts: dict | None = None
+) -> list[str]:
+    """counts, when given, receives how many rows were written and how many have sources."""
+    counts = counts if counts is not None else {}
     path = outputs / PROVENANCE
     if not path.exists():
         return [f'{PROVENANCE} has not been saved yet.']
@@ -344,7 +348,7 @@ def check_provenance(outputs: Path, job: JobSpec, files: list[dict], entries: di
                 issues.append(f'{PROVENANCE} item {number} cites {source!r}, which is not a file in the packet.')
                 continue
             entry = entry_for(entries or {}, match)
-            if entry is not None and _decision(entry.get('decision')) not in ('used', 'reference'):
+            if entry is not None and normal_decision(entry.get('decision')) not in ('used', 'reference'):
                 issues.append(
                     f'{PROVENANCE} item {number} cites {match}, but {DOCUMENT_MAP} marks it '
                     f'{entry.get("decision")!r}. Mark it used or reference, or cite the right file.'
@@ -353,21 +357,35 @@ def check_provenance(outputs: Path, job: JobSpec, files: list[dict], entries: di
     for deliverable in job.deliverables:
         for sheet, rows in written_rows(outputs, deliverable).items():
             left = rows - covered_rows.get((deliverable.name, sheet), set())
+            counts['written'] = counts.get('written', 0) + len(rows)
+            counts['sourced'] = counts.get('sourced', 0) + len(rows) - len(left)
             if left:
                 issues.append(f'{PROVENANCE} gives no sources for {deliverable.name} "{sheet}" rows {_ranges(left)}.')
     return issues
 
 
 def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row') -> dict:
-    issues = []
+    """Every check, plus a summary per area for people: deliverable problems, files decided, rows with sources."""
+    deliverable_issues = []
     for deliverable in job.deliverables:
-        issues += check_deliverable(outputs, deliverable, job.rules)
+        deliverable_issues += check_deliverable(outputs, deliverable, job.rules)
     entries, error = read_map(outputs)
-    issues += [error] if error else check_map(entries, files)
+    map_issues = [error] if error else check_map(entries, files)
+    needed = [f for f in files if not f.get('junk')]
+    decided = sum(
+        1
+        for f in needed
+        if (e := entry_for(entries or {}, f['path'])) and normal_decision(e.get('decision')) in DECISIONS
+    )
+    summary = {'deliverable_problems': len(deliverable_issues), 'files_decided': decided, 'files': len(needed)}
+    provenance_issues = []
     if proof == 'row':
-        issues += check_provenance(outputs, job, files, entries)
+        counts = {}
+        provenance_issues = check_provenance(outputs, job, files, entries, counts)
+        summary |= {'rows_sourced': counts.get('sourced', 0), 'rows_written': counts.get('written', 0)}
+    issues = deliverable_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
-    return {'passed': not issues, 'issues': shown}
+    return {'passed': not issues, 'issues': shown, 'summary': summary}
 
 
 def describe_template(path: Path) -> str:

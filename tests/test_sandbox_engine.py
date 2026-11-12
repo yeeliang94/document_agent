@@ -339,3 +339,27 @@ def test_resume_card_is_empty_before_any_run(tmp_path):
     store = Store(tmp_path)
     job = store.create('payroll', '2026-10', 'x', 'y')
     assert resume_card(store, job) is None
+
+
+def test_the_document_map_and_check_summary_reach_the_screens(tmp_path, monkeypatch):
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        (outputs / 'document_map.json').write_text(
+            json.dumps({'files': [{'path': 'HR/a.txt', 'decision': 'Not relevant', 'reason': 'Other entity'}]}),
+            encoding='utf-8',
+        )
+        record = finished()
+        record['final_check']['summary'] = {'deliverable_problems': 0, 'files_decided': 1, 'files': 1}
+        record['reviews'] = [{'verdict': 'doubts', 'doubts': [{'issue': 'x'}]}]
+        return record
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        assert client.get(f'/api/jobs/{job["id"]}/document-map').json() == {'files': []}  # not saved yet
+        done = wait_for_job(client, job['id'])
+        assert done['engine_check']['summary']['files_decided'] == 1
+        assert done['engine_check']['reviews'] == 1 and done['engine_check']['doubts'] == 1
+        assert done['engine_team'] == {'scouts': 3, 'reviewer': True}
+        files = client.get(f'/api/jobs/{job["id"]}/document-map').json()['files']
+        assert files == [{'path': 'HR/a.txt', 'decision': 'not_relevant', 'reason': 'Other entity'}]

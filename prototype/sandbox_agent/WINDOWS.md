@@ -28,7 +28,7 @@ Same as the main app:
    - If a step fails with "container not found", the model alias and the address are in different regions. The EMEA address works with the `openai.eu.gpt-6-luna` alias.
 3. **Test the agent.** Run `run_test.bat`. It builds the six synthetic test packets once, runs the agent on the payroll packet through the proxy and scores the result. It usually takes 5 minutes, and up to 15 when OpenAI is slow. Name another packet to try it: `run_test.bat payment_journal`. While code runs you see `... running code in the sandbox` lines.
 4. **The full scorecard** (Phase 7, about an hour, paid): `run_scorecard.bat`. It runs every packet and writes a comparison table under `runs\experiments\`. Send back its `summary.md`.
-5. **Your own files** (only once approved for this use): `run_agent.bat path\to\packet.zip path\to\template.xlsx "What the run should produce"`. If the agent asks a question, type the answer in the window.
+5. **Your own files:** `run_agent.bat path\to\packet.zip path\to\template.xlsx "What the run should produce"`. If the agent asks a question, type the answer in the window.
 
 Each script waits for a key press before closing, so you can read or copy its output.
 - Every run is saved under `runs\<run id>\`. The README says what each file holds.

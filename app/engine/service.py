@@ -199,8 +199,9 @@ class SandboxEngine:
     async def run(self, job_id: str):
         store = self.store
         store.mutate(job_id, lambda j: (take_answer(j), j.update(status='running', error=None)))
-        job = store.get(job_id)
         options = store.settings()
+        team = {'scouts': options['max_scouts'], 'reviewer': options['reviewer']}
+        job = store.update(job_id, engine_team=team)
         root = store.path(job_id)
         attempt = len(list((root / 'engine').glob('run-*'))) + 1
         resume = resume_card(store, job)
@@ -302,7 +303,15 @@ class SandboxEngine:
             (store.path(job_id) / 'outputs' / 'processing_summary.txt').write_text(report, encoding='utf-8')
         tokens = record.get('usage') or {}
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
+        reviews = record.get('reviews') or []
         updates = {
+            'engine_check': {
+                'passed': bool(check.get('passed')),
+                'issues': (check.get('issues') or [])[:10],
+                'summary': check.get('summary') or {},
+                'reviews': len(reviews),
+                'doubts': sum(len(r.get('doubts') or []) for r in reviews),
+            },
             'error': error if status in ('failed', 'paused') else None,
             'artifacts': self.artifacts(job_id, status == 'completed'),
             'summary': summary,

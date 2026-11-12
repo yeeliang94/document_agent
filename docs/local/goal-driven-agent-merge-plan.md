@@ -134,9 +134,9 @@ Each phase ends with a check that must pass before the next starts. Phases 1 and
 
 ## 9 Progress (12 November 2026)
 
-### Phase 0 defaults used until you decide
-- **Data:** synthetic packets only. No real payroll data has gone to OpenAI.
-- **Proof:** "each written row names its source files, and every file has a decision". This is a Settings-page value (`proof`), so it can be switched off or made stricter later.
+### Phase 0 decisions
+- **Data:** approved by you on 12 November 2026. Real payroll files may go to OpenAI sandboxes through the proxy.
+- **Proof:** still the default, "each written row names its source files, and every file has a decision". You have not decided this yet. It is a Settings-page value, so it can be switched off or made stricter later.
 - **Proxy:** the EMEA address with the `openai.eu.gpt-6-luna` alias, as Copilot found. Still to confirm with the GenAI team.
 
 ### Phase 3 spike result
@@ -183,11 +183,11 @@ All six packets went through the real app on the sandbox engine, and their final
 | 2 Team design | Done. Shape A by default; the numbers are above. |
 | 3 Engine in the app | Done behind the switch. The engine lives in `app/engine/`, and the prototype runs the same code. Settings are stored and served by `/api/settings`, which also warns when model and endpoint regions differ. Format deliverables can be uploaded as a `.json` format. |
 | 4 Pauses and limits | Done. Pause, cancel, new instructions mid-run, and questions that hold the sandbox and then park the job. Resume works in a fresh sandbox without losing saved outputs. Turn, time and token limits are Settings-page values. Proxy errors say what to change. |
-| 5 Screens | HTML prototype ready for approval: `docs/local/prototypes/sandbox-engine-screens.html`. No app screen has changed, so the engine switch and the new settings can only be set through `/api/settings` until the screens are built. |
+| 5 Screens | Prototype approved on 12 November 2026 (`docs/local/prototypes/sandbox-engine-screens.html`); screens built in the app. |
 | 6 Switch-over | Waits on approved real packets and your go-ahead. |
 | 7 Windows | Scripts ready (`run_test.bat`, `run_scorecard.bat`). Waits on a run on the Windows machine. |
 
 ### Not verified
 - Nothing has run through your proxy or on Windows. The batch scripts were not run.
 - Pausing and cancelling were tested with stand-ins for OpenAI, not in a live run.
-- Real payroll data has not been used.
+- Real payroll data has not been used yet, although it is now approved.

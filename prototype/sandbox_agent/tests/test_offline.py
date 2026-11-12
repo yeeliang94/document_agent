@@ -182,7 +182,10 @@ def test_provenance_must_cover_every_written_row_with_used_files(tmp_path):
         json.dumps([{'file': 'j.xlsx', 'sheet': 'Journal', 'rows': '2-3', 'sources': ['/mnt/data/packet/x.csv']}]),
         encoding='utf-8',
     )
-    assert run_checks(outputs, job, files) == {'passed': True, 'issues': []}
+    result = run_checks(outputs, job, files)
+    assert result['passed'] and result['issues'] == []
+    assert result['summary'] == {'deliverable_problems': 0, 'files_decided': 2, 'files': 2, 'rows_sourced': 2,
+                                 'rows_written': 2}  # fmt: skip
 
 
 def test_missing_outputs_are_reported(packet, tmp_path):

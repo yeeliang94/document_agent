@@ -62,7 +62,7 @@ Each packet comes with an answer key the agent never sees. `packets` proves each
 
 **Settings and data:**
 - **Settings** are read like the main app's: `OPENAI_API_KEY`, `OPENAI_BASE_URL` and `OPENAI_MODEL` come from the project `.env`. `python -m sandbox_agent settings` shows what a run would use.
-- **Paid and remote:** live runs are paid and upload the zip to OpenAI's sandbox. **Use synthetic packets only until real payroll data is approved for OpenAI containers.**
+- **Paid and remote:** live runs are paid and upload the zip to OpenAI's sandbox. Real payroll files were approved for OpenAI sandboxes on 12 November 2026; keep the run folders out of synced folders, because they hold copies of the inputs and outputs.
 
 ## Through the main app
 

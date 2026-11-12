@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from . import app_settings, jobstatus
 from .config import ROOT, Settings, settings
 from .context import estimate_text
+from .engine.checks import DOCUMENT_MAP, map_entries, normal_decision
 from .engine.rules import check_format_definition
 from .files import add_file, add_zip, is_junk, within
 from .runtime import Runner
@@ -192,7 +193,9 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         # The sandbox engine also builds a workbook from a written format (.json, see app/engine/rules.py).
         allowed = ('.xlsx', '.json') if engine == 'sandbox' else ('.xlsx',)
         if not template.filename or not template.filename.lower().endswith(allowed):
-            raise HTTPException(400, 'Choose an .xlsx output template' + (' or a .json format' if engine == 'sandbox' else ''))
+            raise HTTPException(
+                400, 'Choose an .xlsx output template' + (' or a .json format' if engine == 'sandbox' else '')
+            )
         if not files:
             raise HTTPException(400, 'Choose source files')
         if len(instructions) > MAX_TEXT_CHARS or len(context) > MAX_TEXT_CHARS:
@@ -361,6 +364,23 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             return store.state(job_id).page('task', offset, limit)
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
+
+    @api.get('/api/jobs/{job_id}/document-map')
+    def document_map(job_id):
+        """The sandbox engine's file-by-file record: each packet file, its decision and the reason."""
+        get(job_id)
+        path = store.path(job_id) / 'outputs' / DOCUMENT_MAP
+        if not path.is_file():
+            return {'files': []}
+        try:
+            entries = map_entries(json.loads(path.read_text(encoding='utf-8')))
+        except (ValueError, OSError):
+            return {'files': [], 'error': 'The document map could not be read.'}
+        files = [
+            {'path': p, 'decision': normal_decision(e.get('decision')), 'reason': str(e.get('reason') or '')}
+            for p, e in sorted(entries.items())
+        ]
+        return {'files': files}
 
     @api.get('/api/jobs/{job_id}/events')
     async def events(job_id, after: int = 0):

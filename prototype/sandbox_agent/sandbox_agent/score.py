@@ -27,7 +27,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from app.engine.checks import _decision, entry_for, read_map
+from app.engine.checks import entry_for, normal_decision, read_map
 from app.engine.rules import blank, table
 
 TOLERANCE = 0.011
@@ -141,7 +141,7 @@ def score_files(outputs: Path, expected: dict[str, str]) -> dict:
     relevance, exact, wrong = 0, 0, []
     for path, want in expected.items():
         entry = entry_for(entries, path)
-        got = _decision(entry.get('decision')) if entry else 'missing'
+        got = normal_decision(entry.get('decision')) if entry else 'missing'
         exact += got == want
         if (got in RELEVANT) == (want in RELEVANT):
             relevance += 1
