@@ -91,12 +91,12 @@ def _list_values(formula: str, workbook) -> list | None:
         sheet = sheet.strip("'")
         if sheet in workbook.sheetnames:
             min_col, min_row, max_col, max_row = range_boundaries(ref.replace('$', ''))
-            ws = workbook[sheet]
-            return [
-                c.value
-                for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
-                for c in row
-                if c.value not in (None, '')
+            return [  # only cells that hold something, so a list that names a whole column stays cheap
+                value
+                for number, cells in sorted(filled_rows(workbook[sheet]).items())
+                if (min_row or 1) <= number <= (max_row or number)  # "A:A" has no row limits
+                for column, value in sorted(cells.items())
+                if (min_col or 1) <= column <= (max_col or column)
             ]
     return None
 

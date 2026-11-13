@@ -16,7 +16,7 @@ from sandbox_agent.score import score_questions
 from sandbox_agent.selftest import perfect_outputs, selftest
 
 from app.engine.agent import _slug, _tool_error, ask, digest, folder_zip, run_job, sync_outputs
-from app.engine.checks import describe_template, inventory, parse_rows, run_checks
+from app.engine.checks import _list_values, describe_template, inventory, parse_rows, run_checks
 from app.engine.endpoint import Settings
 from app.engine.goal import goal_card
 from app.engine.jobspec import DEFAULT_ANSWER, Answerer, Deliverable, JobSpec, load_job
@@ -949,3 +949,31 @@ def test_a_dropdown_saved_as_split_ranges_still_counts_as_kept():
     assert _covered(whole, [CellRange('A2:B50'), CellRange('A51:A100'), CellRange('B51:B200')])
     assert not _covered(whole, [CellRange('A2:B50'), CellRange('A51:A100')])
     assert not _covered(whole, [])
+
+
+def test_a_dropdown_that_names_a_whole_column_reads_only_the_cells_that_hold_a_value(tmp_path):
+    template = tmp_path / 't.xlsx'
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Data'
+    ws.append(['Code'])
+    lists = wb.create_sheet('Lists')
+    for code in ('A', 'B'):
+        lists.append([code])
+    rule = DataValidation(type='list', formula1='Lists!$A$1:$A$1048576', allow_blank=True)
+    rule.add('A2:A1048576')
+    ws.add_data_validation(rule)
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    ws.append(['B'])
+    ws.append(['C'])
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    issues = run_checks(outputs, job, inventory(job.zip), proof='none')['issues']
+    assert issues == ["Data!A3 = 'C' is not in its dropdown ['A', 'B']."]
+    opened = load_workbook(template)
+    for whole in ('Lists!$A$1:$A$1048576', 'Lists!$A:$A'):
+        assert _list_values(whole, opened) == ['A', 'B']
+    assert len(opened['Lists']._cells) == 2  # no empty cells were made along the way
