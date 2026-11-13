@@ -2,19 +2,21 @@
 
 import asyncio
 import json
+import time
 import zipfile
 from types import SimpleNamespace
 
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.formula import ArrayFormula
 from sandbox_agent import packets
 from sandbox_agent.experiment import summary
 from sandbox_agent.score import score_questions
 from sandbox_agent.selftest import perfect_outputs, selftest
 
 from app.engine.agent import _slug, _tool_error, ask, digest, folder_zip, run_job, sync_outputs
-from app.engine.checks import inventory, run_checks
+from app.engine.checks import describe_template, inventory, parse_rows, run_checks
 from app.engine.endpoint import Settings
 from app.engine.goal import goal_card
 from app.engine.jobspec import DEFAULT_ANSWER, Answerer, Deliverable, JobSpec, load_job
@@ -455,7 +457,8 @@ def test_a_slow_scout_is_cut_off_and_the_rest_still_return(tmp_path, monkeypatch
     monkeypatch.setattr(agent_module, '_scout', fake_scout)
     monkeypatch.setattr(agent_module, 'SCOUT_TIMEOUT_SECONDS', 0.2)
     files = [{'path': 'slow/a.csv'}, {'path': 'fast/b.csv'}]
-    job = SimpleNamespace(files=files, max_scouts=8, scouts_started=0, store=RunStore(tmp_path))
+    job = SimpleNamespace(files=files, max_scouts=8, scouts_started=0, store=RunStore(tmp_path), usage=[],
+                          scout_usage=[], review_usage=[], max_tokens=10_000)  # fmt: skip
     out = asyncio.run(agent_module.scout_many(job, ['slow', 'fast'], ''))
     assert out[0]['folder'] == 'slow' and 'took over 0.2 s' in out[0]['error']
     assert out[1] == {'folder': 'fast', 'files': []}
@@ -608,7 +611,7 @@ class StopAfter(SimpleNamespace):
 
 
 def _drive_job(tmp_path, **limits):
-    return SimpleNamespace(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60,
+    return SimpleNamespace(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60, files=[],
                            max_tokens=10_000, **limits)  # fmt: skip
 
 
@@ -794,3 +797,155 @@ def test_number_rules_in_the_template_are_enforced_as_excel_would(tmp_path):
         'Pay!B2 = 1.5 must be a whole number.',
         'Pay!B3 = 13 must be between 1 and 12.',
     ]
+
+
+def test_an_instruction_taken_just_before_a_dropped_reply_still_reaches_the_agent(tmp_path, monkeypatch):
+    from openai import APIError
+
+    import app.engine.agent as engine
+
+    class Dropping(FakeStream):
+        new_items = ['one finished item']
+
+        async def stream_events(self):
+            yield SimpleNamespace(type='run_item_stream_event', name='other', item=None)
+            yield SimpleNamespace(type='run_item_stream_event', name='other', item=None)
+            raise APIError('There was an issue with your request.', None, body=None)
+
+    class Told(StopAfter):
+        def new_messages(self):
+            return self.queue.pop(0) if self.queue else []
+
+    streams = [Dropping(), FakeStream(final=SimpleNamespace(status='complete'))]
+    prompts = []
+
+    def run(_agent, prompt, **_kw):
+        prompts.append(prompt)
+        return streams.pop(0)
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', run)
+    control = Told(stop=None, queue=[['use the October rates']])
+    result = asyncio.run(engine._drive(None, 'go', _drive_job(tmp_path), RunStore(tmp_path), print, control))
+    assert result.final_output.status == 'complete'
+    assert prompts[1][0] == {'role': 'user', 'content': 'so far'}
+    assert 'use the October rates' in prompts[1][-1]['content']
+
+
+def test_no_scout_starts_once_the_token_limit_is_used_up(tmp_path):
+    import app.engine.agent as agent_module
+
+    live = SimpleNamespace(requests=1, input_tokens=9_000, output_tokens=1_001, input_tokens_details=None,
+                           output_tokens_details=None)  # fmt: skip
+    job = SimpleNamespace(files=[{'path': 'a/b.csv'}], max_scouts=8, scouts_started=0, store=RunStore(tmp_path),
+                          usage=[], scout_usage=[], review_usage=[], max_tokens=10_000)  # fmt: skip
+    out = asyncio.run(agent_module.scout_many(job, ['a'], '', live))
+    assert 'token limit' in out[0]['error'] and job.scouts_started == 0
+
+
+def _template_with_rules(tmp_path):
+    template = tmp_path / 't.xlsx'
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Pay'
+    ws.append(['Code', 'Amount'])
+    codes = DataValidation(type='list', formula1='"A,B"', allow_blank=True)
+    codes.add('A2:A100')
+    amounts = DataValidation(type='decimal', operator='greaterThanOrEqual', formula1='0')
+    amounts.add('B2:B100')
+    for rule in (codes, amounts):
+        ws.add_data_validation(rule)
+    return template, wb
+
+
+def test_a_formula_the_template_keeps_in_a_number_only_cell_is_not_called_a_bad_number(tmp_path):
+    template, wb = _template_with_rules(tmp_path)
+    wb.active['B2'] = '=SUM(B3:B100)'
+    wb.active['B3'] = ArrayFormula('B3', '=SUM(B4:B100*1)')
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    wb.active['A4'], wb.active['B4'] = 'A', 12.5
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    assert run_checks(outputs, job, inventory(job.zip), proof='none')['issues'] == []
+
+
+def test_an_output_that_drops_or_changes_a_template_dropdown_is_refused(tmp_path):
+    template, wb = _template_with_rules(tmp_path)
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    ws = wb.active
+    ws.append(['A', 3])
+    ws.data_validations.dataValidation = [r for r in ws.data_validations.dataValidation if r.type != 'list']
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    assert run_checks(outputs, job, inventory(job.zip), proof='none')['issues'] == [
+        'Sheet "Pay": 1 of the template\'s entry rules are missing or changed, e.g. A2:A100 (dropdown). '
+        'Open the template and write into it, so its rules stay as they are.'
+    ]
+
+
+def test_a_far_away_formatted_cell_does_not_slow_the_checks(tmp_path):
+    from openpyxl.styles import Font
+
+    template, wb = _template_with_rules(tmp_path)
+    wb.active.cell(1_048_576, 300).font = Font(bold=True)  # formatting only, a million rows down
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    wb.active['A2'], wb.active['B2'] = 'C', 4
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    started = time.monotonic()
+    assert describe_template(template).startswith("Sheet \"Pay\": row 1 ['Code', 'Amount']")
+    (outputs / 'provenance.json').write_text(
+        json.dumps([{'file': 'out.xlsx', 'sheet': 'Pay', 'rows': '2-9999999999', 'sources': ['x.csv']}])
+    )
+    issues = run_checks(outputs, job, inventory(job.zip))['issues']
+    assert issues == ["Pay!A2 = 'C' is not in its dropdown ['A', 'B']."]
+    assert time.monotonic() - started < 5
+
+
+def test_row_ranges_are_clipped_before_they_are_expanded():
+    assert parse_rows('2-9999999999, 7', 5) == {2, 3, 4, 5}
+    assert parse_rows([1, '3-4', 0, 99], 10) == {1, 3, 4}
+    for bad in ('7-', '-5'):
+        with pytest.raises(ValueError):
+            parse_rows(bad, 10)
+
+
+def test_a_new_formula_or_an_empty_required_column_does_not_slip_past_the_template_rules(tmp_path):
+    template = tmp_path / 't.xlsx'
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Staff'
+    ws.append(['Employee'])
+    status = DataValidation(type='list', formula1='"Approved"', allow_blank=False)
+    status.add('B2:B100')
+    ws.add_data_validation(status)
+    wb.save(template)
+    job = _tiny_job(tmp_path, Deliverable('out.xlsx', template=template))
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    ws.append(['Alice'])  # B2, required, left blank and past the last column that holds anything
+    ws.append(['Bob', '="Rejected"'])
+    wb.save(outputs / 'out.xlsx')
+    _save_map(outputs, {'x.csv': 'used', 'y.csv': 'not_relevant'})
+    issues = run_checks(outputs, job, inventory(job.zip), proof='none')['issues']
+    assert issues[0] == 'Staff!B2 is blank; the template requires a value.'
+    assert issues[1].startswith('Staff!B3 = \'="Rejected"\' is a formula') and len(issues) == 2
+
+
+def test_a_dropdown_saved_as_split_ranges_still_counts_as_kept():
+    from openpyxl.worksheet.cell_range import CellRange
+
+    from app.engine.checks import _covered
+
+    whole = CellRange('A2:B100')
+    assert _covered(whole, [CellRange('A2:B50'), CellRange('A51:A100'), CellRange('B51:B200')])
+    assert not _covered(whole, [CellRange('A2:B50'), CellRange('A51:A100')])
+    assert not _covered(whole, [])

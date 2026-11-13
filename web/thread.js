@@ -149,8 +149,7 @@ function outputRows(job) {
 function endCard(job) {
   const status = job.status;
   if (status === 'waiting' && job.question) {
-    return `<div class="card ask"><p>${esc(job.question.text)}</p>
-      <p class="hint">The sandbox waits ${esc(state.settings?.values.question_wait_minutes ?? 10)} minutes for your answer. After that the run rests here and picks up when you reply.</p></div>`;
+    return `<div class="card ask"><p>${esc(job.question.text)}</p></div>`;
   }
   if (status === 'failed') {
     return `<div class="card bad"><p>${esc(job.error || 'The run stopped.')}</p>

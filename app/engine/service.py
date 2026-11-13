@@ -46,6 +46,7 @@ MESSAGES = {
     'question.asked': lambda d: f'Question for you: {d.get("question")}',
     'question.answered': lambda d: 'Answer received',
     'review.started': lambda d: 'An independent reviewer is checking the result',
+    'review.skipped': lambda d: f'No review: {d.get("reason")}',
     'review.finished': lambda d: f'Review finished: {d.get("verdict")}, {d.get("doubts")} doubt(s)',
     'instructions.delivered': lambda d: 'New instructions delivered to the agent',
     'sandbox.keepalive_failed': lambda d: 'The sandbox did not answer a keep-alive check',

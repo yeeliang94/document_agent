@@ -531,10 +531,6 @@ button.file:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.card .hint {
-  color: var(--warn-fg);
-  font-size: 13px;
-}
 .choices {
   display: flex;
   gap: 8px;

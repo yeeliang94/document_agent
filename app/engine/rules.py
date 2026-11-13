@@ -40,17 +40,33 @@ def blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def stored(ws) -> list:
+    """The cells a sheet really holds. Walking the sheet's whole rectangle instead visits millions of empty cells
+    when one far-away cell carries only formatting."""
+    return list(ws._cells.values())  # noqa: SLF001 - openpyxl has no public list of stored cells
+
+
+def filled_rows(ws) -> dict[int, dict[int, object]]:
+    """Row number -> {column number: value} for every cell that holds something. An array formula reads as its
+    text, like any other formula, so two copies of it compare equal."""
+    rows = defaultdict(dict)
+    for cell in stored(ws):
+        if not blank(cell.value):
+            rows[cell.row][cell.column] = getattr(cell.value, 'text', cell.value)
+    return rows
+
+
 def table(ws, header_row: int = 1) -> tuple[dict[str, int], list[tuple[int, dict]]]:
     """Header name -> column number, and every non-empty row below the header as (row number, {header: value})."""
+    filled = filled_rows(ws)
     headers = {}
-    for cell in ws[header_row]:
-        if not blank(cell.value):
-            headers.setdefault(str(cell.value).strip(), cell.column)
-    rows = []
-    for row in ws.iter_rows(min_row=header_row + 1):
-        values = {name: row[col - 1].value if col - 1 < len(row) else None for name, col in headers.items()}
-        if any(not blank(c.value) for c in row):
-            rows.append((row[0].row, values))
+    for column, value in sorted(filled.get(header_row, {}).items()):
+        headers.setdefault(str(value).strip(), column)
+    rows = [
+        (number, {name: cells.get(column) for name, column in headers.items()})
+        for number, cells in sorted(filled.items())
+        if number > header_row
+    ]
     return headers, rows
 
 

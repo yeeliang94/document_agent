@@ -17,13 +17,16 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
+from bisect import bisect_left, bisect_right
+from collections import defaultdict
 from pathlib import Path, PurePosixPath
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 
 from .jobspec import Deliverable, JobSpec
-from .rules import _key, blank, check_format, check_rules, table
+from .rules import _key, blank, check_format, check_rules, filled_rows, table
 
 JUNK_NAMES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 MAX_UNCOMPRESSED = 2 * 1024**3
@@ -31,6 +34,7 @@ DOCUMENT_MAP = 'document_map.json'
 PROVENANCE = 'provenance.json'
 DECISIONS = ('used', 'reference', 'not_relevant', 'unclear')
 MAX_ISSUES = 40
+WIDE_RULE = 100  # columns
 
 
 def top_folder(zip_path: Path) -> str | None:
@@ -103,29 +107,77 @@ def _validation_issues(template, out) -> list[str]:
         if sheet.title not in out.sheetnames:
             continue
         target = out[sheet.title]
+        issues += _lost_rules(sheet, target)
+        # Only rows and columns that hold something are checked, so a rule that covers a whole column stays cheap.
+        filled, before = filled_rows(target), filled_rows(sheet)
+        width = max([c for cells in (*filled.values(), *before.values()) for c in cells], default=0)
+        written = _written_rows(sheet, target)
+        numbers = sorted(filled)
         for rule in sheet.data_validations.dataValidation:
             allowed = _list_values(rule.formula1, template) if rule.type == 'list' else None
+            allowed_keys = {_key(a) for a in allowed or []}
             for cell_range in rule.sqref.ranges:
                 min_col, min_row, max_col, max_row = cell_range.bounds
-                for row in target.iter_rows(
-                    min_row=min_row, max_row=min(max_row, target.max_row), min_col=min_col, max_col=max_col
-                ):
-                    for cell in row:
-                        value = cell.value
-                        if value in (None, ''):
-                            if not rule.allow_blank and _row_written(sheet, target, cell.row):
+                # A rule that spans a whole row is checked only as far as the sheets hold values.
+                last = max_col if max_col - min_col < WIDE_RULE else min(max_col, max(width, min_col))
+                for number in numbers[bisect_left(numbers, min_row) : bisect_right(numbers, max_row)]:
+                    for column in range(min_col, last + 1):
+                        value = filled[number].get(column)
+                        where = f'{sheet.title}!{get_column_letter(column)}{number}'
+                        if value is None:
+                            if not rule.allow_blank and number in written:
+                                issues.append(f'{where} is blank; the template requires a value.')
+                        elif isinstance(value, str) and value.startswith('='):
+                            # A formula's result is not known here. One the template put there stands; a new one
+                            # could hide any value, so the agent is asked for the value itself.
+                            if before.get(number, {}).get(column) != value:
                                 issues.append(
-                                    f'{sheet.title}!{cell.coordinate} is blank; the template requires a value.'
+                                    f"{where} = {value!r} is a formula, so the template's rule for this cell cannot "
+                                    'be checked. Write the value itself.'
                                 )
-                        elif allowed is not None and _key(value) not in {_key(a) for a in allowed}:
-                            issues.append(
-                                f'{sheet.title}!{cell.coordinate} = {value!r} is not in its dropdown {allowed}.'
-                            )
+                        elif allowed is not None and _key(value) not in allowed_keys:
+                            issues.append(f'{where} = {value!r} is not in its dropdown {allowed}.')
                         elif rule.type in ('decimal', 'whole'):
                             problem = _number_problem(rule, value)
                             if problem:
-                                issues.append(f'{sheet.title}!{cell.coordinate} = {value!r} {problem}.')
+                                issues.append(f'{where} = {value!r} {problem}.')
     return issues
+
+
+def _rule_key(rule) -> tuple:
+    return rule.type, rule.operator, rule.formula1, rule.formula2, bool(rule.allow_blank)
+
+
+def _covered(cell_range, others) -> bool:
+    """Every cell of the range lies in one of the others, however they are split up."""
+    left, top, right, bottom = cell_range.bounds
+    columns = {left, *(v for o in others for v in (o.min_col, o.max_col + 1) if left < v <= right)}
+    rows = {top, *(v for o in others for v in (o.min_row, o.max_row + 1) if top < v <= bottom)}
+    return all(
+        any(o.min_col <= column <= o.max_col and o.min_row <= row <= o.max_row for o in others)
+        for column in columns
+        for row in rows
+    )
+
+
+def _lost_rules(sheet, target) -> list[str]:
+    """Template entry rules (dropdowns, number-only cells) the output no longer carries on the same cells. One line
+    per sheet, so a workbook rebuilt without its rules does not crowd out every other problem."""
+    kept = defaultdict(list)
+    for rule in target.data_validations.dataValidation:
+        kept[_rule_key(rule)] += rule.sqref.ranges
+    lost = [
+        f'{cell_range.coord} ({"dropdown" if rule.type == "list" else f"{rule.type} rule"})'
+        for rule in sheet.data_validations.dataValidation
+        for cell_range in rule.sqref.ranges
+        if not _covered(cell_range, kept[_rule_key(rule)])
+    ]
+    if not lost:
+        return []
+    return [
+        f'Sheet "{sheet.title}": {len(lost)} of the template\'s entry rules are missing or changed, e.g. '
+        f'{", ".join(lost[:3])}. Open the template and write into it, so its rules stay as they are.'
+    ]
 
 
 def _bound(formula):
@@ -164,10 +216,11 @@ def _number_problem(rule, value) -> str | None:
     return None
 
 
-def _row_written(template_sheet, ws, row: int) -> bool:
-    """The agent wrote into this row: some cell holds a value where the template's cell was blank. A row the
-    template already filled (labels, formulas) is not the agent's, so its blank validated cells are not required."""
-    return any(not blank(c.value) and blank(template_sheet.cell(row, c.column).value) for c in ws[row])
+def _written_rows(template_sheet, ws) -> set[int]:
+    """Rows the agent wrote into: some cell holds a value where the template's cell was blank. A row the template
+    already filled (labels, formulas) is not the agent's, so its blank validated cells are not required."""
+    before = filled_rows(template_sheet)
+    return {n for n, cells in filled_rows(ws).items() if any(c not in before.get(n, {}) for c in cells)}
 
 
 def _duplicate_rows(template, out) -> list[str]:
@@ -175,13 +228,14 @@ def _duplicate_rows(template, out) -> list[str]:
     for sheet in template.worksheets:
         if sheet.title not in out.sheetnames:
             continue
-        seen = {}
-        for number, row in enumerate(out[sheet.title].iter_rows(min_row=sheet.max_row + 1, values_only=True)):
-            if any(v not in (None, '') for v in row):
-                key = tuple(row)
-                if key in seen:
-                    issues.append(f'{sheet.title} row {sheet.max_row + 1 + number} duplicates row {seen[key]}.')
-                seen.setdefault(key, sheet.max_row + 1 + number)
+        seen, last = {}, max(filled_rows(sheet), default=0)  # the template's last row that holds anything
+        for number, cells in sorted(filled_rows(out[sheet.title]).items()):
+            if number <= last:
+                continue
+            key = tuple(sorted(cells.items()))
+            if key in seen:
+                issues.append(f'{sheet.title} row {number} duplicates row {seen[key]}.')
+            seen.setdefault(key, number)
     return issues
 
 
@@ -195,12 +249,14 @@ def check_template(out, template: Path) -> list[str]:
         target = out[sheet.title]
         if target.sheet_state != sheet.sheet_state:
             issues.append(f'Sheet "{sheet.title}" visibility changed from {sheet.sheet_state} to {target.sheet_state}.')
-        for row in sheet.iter_rows():
-            for cell in row:
-                if cell.value not in (None, '') and target[cell.coordinate].value != cell.value:
+        after = filled_rows(target)
+        for number, cells in filled_rows(sheet).items():
+            for column, value in cells.items():
+                now = after.get(number, {}).get(column)
+                if now != value:
                     issues.append(
-                        f'{sheet.title}!{cell.coordinate} was {cell.value!r} in the template and is now '
-                        f'{target[cell.coordinate].value!r}. Keep template content as it is.'
+                        f'{sheet.title}!{get_column_letter(column)}{number} was {value!r} in the template and is now '
+                        f'{now!r}. Keep template content as it is.'
                     )
     issues += _validation_issues(tpl, out) + _duplicate_rows(tpl, out)
     return issues
@@ -314,20 +370,20 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> tuple[list[str], i
     return issues, decided
 
 
-def parse_rows(rows) -> set[int]:
-    """Rows as 7, [7, 8], "7-12" or "7-12, 15"."""
+def parse_rows(rows, top: int) -> set[int]:
+    """Rows as 7, [7, 8], "7-12" or "7-12, 15", keeping rows 1 to top. Ranges are clipped before they are expanded,
+    so a record that names billions of rows costs nothing."""
     if isinstance(rows, int):
-        return {rows}
+        return {rows} if 1 <= rows <= top else set()
     if isinstance(rows, list):
-        return {n for item in rows for n in parse_rows(item)}
+        return {n for item in rows for n in parse_rows(item, top)}
     found = set()
     for part in str(rows).split(','):
-        part = part.strip()
-        if '-' in part:
-            low, high = part.split('-', 1)
-            found |= set(range(int(low), int(high) + 1))
-        elif part:
-            found.add(int(part))
+        low, dash, high = part.strip().partition('-')
+        if dash and not (low and high):
+            raise ValueError(f'Not a row range: {part!r}')
+        if low:
+            found |= set(range(max(int(low), 1), min(int(high or low), top) + 1))
     return found
 
 
@@ -343,12 +399,7 @@ def written_rows(outputs: Path, deliverable: Deliverable) -> dict[str, set[int]]
         for sheet in tpl.worksheets:
             if sheet.title not in wb.sheetnames:
                 continue
-            rows = set()
-            for row in wb[sheet.title].iter_rows():
-                for cell in row:
-                    if not blank(cell.value) and blank(sheet[cell.coordinate].value):
-                        rows.add(cell.row)
-                        break
+            rows = _written_rows(sheet, wb[sheet.title])
             if rows:
                 found[sheet.title] = rows
     else:
@@ -390,9 +441,10 @@ def check_provenance(
         return [f'{PROVENANCE} must be a JSON list of {{"file", "sheet", "rows", "sources"}} objects.'], counts
     issues, covered_rows = [], {}
     paths = {f['path'] for f in files}
+    last = max((max(rows) for rows in written.values()), default=0)  # rows past the last written one prove nothing
     for number, record in enumerate(records):
         try:
-            rows = parse_rows(record['rows'])
+            rows = parse_rows(record['rows'], last)
             sources = [_clean(s) for s in record['sources']]
             key = (record['file'], record['sheet'])
         except Exception:  # noqa: BLE001
@@ -450,8 +502,9 @@ def describe_template(path: Path) -> str:
     wb = load_workbook(path)
     lines = []
     for ws in wb.worksheets:
-        headers = [str(c.value) for c in ws[1] if not blank(c.value)] if ws.max_row else []
-        formulas = sum(1 for row in ws.iter_rows() for c in row if isinstance(c.value, str) and c.value.startswith('='))
+        filled = filled_rows(ws)
+        headers = [str(value) for _, value in sorted(filled.get(1, {}).items())]
+        formulas = sum(isinstance(v, str) and v.startswith('=') for cells in filled.values() for v in cells.values())
         state = '' if ws.sheet_state == 'visible' else f' ({ws.sheet_state})'
         lines.append(
             f'Sheet "{ws.title}"{state}: row 1 {headers[:20]}' + (f', {formulas} formula cells' if formulas else '')

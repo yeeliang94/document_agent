@@ -7,19 +7,22 @@ import csv
 import io
 import json
 import threading
+import zipfile
 from datetime import date, datetime, time
+from itertools import chain
 from pathlib import Path
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-from .engine.checks import PROVENANCE
+from .engine.checks import PROVENANCE, parse_rows
 from .files import within
 
 FOLDERS = ('inputs', 'template', 'outputs')
 MAX_ROWS = 500
 MAX_COLUMNS = 40
 MAX_CHARS = 200_000
+MAX_DOCX_BYTES = 100 * 1024**2  # unpacked
 SHEETS = {'.xlsx', '.xlsm'}
 IMAGES = {'.png', '.jpg', '.jpeg', '.webp', '.gif'}
 TEXT = {'.txt', '.md', '.json', '.eml', '.log', '.xml', '.html', '.htm'}
@@ -103,26 +106,19 @@ def _csv(path: Path) -> dict:
 def _docx(path: Path) -> str:
     from docx import Document
 
+    # A Word file is a zip; a small one can unpack to something huge, so look before opening it.
+    with zipfile.ZipFile(path) as archive:
+        if sum(member.file_size for member in archive.infolist()) > MAX_DOCX_BYTES:
+            raise ValueError('The document is too large to preview')
     document = Document(str(path))
-    lines = [p.text for p in document.paragraphs]
-    for table in document.tables:
-        lines += ['\t'.join(cell.text for cell in row.cells) for row in table.rows]
+    rows = (row for table in document.tables for row in table.rows)
+    lines, size = [], 0
+    for line in chain((p.text for p in document.paragraphs), ('\t'.join(c.text for c in row.cells) for row in rows)):
+        lines.append(line)
+        size += len(line) + 1
+        if size > MAX_CHARS + 1:  # the preview is full; the rest is never read
+            break
     return '\n'.join(lines)
-
-
-def _shown_rows(rows) -> set[int]:
-    """The rows a provenance record covers that the preview shows. Ranges are clipped first, so a record naming
-    millions of rows costs nothing."""
-    if isinstance(rows, int):
-        return {rows} if 1 <= rows <= MAX_ROWS else set()
-    if isinstance(rows, list):
-        return {n for item in rows for n in _shown_rows(item)}
-    found = set()
-    for part in str(rows).split(','):
-        low, _, high = part.strip().partition('-')
-        if low:
-            found |= set(range(max(int(low), 1), min(int(high or low), MAX_ROWS) + 1))
-    return found
 
 
 def row_sources(outputs: Path, name: str, sheet: str | None, paths: list[str]) -> dict[str, list[str]]:
@@ -148,7 +144,7 @@ def row_sources(outputs: Path, name: str, sheet: str | None, paths: list[str]) -
         try:
             if record['file'] != name or record['sheet'] != sheet:
                 continue
-            rows = _shown_rows(record['rows'])
+            rows = parse_rows(record['rows'], MAX_ROWS)  # only rows the preview shows
             files = [stored_file(s) for s in record['sources']]
         except (KeyError, TypeError, ValueError):
             continue

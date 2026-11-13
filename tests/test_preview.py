@@ -123,3 +123,21 @@ def test_an_output_sheet_names_the_uploaded_files_behind_each_row(client):
     assert found['2'] == [source] and found['3'] == [source, '/mnt/data/packet/elsewhere.pdf']
     # A path with the sandbox folder in front still finds the upload, and a huge range stops at the last row shown.
     assert found['4'] == [source] and found['500'] == [source] and len(found) == 499
+
+
+def test_a_long_word_file_is_read_only_as_far_as_the_preview_shows(tmp_path, monkeypatch):
+    from docx import Document
+
+    from app import preview
+
+    document = Document()
+    for number in range(200):
+        document.add_paragraph(f'Paragraph {number}')
+    path = tmp_path / 'long.docx'
+    document.save(str(path))
+    monkeypatch.setattr(preview, 'MAX_CHARS', 100)
+    text = preview._docx(path)
+    assert text.startswith('Paragraph 0') and 100 < len(text) < 130
+    monkeypatch.setattr(preview, 'MAX_DOCX_BYTES', 10)
+    with pytest.raises(ValueError, match='too large'):
+        preview._docx(path)

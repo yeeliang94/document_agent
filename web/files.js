@@ -152,7 +152,7 @@ function sheetHtml(data) {
     ? `<div class="filter">${data.sheets.map((s) => `<button class="${s.name === data.sheet ? 'on' : ''}" data-sheet="${esc(s.name)}">${esc(s.name)}</button>`).join('')}</div>`
     : '';
   const hidden = data.sheets.find((s) => s.name === data.sheet)?.hidden;
-  const meta = [hidden ? 'Hidden sheet' : '', data.more ? 'Showing the first 500 rows' : '', picks ? 'Select a row to see its source files' : '']
+  const meta = [hidden ? 'Hidden sheet' : '', data.more ? 'Showing the first 500 rows' : '']
     .filter(Boolean)
     .map((t) => `<span>${t}</span>`)
     .join('');

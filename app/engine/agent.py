@@ -311,7 +311,7 @@ async def _scout(job: Job, folder: str, focus: str) -> dict:
     return digest(report, profile_path)
 
 
-async def scout_many(job: Job, folders: list[str], focus: str) -> list[dict]:
+async def scout_many(job: Job, folders: list[str], focus: str, live=None) -> list[dict]:
     """Run scouts for the named folders in parallel, each cut off after SCOUT_TIMEOUT_SECONDS."""
     known = {'/'.join(f['path'].split('/')[:depth]) for f in job.files for depth in range(1, f['path'].count('/') + 1)}
     wanted = list(dict.fromkeys(f.strip('/') for f in folders))
@@ -319,6 +319,12 @@ async def scout_many(job: Job, folders: list[str], focus: str) -> list[dict]:
     if unknown:
         tops = sorted({f['path'].split('/')[0] for f in job.files if '/' in f['path']})
         return [{'error': f'Unknown folder(s) {unknown}. Top-level folders are {tops}.'}]
+    if _out_of_tokens(job, live):  # live is the lead's spend in the reply that asked for the scouts
+        return [
+            {
+                'error': 'The token limit for this run is used up, so no scout was started. The run stops after this turn.'
+            }
+        ]
     room = job.max_scouts - job.scouts_started
     if room <= 0:
         return [{'error': f'The scout limit for this run ({job.max_scouts}) is used up. Explore with code instead.'}]
@@ -351,7 +357,7 @@ async def scout_folders(ctx: RunContextWrapper[Job], folders: list[str], focus: 
         folders: Folder paths relative to the packet's top folder, e.g. "Region_APAC/Singapore". Pass all at once.
         focus: Optional note on what matters for the task, passed to every scout.
     """
-    return json.dumps(await scout_many(ctx.context, folders, focus))
+    return json.dumps(await scout_many(ctx.context, folders, focus, ctx.usage))
 
 
 @function_tool(failure_error_function=_tool_error)
@@ -428,9 +434,21 @@ class RunStopped(Exception):
         self.status, self.result = status, result
 
 
+def _with_message(prompt, message: str) -> list:
+    items = prompt if isinstance(prompt, list) else [{'role': 'user', 'content': prompt}]
+    return [*items, {'role': 'user', 'content': message}]
+
+
 def _continue(result, message: str) -> list:
     """The conversation so far plus one more user message, to carry on in the same sandbox."""
-    return result.to_input_list() + [{'role': 'user', 'content': message}]
+    return _with_message(result.to_input_list(), message)
+
+
+def _instructions(messages: list[str]) -> str:
+    return (
+        'New instructions from the user. Decide what they change, redo only the affected work, and save again:\n'
+        + '\n'.join(messages)
+    )
 
 
 class LimitReached(Exception):
@@ -440,6 +458,10 @@ class LimitReached(Exception):
 def _tokens_used(job: Job, live=None) -> int:
     parts = [*job.usage, *job.scout_usage, *job.review_usage] + ([_usage(live)] if live is not None else [])
     return sum(p.get('input_tokens', 0) + p.get('output_tokens', 0) for p in parts)
+
+
+def _out_of_tokens(job: Job, live=None) -> bool:
+    return _tokens_used(job, live) > job.max_tokens
 
 
 async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control: Control):
@@ -458,7 +480,7 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
                 _log_stream(event, store, echo, job.files)
                 if event.type == 'raw_response_event' or stop or messages:
                     continue  # look up the job between items, not on every streamed token
-                if _tokens_used(job, result.context_wrapper.usage) > job.max_tokens:
+                if _out_of_tokens(job, result.context_wrapper.usage):
                     stop = 'limit'
                 else:
                     stop = control.stop_requested()
@@ -474,6 +496,9 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
             store.event('model.retry', error=f'{type(error).__name__}: {error}'[:300])
             echo(f'  OpenAI dropped a reply ({type(error).__name__}); carrying on')
             prompt = result.to_input_list() if result.new_items else prompt
+            if messages:  # already taken from the user's queue, so they travel with the retry or they are lost
+                store.event('instructions.delivered', messages=messages)
+                prompt = _with_message(prompt, _instructions(messages))
             continue
         finally:
             job.usage.append(_usage(result.context_wrapper.usage))
@@ -487,11 +512,7 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
             return result
         store.event('instructions.delivered', messages=messages)
         echo(f'  new instructions from the user: {" / ".join(messages)[:120]}')
-        prompt = _continue(
-            result,
-            'New instructions from the user. Decide what they change, redo only the affected work, and save again:\n'
-            + '\n'.join(messages),
-        )
+        prompt = _continue(result, _instructions(messages))
 
 
 async def _upload_outputs(box: Sandbox, outputs: Path) -> str:
@@ -692,6 +713,10 @@ async def run_job(
                                                   job, store, echo, control)  # fmt: skip
                             continue
                         if not review_on or rounds >= review_rounds:
+                            break
+                        if _out_of_tokens(job):
+                            store.event('review.skipped', reason='The token limit for this run is used up.')
+                            echo('  no review: the token limit for this run is used up')
                             break
                         rounds += 1
                         echo(f'  review round {rounds}: an independent reviewer is checking the result')

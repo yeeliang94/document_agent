@@ -94,14 +94,15 @@ def main():
     parser.add_argument('--timeout', type=int, default=2400, help='seconds per packet')
     args = parser.parse_args()
     data_dir = HERE / 'runs' / 'app-parity' / datetime.now().strftime('%Y%m%d-%H%M%S')
-    settings = Settings(data_dir=data_dir, job_timeout=args.timeout)
+    settings = Settings(data_dir=data_dir)
     folders = sorted(p.parent for p in args.packets.glob('*/job.json'))
     if args.only:
         folders = [f for f in folders if f.name in args.only.split(',')]
     rows = []
     with TestClient(base_url='http://127.0.0.1', app=create_app(settings)) as client:
-        client.put('/api/settings', json={'values': {'engine': 'sandbox', 'max_scouts': args.scouts,
-                                                     'reviewer': args.reviewer}})  # fmt: skip
+        minutes = min(240, max(5, -(-args.timeout // 60)))  # the Settings page takes 5 to 240 minutes
+        values = {'max_scouts': args.scouts, 'reviewer': args.reviewer, 'time_limit_minutes': minutes}
+        client.put('/api/settings', json={'values': values}).raise_for_status()
         for folder in folders:
             if len(load_job(folder).deliverables) != 1:
                 print(f'skip {folder.name}: the app takes one deliverable per job')
