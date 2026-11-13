@@ -13,20 +13,21 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
-from . import jobstatus
+from . import app_settings, jobstatus, preview
 from .config import ROOT, Settings, settings
-from .context import estimate_text
+from .engine.checks import normal_decision, read_map
+from .engine.rules import check_format_definition
 from .files import add_file, add_zip, is_junk, within
 from .runtime import Runner
 from .store import DEFAULT_CONTEXT, MODULE_LABELS, Store, clean
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 MAX_TEXT_CHARS = 30000
 
 
@@ -53,11 +54,11 @@ def last_event_id(request: Request) -> int:
         return 0
 
 
-def create_app(settings_override: Settings | None = None, model_override=None):
+def create_app(settings_override: Settings | None = None):
     conf = settings_override or settings
     conf.validate()
     store = Store(conf.data_dir)
-    runner = Runner(store, conf, model_override)
+    runner = Runner(store, conf)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -105,8 +106,6 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             'ready': True,
             'openai_configured': bool(conf.api_key),
             'version': VERSION,
-            'tokenizer_method': estimate_text('startup health check')[1],
-            'index_version': 1,
             'pid': os.getpid(),
             'instance_id': hashlib.sha256(str(ROOT.resolve()).encode()).hexdigest()[:16],
         }
@@ -123,16 +122,6 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 for module in DEFAULT_CONTEXT
             ],
             'statuses': jobstatus.as_json(),
-            'harness': {
-                'max_subagents': conf.max_subagents,
-                'context_token_budget': conf.context_tokens,
-                'tool_result_bytes': conf.tool_result_bytes,
-                'tool_deadline_seconds': conf.tool_timeout,
-                'python_tool': conf.python_tool,
-                'tokenizer_method': estimate_text('capability diagnostics')[1],
-                'accounting_version': 2,
-                'index_version': 1,
-            },
         }
 
     @api.get('/api/modules/{module}')
@@ -147,6 +136,28 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             raise HTTPException(404, 'Unknown module')
         store.save_profile(module, body.context)
         return {'id': module, 'context': body.context}
+
+    class SettingsInput(BaseModel):
+        values: dict = Field(default_factory=dict)
+
+    def settings_page(values):
+        connection = {
+            'base_url': conf.base_url,
+            'model': conf.model,
+            'warning': app_settings.region_warning(conf.base_url, conf.model),
+        }
+        return {'values': values, 'options': app_settings.describe(), 'connection': connection}
+
+    @api.get('/api/settings')
+    def app_settings_get():
+        return settings_page(store.settings())
+
+    @api.put('/api/settings')
+    def app_settings_put(body: SettingsInput):
+        try:
+            return settings_page(store.save_settings(body.values))
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
 
     @api.get('/api/jobs')
     async def jobs():
@@ -165,8 +176,9 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             raise HTTPException(400, 'Unknown module')
         if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', period):
             raise HTTPException(400, 'Use a reporting month in YYYY-MM format')
-        if not template.filename or not template.filename.lower().endswith('.xlsx'):
-            raise HTTPException(400, 'Choose an .xlsx output template')
+        # A run fills an .xlsx template or builds a workbook from a written format (.json, see app/engine/rules.py).
+        if not template.filename or not template.filename.lower().endswith(('.xlsx', '.json')):
+            raise HTTPException(400, 'Choose an .xlsx output template or a .json format')
         if not files:
             raise HTTPException(400, 'Choose source files')
         if len(instructions) > MAX_TEXT_CHARS or len(context) > MAX_TEXT_CHARS:
@@ -176,8 +188,6 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             manifest = await save_uploads(store.path(job_id), template, files)
             mark_duplicates(manifest)
             store.update(job_id, files=manifest)
-            store.state(job_id).put('schema', 'accounting', {'version': 2, 'index_version': 1})
-            store.state(job_id).inventory(manifest)
             store.event(
                 job_id, 'files.received', f'{len(manifest) - 1} source files received', type='job', files=manifest
             )
@@ -216,8 +226,12 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 raise ValueError('Expanded submission exceeds configured file or size limits')
         if not any(entry['role'] == 'inputs' for entry in manifest):
             raise ValueError('Choose source files')
-        # Fail early for corrupt/encrypted/non-workbook template.
-        load_workbook(root / manifest[0]['path'], read_only=True).close()
+        # Fail early for a corrupt/encrypted/non-workbook template, or a format the engine cannot read.
+        definition = root / manifest[0]['path']
+        if definition.suffix.lower() == '.json':
+            check_format_definition(json.loads(definition.read_text(encoding='utf-8-sig')))
+        else:
+            load_workbook(definition, read_only=True).close()
         return manifest
 
     @api.get('/api/jobs/{job_id}')
@@ -228,17 +242,14 @@ def create_app(settings_override: Settings | None = None, model_override=None):
     @api.post('/api/jobs/{job_id}/resume')
     async def start(job_id):
         j = get(job_id)
-        if not conf.api_key and model_override is None:
+        if not conf.api_key:
             raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
-        if j['status'] not in jobstatus.STARTABLE:
+        if j['status'] not in jobstatus.STARTABLE or j.get('legacy'):
             raise HTTPException(409, 'This job cannot start in its current state')
         if runner.active == job_id:
             raise HTTPException(409, 'The previous operation is still finishing')
         if not j['files']:
             raise HTTPException(400, 'No usable input files')
-        # A partial run already ended; the next run needs a fresh prompt to continue.
-        if j['status'] == 'partial':
-            store.update(job_id, continue_run=True)
         await runner.submit(job_id)
         return get(job_id)
 
@@ -268,62 +279,38 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if not body.answer.strip():
             raise HTTPException(400, 'Enter an answer')
         store.update(job_id, answer=body.answer)
-        store.state(job_id).instruction(body.answer, 'answer')
         store.event(job_id, 'user.answer', body.answer, type='user')
-        await runner.submit(job_id)
+        # A run still holding its sandbox picks the answer up itself. Otherwise, or once that run has ended, the
+        # runner queues the job; the answer was saved first, so whichever side looks last finds it.
+        if runner.active != job_id:
+            await runner.resume_if_answered(job_id)
         return get(job_id)
 
     @api.post('/api/jobs/{job_id}/message')
     async def message(job_id, body: TextInput):
         j = get(job_id)
-        if j['status'] not in jobstatus.ACCEPTS_MESSAGES:
+        if j['status'] not in jobstatus.ACCEPTS_MESSAGES or j.get('legacy'):
             raise HTTPException(409, 'Start or resume a run to send instructions')
         if not body.message.strip():
             raise HTTPException(400, 'Enter an instruction')
         # Delivered once into the conversation; also adding it to the task would repeat it.
         store.mutate(job_id, lambda job: job.update(pending_messages=job.get('pending_messages', []) + [body.message]))
-        store.state(job_id).instruction(body.message)
         store.event(job_id, 'user.instruction', body.message, type='user')
         return get(job_id)
 
-    # Synchronous handlers run in the threadpool, so SQLite waits never block the event loop.
-    @api.get('/api/jobs/{job_id}/inventory')
-    def inventory(job_id, offset: int = 0, limit: int = 25):
+    # Synchronous handlers run in the threadpool, so file and SQLite waits never block the event loop.
+    @api.get('/api/jobs/{job_id}/document-map')
+    def document_map(job_id):
+        """The agent's file-by-file record: each packet file, its decision and the reason."""
         get(job_id)
-        try:
-            return store.state(job_id).page('inventory', offset, limit)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
-
-    @api.get('/api/jobs/{job_id}/coverage')
-    def coverage(job_id):
-        get(job_id)
-        return store.state(job_id).coverage()
-
-    @api.get('/api/jobs/{job_id}/plan')
-    def work_plan(job_id):
-        get(job_id)
-        state = store.state(job_id)
-        return {
-            'plan': state.get('plan', 'current'),
-            'checkpoint': state.get('checkpoint', 'main'),
-        }
-
-    @api.get('/api/jobs/{job_id}/regions')
-    def regions(job_id, offset: int = 0, limit: int = 25):
-        get(job_id)
-        try:
-            return store.state(job_id).page('region', offset, limit)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
-
-    @api.get('/api/jobs/{job_id}/tasks')
-    def tasks(job_id, offset: int = 0, limit: int = 25):
-        get(job_id)
-        try:
-            return store.state(job_id).page('task', offset, limit)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
+        entries, error = read_map(store.path(job_id) / 'outputs')
+        if entries is None:
+            return {'files': [], 'error': None if error.endswith('not been saved yet.') else error}
+        files = [
+            {'path': p, 'decision': normal_decision(e.get('decision')), 'reason': str(e.get('reason') or '')}
+            for p, e in sorted(entries.items())
+        ]
+        return {'files': files}
 
     @api.get('/api/jobs/{job_id}/events')
     async def events(job_id, after: int = 0):
@@ -388,6 +375,40 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if not path.is_file() or path.name.endswith('.pending'):
             raise HTTPException(404, 'Output not found')
         return FileResponse(path, filename=path.name)
+
+    # The Files panel: look inside an upload, the template or an output without downloading it.
+    def job_file_error(error):
+        if isinstance(error, FileNotFoundError):
+            return HTTPException(404, 'File not found')
+        return HTTPException(400, 'Invalid file path' if 'path' in str(error).lower() else str(error))
+
+    @api.get('/api/jobs/{job_id}/preview')
+    def file_preview(job_id, path: str, sheet: str | None = None):
+        paths = [f['path'] for f in get(job_id)['files']]
+        try:
+            return preview.preview(store.path(job_id), path, sheet, paths)
+        except (FileNotFoundError, ValueError) as error:
+            raise job_file_error(error) from None
+
+    @api.get('/api/jobs/{job_id}/page')
+    def file_page(job_id, path: str, page: int = 1):
+        get(job_id)
+        try:
+            image = preview.page_png(store.path(job_id), path, page)
+        except (FileNotFoundError, ValueError) as error:
+            raise job_file_error(error) from None
+        except Exception as error:  # noqa: BLE001 - a damaged PDF
+            raise HTTPException(422, clean(f'This page cannot be shown: {error}')) from None
+        return Response(image, media_type='image/png', headers={'Cache-Control': 'private, max-age=3600'})
+
+    @api.get('/api/jobs/{job_id}/file')
+    def file_download(job_id, path: str):
+        get(job_id)
+        try:
+            found = preview.job_file(store.path(job_id), path)
+        except (FileNotFoundError, ValueError) as error:
+            raise job_file_error(error) from None
+        return FileResponse(found, filename=found.name)
 
     @api.post('/api/connection-check')
     async def connection_check():

@@ -1,0 +1,5 @@
+{
+  "_comment": "Optional. The proxy address and model come from OPENAI_BASE_URL and OPENAI_MODEL in the project .env, as for the main app. Copy this to sandbox_settings.json only if check_proxy.bat says the proxy needs these LiteLLM options. No secrets here.",
+  "provider": null,
+  "model_on_create": false
+}

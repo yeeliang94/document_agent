@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sandbox engine screens</title>
+<style>
+:root {
+  --bg: #f7f7f3; --panel: #fff; --ink: #232921; --muted: #7a8076; --line: #eceee6; --tint: #f0f4e9;
+  --accent: #d8ee89; --green-bg: #e7f2dc; --green: #3f6a35; --amber-bg: #f8eed9; --amber: #8a6220;
+  --red-bg: #f8e3df; --red: #9a3b2c; --blue-bg: #e6eef8; --blue: #34588a; --grey-bg: #efefea; --grey: #5f645b;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--ink); background: var(--bg);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-size: 14px; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; }
+.proto { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 16px; background: #232921; color: #fff; font-size: 13px; }
+.proto span { opacity: .7; margin-right: 4px; }
+.proto button { padding: 4px 12px; border-radius: 999px; color: #fff; background: rgba(255,255,255,.08); }
+.proto button.on { background: var(--accent); color: var(--ink); }
+.shell { display: grid; grid-template-columns: 208px 1fr; min-height: calc(100vh - 44px); }
+.sidebar { padding: 24px 16px; display: flex; flex-direction: column; gap: 24px; }
+.brand { font-weight: 500; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+.brand i { width: 24px; height: 24px; border-radius: 8px; background: var(--ink); display: inline-block; }
+.nav { display: flex; flex-direction: column; gap: 4px; }
+.nav button { text-align: left; padding: 8px 12px; border-radius: 12px; color: var(--muted); }
+.nav button.on { background: var(--tint); color: var(--ink); }
+main { padding: 24px 32px 48px; min-width: 0; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+h1 { font-size: 24px; font-weight: 500; margin: 0; }
+h2 { font-size: 15px; font-weight: 500; margin: 0; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--grey-bg); color: var(--grey); white-space: nowrap; }
+.pill.green { background: var(--green-bg); color: var(--green); } .pill.amber { background: var(--amber-bg); color: var(--amber); }
+.pill.red { background: var(--red-bg); color: var(--red); } .pill.blue { background: var(--blue-bg); color: var(--blue); }
+.grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.panel { background: var(--panel); border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+label.field { display: flex; flex-direction: column; gap: 8px; color: var(--muted); font-size: 13px; }
+.box { border-radius: 12px; background: var(--bg); padding: 12px; color: var(--ink); }
+.input, select.input { border: 0; border-radius: 12px; background: var(--bg); padding: 10px 12px; width: 100%; }
+.seg { display: inline-flex; background: var(--bg); border-radius: 999px; padding: 4px; gap: 4px; }
+.seg button { padding: 6px 14px; border-radius: 999px; color: var(--muted); }
+.seg button.on { background: var(--panel); color: var(--ink); }
+.btn { padding: 10px 18px; border-radius: 999px; background: var(--ink); color: #fff; font-weight: 500; }
+.btn.quiet { background: none; color: var(--ink); border: 1px solid var(--line); font-weight: 400; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.feed { display: flex; flex-direction: column; gap: 4px; }
+.ev { display: grid; grid-template-columns: 56px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.ev time { color: var(--muted); font-size: 12px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.ev.warn div { color: var(--amber); }
+.now { display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: 12px; background: var(--tint); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.4s infinite; flex: none; }
+@keyframes pulse { 50% { opacity: .3; } }
+.steps { display: flex; gap: 8px; flex-wrap: wrap; }
+.question { border-radius: 12px; background: var(--amber-bg); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.question p { margin: 0; line-height: 1.5; }
+.choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.row span:first-child { color: var(--muted); }
+.row:last-child { border-bottom: 0; }
+.file { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-radius: 12px; background: var(--bg); }
+.issues { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; line-height: 1.45; }
+.error { color: var(--red); line-height: 1.5; margin: 0; }
+.empty { color: var(--muted); text-align: center; padding: 48px 0; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.45; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.folder td { color: var(--muted); padding-top: 16px; }
+.settings { max-width: 760px; display: flex; flex-direction: column; gap: 24px; }
+.set { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.set:last-child { border-bottom: 0; }
+.set select, .set input { width: 220px; }
+.switch { width: 40px; height: 24px; border-radius: 999px; background: #d6d9cf; position: relative; flex: none; }
+.switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+.switch.on { background: var(--ink); } .switch.on::after { left: 19px; }
+.stepper { display: inline-flex; align-items: center; gap: 4px; background: var(--bg); border-radius: 999px; padding: 4px; }
+.stepper button { width: 28px; height: 28px; border-radius: 50%; }
+.stepper b { min-width: 24px; text-align: center; font-weight: 400; font-variant-numeric: tabular-nums; }
+.hint { color: var(--amber); font-size: 13px; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.filters button { padding: 4px 12px; border-radius: 999px; background: var(--bg); color: var(--muted); }
+.filters button.on { background: var(--ink); color: #fff; }
+.back { color: var(--muted); }
+.note { color: var(--muted); font-size: 13px; }
+@media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } .shell { grid-template-columns: 1fr; } .sidebar { display: none; } main { padding: 16px; } }
+</style>
+</head>
+<body>
+<div class="proto" id="proto"></div>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><i></i>Document Intelligence</div>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+  <main id="main"></main>
+</div>
+<script>
+const STATES = [['ready', 'Ready'], ['running', 'Running'], ['waiting', 'Question'], ['completed', 'Completed'], ['partial', 'Partial'], ['failed', 'Failed']];
+const s = { view: 'workspace', state: 'running', filter: 'all', deliverable: 'template', engine: 'sandbox', scouts: 4, reviewer: true, modelOnCreate: false };
+const STATUS = { ready: ['', 'Ready'], running: ['blue', 'Running'], waiting: ['amber', 'Needs your answer'], completed: ['green', 'Completed'], partial: ['amber', 'Partial'], failed: ['red', 'Failed'] };
+
+const EVENTS = [
+  ['0:02', 'Started on 28 files'], ['0:09', 'Sandbox ready'], ['0:31', 'Running code in the sandbox'],
+  ['1:12', 'Scouting 3 folders'], ['2:40', 'Scouts finished: 24 files profiled'], ['3:05', 'Running code in the sandbox'],
+  ['4:18', 'Saved outputs: 2 problems to fix', 'warn'], ['5:02', 'Saved outputs: checks passed'],
+];
+const MAP = [
+  ['MY02 / 2026 / 11_November', [
+    ['HR_export_MY02_Nov2026.xlsx', 'used', 'Joiners, leavers and pay changes for November'],
+    ['attendance_MY02_Nov.xlsx', 'used', 'Overtime hours, on the hidden OT_Calc sheet'],
+    ['change_log_nov.csv', 'used', 'Salary changes; one repeats the HR export and is counted once'],
+    ['inputs/nov_late_items.zip', 'used', 'Holds the only copy of one allowance and one deduction'],
+  ]],
+  ['MY02 / Policies', [['Payroll policy 2026.pdf', 'reference', 'Overtime multiplier of 1.5']]],
+  ['MY01 / 2026 / 11_November', [['HR_export_MY01_Nov2026.xlsx', 'not_relevant', 'Different entity, MY01']]],
+  ['MY02 / 2026 / 10_October', [['HR_export_MY02_Oct2026.xlsx', 'not_relevant', 'October, already processed']]],
+  ['Archive', [['submissions_2025.zip', 'not_relevant', 'Old submissions from 2025'], ['Thumbs.db', 'not_relevant', 'System file']]],
+];
+const DECISION = { used: ['green', 'Used'], reference: ['blue', 'Reference'], not_relevant: ['', 'Not relevant'], unclear: ['amber', 'Unclear'] };
+const pill = (tone, text) => `<span class="pill ${tone}">${text}</span>`;
+
+function proto() {
+  const views = [['workspace', 'Workspace'], ['map', 'Document map'], ['settings', 'Settings']];
+  return `<span>Prototype · view</span>${views.map(([v, l]) => `<button data-view="${v}" class="${s.view === v ? 'on' : ''}">${l}</button>`).join('')}
+    <span style="margin-left:16px">State</span>${STATES.map(([k, l]) => `<button data-state="${k}" class="${s.state === k ? 'on' : ''}">${l}</button>`).join('')}`;
+}
+function nav() {
+  return [['workspace', 'Workspace'], ['instructions', 'Instructions'], ['history', 'History'], ['settings', 'Settings'], ['diagnostics', 'Diagnostics']]
+    .map(([v, l]) => `<button data-view="${v}" class="${(s.view === v || (v === 'workspace' && s.view === 'map')) ? 'on' : ''}">${l}</button>`).join('');
+}
+
+function inputs() {
+  const locked = s.state !== 'ready';
+  return `<section class="panel">
+    <h2>Inputs</h2>
+    <label class="field">Payroll period<div class="box">November 2026</div></label>
+    <label class="field">Source files<div class="box">MY02_November_inputs.zip · 28 files</div></label>
+    <label class="field">Deliverable
+      <div class="seg"><button data-deliv="template" class="${s.deliverable === 'template' ? 'on' : ''}">Template</button><button data-deliv="format" class="${s.deliverable === 'format' ? 'on' : ''}">Saved format</button></div>
+      ${s.deliverable === 'template' ? '<div class="box">payroll_changes_template.xlsx</div>' : '<select class="input"><option>Payment journal import</option><option>AP invoice upload</option></select>'}
+    </label>
+    <label class="field">Goal<div class="box" style="min-height:72px">Prepare the November 2026 payroll changes for entity MY02 only.</div></label>
+    <button class="btn" ${locked ? 'disabled' : ''}>Run agent</button>
+  </section>`;
+}
+
+function activity() {
+  const st = s.state;
+  if (st === 'ready') return `<section class="panel"><h2>Activity</h2><div class="empty">No activity yet.</div></section>`;
+  const shown = st === 'running' ? EVENTS.slice(0, 6) : EVENTS;
+  let top = '';
+  if (st === 'running') top = `<div class="now"><i class="dot"></i><div>Scouting 3 folders in parallel</div></div>
+    <div class="steps">${pill('green', 'Map')}${pill('blue', 'Work')}${pill('', 'Check')}${pill('', 'Review')}</div>`;
+  if (st === 'waiting') top = `<div class="question">
+      <h2>The agent needs an answer</h2>
+      <p>MY2003's salary change is 6,500 on the signed change form (28 Oct) and 6,200 in the HR email of 4 Nov. Which is final?</p>
+      <input class="input" placeholder="Your answer">
+      <div class="choices"><button class="btn">Send answer</button></div>
+      <div class="note">The sandbox is held for 10 minutes. After that the job waits here and resumes when you answer.</div>
+    </div>`;
+  const extra = st === 'completed' ? [['6:20', 'Reviewer found 1 doubt'], ['7:02', 'Doubt settled: rounding fixed, saved again'], ['7:10', 'Run finished']]
+    : st === 'partial' ? [['9:40', 'Turn limit reached; work saved', 'warn']]
+    : st === 'failed' ? [['0:11', 'Sandbox could not be created', 'warn']] : [];
+  const events = (st === 'failed' ? EVENTS.slice(0, 1) : st === 'partial' ? EVENTS.slice(0, 7) : shown).concat(extra);
+  const controls = st === 'running' ? '<button class="btn quiet">Pause</button>' : (st === 'partial' || st === 'failed') ? '<button class="btn quiet">Resume</button>' : '';
+  return `<section class="panel">
+    <div class="head" style="margin:0"><h2>Activity</h2>${controls}</div>
+    ${top}
+    <div class="feed">${events.map(([t, m, w]) => `<div class="ev ${w || ''}"><time>${t}</time><div>${m}</div></div>`).join('')}</div>
+    ${['running', 'partial'].includes(st) ? '<input class="input" placeholder="Send an instruction to the agent">' : ''}
+  </section>`;
+}
+
+function output() {
+  const st = s.state;
+  let body = '<div class="note">No output yet.</div>';
+  if (st === 'running' || st === 'waiting') body = `<div class="file"><span>payroll_changes_output.xlsx</span>${pill('', 'Draft')}</div>`;
+  if (st === 'completed') body = `
+    <p style="margin:0;line-height:1.5">13 changes for MY02. 22 of 28 files set aside: other entities, other months and archives.</p>
+    <div class="file"><span>payroll_changes_output.xlsx</span>${pill('green', 'Checked')}</div>
+    <div class="file"><span>notes.md</span><span class="note">Download</span></div>
+    <button class="btn quiet" data-view="map">Document map</button>`;
+  if (st === 'partial') body = `
+    <div class="file"><span>payroll_changes_output.xlsx</span>${pill('amber', 'Draft')}</div>
+    <div><h2 style="margin-bottom:8px">Still to fix</h2><ul class="issues"><li>Changes row 9: Amount is blank; the template requires it.</li><li>Changes rows 12–13 have no source file recorded.</li></ul></div>
+    <button class="btn quiet" data-view="map">Document map</button>`;
+  if (st === 'failed') body = `<p class="error">The endpoint refused a sandbox call (403). Ask the proxy team to allow the /v1/containers routes, or set the LiteLLM options on the Settings page.</p>`;
+  const checks = st === 'completed' ? [['Template intact', pill('green', 'Passed')], ['Dropdowns and numbers', pill('green', 'Passed')], ['Every file decided', pill('green', '28 of 28')], ['Row sources', pill('green', '13 of 13')], ['Reviewer', pill('green', '1 doubt settled')]]
+    : st === 'partial' ? [['Template intact', pill('green', 'Passed')], ['Dropdowns and numbers', pill('amber', '1 problem')], ['Every file decided', pill('green', '28 of 28')], ['Row sources', pill('amber', '11 of 13')], ['Reviewer', pill('', 'Not run')]]
+    : null;
+  const details = [['Engine', 'Sandbox'], ['Team', `Lead + ${s.scouts} scouts${s.reviewer ? ' + reviewer' : ''}`], ['Model calls', st === 'ready' ? '—' : st === 'failed' ? '0' : '41'], ['Questions asked', st === 'waiting' || st === 'completed' ? '1' : '0']];
+  return `<div class="stack">
+    <section class="panel"><h2>Output</h2>${body}</section>
+    ${checks ? `<section class="panel"><h2>Checks</h2><div>${checks.map(([a, b]) => `<div class="row"><span>${a}</span>${b}</div>`).join('')}</div></section>` : ''}
+    <section class="panel"><h2>Run details</h2><div>${details.map(([a, b]) => `<div class="row"><span>${a}</span><span>${b}</span></div>`).join('')}</div></section>
+  </div>`;
+}
+
+function workspace() {
+  const [tone, label] = STATUS[s.state];
+  return `<div class="head"><h1>Monthly payroll changes</h1>${pill(tone, label)}</div>
+    <div class="grid">${inputs()}${activity()}${output()}</div>`;
+}
+
+function map() {
+  const all = MAP.flatMap(([, files]) => files);
+  const counts = Object.fromEntries(Object.keys(DECISION).map(k => [k, all.filter(f => f[1] === k).length]));
+  const filters = [['all', `All · ${all.length}`], ...Object.entries(DECISION).filter(([k]) => counts[k]).map(([k, [, l]]) => [k, `${l} · ${counts[k]}`])];
+  const rows = MAP.map(([folder, files]) => {
+    const shown = files.filter(f => s.filter === 'all' || f[1] === s.filter);
+    if (!shown.length) return '';
+    return `<tr class="folder"><td colspan="3">${folder}</td></tr>` + shown.map(([name, d, reason]) =>
+      `<tr><td>${name}</td><td>${pill(...DECISION[d])}</td><td>${reason}</td></tr>`).join('');
+  }).join('');
+  return `<div class="head"><div style="display:flex;gap:16px;align-items:center"><button class="back" data-view="workspace">← Workspace</button><h1>Document map</h1></div>${pill('green', 'Completed')}</div>
+    <section class="panel">
+      <div class="filters">${filters.map(([k, l]) => `<button data-filter="${k}" class="${s.filter === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <table><thead><tr><th style="width:38%">File</th><th style="width:14%">Decision</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>
+    </section>`;
+}
+
+function settings() {
+  const sw = (key) => `<button class="switch ${s[key] ? 'on' : ''}" data-toggle="${key}" aria-pressed="${s[key]}"></button>`;
+  const sandbox = s.engine === 'sandbox';
+  return `<div class="head"><h1>Settings</h1><button class="btn">Save</button></div>
+    <div class="settings">
+      <section class="panel"><h2>Agent</h2><div>
+        <div class="set"><span>Engine</span><div class="seg"><button data-engine="classic" class="${!sandbox ? 'on' : ''}">Classic</button><button data-engine="sandbox" class="${sandbox ? 'on' : ''}">Sandbox</button></div></div>
+        ${sandbox ? `
+        <div class="set"><span>Parallel scouts</span><div class="stepper"><button data-scouts="-1">−</button><b>${s.scouts}</b><button data-scouts="1">+</button></div></div>
+        <div class="set"><span>Independent reviewer</span>${sw('reviewer')}</div>
+        <div class="set"><span>Proof level</span><select class="input"><option>Sources for every row</option><option>None</option></select></div>
+        <div class="set"><span>Reasoning effort</span><select class="input"><option>Medium</option><option>Low</option><option>High</option></select></div>` : ''}
+      </div></section>
+      ${sandbox ? `<section class="panel"><h2>Limits</h2><div>
+        <div class="set"><span>Turn limit per run</span><input class="input" value="60"></div>
+        <div class="set"><span>Hold sandbox for an answer</span><select class="input"><option>10 minutes</option><option>5 minutes</option><option>18 minutes</option></select></div>
+        <div class="set"><span>Sandbox memory</span><select class="input"><option>4 GB</option><option>1 GB</option><option>16 GB</option></select></div>
+      </div></section>
+      <section class="panel"><h2>Connection</h2><div>
+        <div class="set"><span>Endpoint</span><span class="note">genai-…-emea…/v1 · from .env</span></div>
+        <div class="set"><span>Model</span><span class="note">openai.eu.gpt-6-luna · from .env</span></div>
+        <div class="set"><span>LiteLLM provider header</span><input class="input" placeholder="None"></div>
+        <div class="set"><span>Name the model when creating a sandbox</span>${sw('modelOnCreate')}</div>
+        <div class="hint">Use a model alias from the same region as the endpoint.</div>
+      </div></section>` : ''}
+    </div>`;
+}
+
+function render() {
+  document.getElementById('proto').innerHTML = proto();
+  document.getElementById('nav').innerHTML = nav();
+  document.getElementById('main').innerHTML = s.view === 'settings' ? settings() : s.view === 'map' ? map() : workspace();
+}
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.view) s.view = ['instructions', 'history', 'diagnostics'].includes(d.view) ? s.view : d.view;
+  if (d.state) { s.state = d.state; if (s.view === 'settings') s.view = 'workspace'; }
+  if (d.filter) s.filter = d.filter;
+  if (d.deliv) s.deliverable = d.deliv;
+  if (d.engine) s.engine = d.engine;
+  if (d.toggle) s[d.toggle] = !s[d.toggle];
+  if (d.scouts) s.scouts = Math.max(0, Math.min(8, s.scouts + Number(d.scouts)));
+  render();
+});
+render();
+</script>
+</body>
+</html>

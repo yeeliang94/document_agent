@@ -24,5 +24,10 @@ GROUPS = {
 }
 
 
+def stop_status(status: str) -> str | None:
+    """The status a run settles in when the user stopped it, or None to keep going."""
+    return {'pausing': 'paused', 'cancelled': 'cancelled'}.get(status)
+
+
 def as_json():
     return {name: sorted(statuses) for name, statuses in GROUPS.items()}
