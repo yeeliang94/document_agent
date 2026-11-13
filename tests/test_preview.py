@@ -29,7 +29,7 @@ def client(tmp_path):
 
 
 def upload(client, name, data):
-    job = create_job(client, files=[('files', (name, data))], legacy=False)
+    job = create_job(client, files=[('files', (name, data))])
     return job, next(f['path'] for f in job['files'] if f['role'] == 'inputs')
 
 
@@ -38,7 +38,7 @@ def get(client, job, path, **more):
 
 
 def test_a_workbook_previews_as_rows_with_its_sheet_names(client):
-    job = create_job(client, legacy=False)
+    job = create_job(client)
     template = next(f['path'] for f in job['files'] if f['role'] == 'template')
     body = get(client, job, template).json()
     assert body['kind'] == 'sheet' and body['name'] == 'template.xlsx'
@@ -90,7 +90,7 @@ def test_a_damaged_or_unknown_file_says_so_instead_of_failing(client):
     'path', ['../jobs.db', 'working/state.db', 'engine/run-01/record.json', '/etc/passwd', 'inputs', '.']
 )
 def test_only_uploads_the_template_and_outputs_can_be_read(client, path):
-    job = create_job(client, legacy=False)
+    job = create_job(client)
     folder = client.root / 'jobs' / job['id']
     (folder / 'working').mkdir(exist_ok=True)
     (folder / 'working' / 'state.db').write_bytes(b'private')

@@ -39,14 +39,14 @@ export const state = {
   files: [],
   template: null,
   period: currentPeriod,
-  deliverable: 'template', // a new sandbox run fills a template or builds to a format
+  deliverable: 'template', // a new run fills a template or builds to a format
   instructions: {},
   contexts: {},
   drafts: {},
   open: null, // the file shown in the Files panel
   preview: null, // { path, data, sheet, page, image, error }
   row: null,
-  map: null, // the sandbox engine's decision for each file, by packet path
+  map: null, // the agent's decision for each file, by stored path
   mapKey: '',
   mapFilter: 'all',
   showFiles: false,
@@ -72,8 +72,6 @@ export const jobStatus = () => state.job?.status || 'ready';
 export const inGroup = (group, status = jobStatus()) => !!state.config?.statuses?.[group]?.includes(status);
 export const isActive = () => !!state.job && inGroup('active');
 export const isWarning = (event) => ['warn', 'warning', 'error'].includes(String(event.level).toLowerCase());
-export const sandboxEngine = () =>
-  state.job ? state.job.engine === 'sandbox' : state.settings?.values.engine === 'sandbox';
 
 export const STATUS = {
   ready: ['', 'Ready'],
@@ -99,8 +97,7 @@ export const baseName = (path) => String(path || '').split('/').pop();
 export const extension = (path) => (baseName(path).includes('.') ? baseName(path).split('.').pop() : '');
 export const sources = () => (state.job?.files || []).filter((f) => f.role !== 'template');
 
-// The stored file a path refers to. The classic engine names stored paths; the sandbox engine names paths inside
-// the packet, which are the tail of a stored path.
+// The stored file a path refers to. The agent names paths inside the packet, which are the tail of a stored path.
 export function storedPath(path) {
   const wanted = String(path || '').replace(/\\/g, '/');
   if (!wanted || !state.job) return null;

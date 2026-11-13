@@ -365,10 +365,17 @@ class SandboxEngine:
             job.update(updates, status=final['status'])
             if final['status'] != 'waiting':
                 job['question'] = None
+            # An instruction that arrived after the agent's last turn was never read. Keep the run open for it.
+            if final['status'] == 'completed' and job.get('pending_messages'):
+                final['status'] = job['status'] = 'partial'
+                job['summary'] = final['summary'] = (
+                    summary
+                    + '\nA new instruction arrived after the last step and was not applied. Continue to apply it.'
+                ).strip()
 
         store.mutate(job_id, apply)
         level = 'ERROR' if final['status'] == 'failed' else 'INFO'
         message = {'failed': error or 'The run failed.', 'waiting': 'Waiting for your answer.'}.get(
-            final['status'], summary
+            final['status'], final.get('summary', summary)
         )
         store.event(job_id, 'job.' + final['status'], message or final['status'], type='job', level=level)

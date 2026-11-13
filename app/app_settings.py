@@ -1,7 +1,7 @@
 """Settings people change on the Settings page, stored in the database. .env keeps only secrets and the endpoint.
 
 Each setting has a default, a type and allowed values, so a bad value is refused with a clear message.
-A job records the engine it was created with, so changing the engine never switches a job half way.
+
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ class Option:
 
 
 OPTIONS = {
-    'engine': Option('classic', 'Engine', ('classic', 'sandbox')),
     'max_scouts': Option(0, 'Parallel scouts', low=0, high=8),  # the experiment found one agent as accurate and faster
     'reviewer': Option(False, 'Independent reviewer'),
     'proof': Option('row', 'Proof level', ('row', 'none')),

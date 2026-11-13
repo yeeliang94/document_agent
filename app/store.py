@@ -9,7 +9,6 @@ from pathlib import Path
 
 from . import app_settings
 from .modules import DEFAULT_CONTEXT, MODULE_LABELS  # noqa: F401 - re-exported for main.py
-from .state import JobState
 
 
 def now():
@@ -87,10 +86,6 @@ class Store:
         if not re.fullmatch('[a-f0-9]{32}', job_id):
             raise ValueError('Invalid job ID')
         return self.root / 'jobs' / job_id
-
-    def state(self, job_id):
-        """The job's durable facts (inventory, coverage, datasets, tasks)."""
-        return JobState(self.path(job_id))
 
     def save(self, job):
         job['updated_at'] = now()

@@ -21,14 +21,13 @@ from pydantic import BaseModel, Field
 
 from . import app_settings, jobstatus, preview
 from .config import ROOT, Settings, settings
-from .context import estimate_text
 from .engine.checks import normal_decision, read_map
 from .engine.rules import check_format_definition
 from .files import add_file, add_zip, is_junk, within
 from .runtime import Runner
 from .store import DEFAULT_CONTEXT, MODULE_LABELS, Store, clean
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 MAX_TEXT_CHARS = 30000
 
 
@@ -55,11 +54,11 @@ def last_event_id(request: Request) -> int:
         return 0
 
 
-def create_app(settings_override: Settings | None = None, model_override=None):
+def create_app(settings_override: Settings | None = None):
     conf = settings_override or settings
     conf.validate()
     store = Store(conf.data_dir)
-    runner = Runner(store, conf, model_override)
+    runner = Runner(store, conf)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -107,8 +106,6 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             'ready': True,
             'openai_configured': bool(conf.api_key),
             'version': VERSION,
-            'tokenizer_method': estimate_text('startup health check')[1],
-            'index_version': 1,
             'pid': os.getpid(),
             'instance_id': hashlib.sha256(str(ROOT.resolve()).encode()).hexdigest()[:16],
         }
@@ -125,16 +122,6 @@ def create_app(settings_override: Settings | None = None, model_override=None):
                 for module in DEFAULT_CONTEXT
             ],
             'statuses': jobstatus.as_json(),
-            'harness': {
-                'max_subagents': conf.max_subagents,
-                'context_token_budget': conf.context_tokens,
-                'tool_result_bytes': conf.tool_result_bytes,
-                'tool_deadline_seconds': conf.tool_timeout,
-                'python_tool': conf.python_tool,
-                'tokenizer_method': estimate_text('capability diagnostics')[1],
-                'accounting_version': 2,
-                'index_version': 1,
-            },
         }
 
     @api.get('/api/modules/{module}')
@@ -189,25 +176,18 @@ def create_app(settings_override: Settings | None = None, model_override=None):
             raise HTTPException(400, 'Unknown module')
         if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', period):
             raise HTTPException(400, 'Use a reporting month in YYYY-MM format')
-        engine = store.settings()['engine']
-        # The sandbox engine also builds a workbook from a written format (.json, see app/engine/rules.py).
-        allowed = ('.xlsx', '.json') if engine == 'sandbox' else ('.xlsx',)
-        if not template.filename or not template.filename.lower().endswith(allowed):
-            raise HTTPException(
-                400, 'Choose an .xlsx output template' + (' or a .json format' if engine == 'sandbox' else '')
-            )
+        # A run fills an .xlsx template or builds a workbook from a written format (.json, see app/engine/rules.py).
+        if not template.filename or not template.filename.lower().endswith(('.xlsx', '.json')):
+            raise HTTPException(400, 'Choose an .xlsx output template or a .json format')
         if not files:
             raise HTTPException(400, 'Choose source files')
         if len(instructions) > MAX_TEXT_CHARS or len(context) > MAX_TEXT_CHARS:
             raise HTTPException(400, 'Instructions are too long')
         job_id = store.create(module, period, instructions, context or store.profile(module))['id']
-        store.update(job_id, engine=engine)
         try:
             manifest = await save_uploads(store.path(job_id), template, files)
             mark_duplicates(manifest)
             store.update(job_id, files=manifest)
-            store.state(job_id).put('schema', 'accounting', {'version': 2, 'index_version': 1})
-            store.state(job_id).inventory(manifest)
             store.event(
                 job_id, 'files.received', f'{len(manifest) - 1} source files received', type='job', files=manifest
             )
@@ -262,17 +242,14 @@ def create_app(settings_override: Settings | None = None, model_override=None):
     @api.post('/api/jobs/{job_id}/resume')
     async def start(job_id):
         j = get(job_id)
-        if not conf.api_key and model_override is None:
+        if not conf.api_key:
             raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
-        if j['status'] not in jobstatus.STARTABLE:
+        if j['status'] not in jobstatus.STARTABLE or j.get('legacy'):
             raise HTTPException(409, 'This job cannot start in its current state')
         if runner.active == job_id:
             raise HTTPException(409, 'The previous operation is still finishing')
         if not j['files']:
             raise HTTPException(400, 'No usable input files')
-        # A partial run already ended; the next run needs a fresh prompt to continue.
-        if j['status'] == 'partial':
-            store.update(job_id, continue_run=True)
         await runner.submit(job_id)
         return get(job_id)
 
@@ -302,72 +279,29 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if not body.answer.strip():
             raise HTTPException(400, 'Enter an answer')
         store.update(job_id, answer=body.answer)
-        store.state(job_id).instruction(body.answer, 'answer')
         store.event(job_id, 'user.answer', body.answer, type='user')
-        if j.get('engine') == 'sandbox':
-            # A run still holding its sandbox picks the answer up itself. Otherwise, or once that run has ended, the
-            # runner queues the job; the answer was saved first, so whichever side looks last finds it.
-            if runner.active != job_id:
-                await runner.resume_if_answered(job_id)
-        else:
-            await runner.submit(job_id)
+        # A run still holding its sandbox picks the answer up itself. Otherwise, or once that run has ended, the
+        # runner queues the job; the answer was saved first, so whichever side looks last finds it.
+        if runner.active != job_id:
+            await runner.resume_if_answered(job_id)
         return get(job_id)
 
     @api.post('/api/jobs/{job_id}/message')
     async def message(job_id, body: TextInput):
         j = get(job_id)
-        if j['status'] not in jobstatus.ACCEPTS_MESSAGES:
+        if j['status'] not in jobstatus.ACCEPTS_MESSAGES or j.get('legacy'):
             raise HTTPException(409, 'Start or resume a run to send instructions')
         if not body.message.strip():
             raise HTTPException(400, 'Enter an instruction')
         # Delivered once into the conversation; also adding it to the task would repeat it.
         store.mutate(job_id, lambda job: job.update(pending_messages=job.get('pending_messages', []) + [body.message]))
-        store.state(job_id).instruction(body.message)
         store.event(job_id, 'user.instruction', body.message, type='user')
         return get(job_id)
 
-    # Synchronous handlers run in the threadpool, so SQLite waits never block the event loop.
-    @api.get('/api/jobs/{job_id}/inventory')
-    def inventory(job_id, offset: int = 0, limit: int = 25):
-        get(job_id)
-        try:
-            return store.state(job_id).page('inventory', offset, limit)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
-
-    @api.get('/api/jobs/{job_id}/coverage')
-    def coverage(job_id):
-        get(job_id)
-        return store.state(job_id).coverage()
-
-    @api.get('/api/jobs/{job_id}/plan')
-    def work_plan(job_id):
-        get(job_id)
-        state = store.state(job_id)
-        return {
-            'plan': state.get('plan', 'current'),
-            'checkpoint': state.get('checkpoint', 'main'),
-        }
-
-    @api.get('/api/jobs/{job_id}/regions')
-    def regions(job_id, offset: int = 0, limit: int = 25):
-        get(job_id)
-        try:
-            return store.state(job_id).page('region', offset, limit)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
-
-    @api.get('/api/jobs/{job_id}/tasks')
-    def tasks(job_id, offset: int = 0, limit: int = 25):
-        get(job_id)
-        try:
-            return store.state(job_id).page('task', offset, limit)
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
-
+    # Synchronous handlers run in the threadpool, so file and SQLite waits never block the event loop.
     @api.get('/api/jobs/{job_id}/document-map')
     def document_map(job_id):
-        """The sandbox engine's file-by-file record: each packet file, its decision and the reason."""
+        """The agent's file-by-file record: each packet file, its decision and the reason."""
         get(job_id)
         entries, error = read_map(store.path(job_id) / 'outputs')
         if entries is None:

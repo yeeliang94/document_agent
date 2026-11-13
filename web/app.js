@@ -3,7 +3,7 @@
 
 import {
   $, api, attr, baseName, btn, download, duration, esc, fileUrl, icon, isActive, jobStatus, jobTitle, jobUrl,
-  modules, sandboxEngine, state, toast,
+  modules, state, toast,
 } from './core.js'; // prettier-ignore
 import { backFile, closeFile, filesHtml, loadMap, openFile, proofHtml, turnPage } from './files.js';
 import { instructionsPage, logPage, settingsPage, setupPage, startBlocked } from './pages.js';
@@ -69,9 +69,6 @@ function noticesHtml() {
       : '',
     state.connectionError ? `<div class="notice bad">${esc(state.connectionError)}</div>` : '',
     state.notice ? `<div class="notice bad">${esc(state.notice)}</div>` : '',
-    !state.job && state.view === 'run' && state.module === 'ap' && !sandboxEngine()
-      ? `<div class="notice"><span>Accounts payable runs on the sandbox engine.</span><button class="btn text" data-view="settings">Open Settings</button></div>`
-      : '',
   ].join('');
 }
 
@@ -204,8 +201,8 @@ const localActions = {
   folder: () => $('#folder-picker').click(),
   files: () => $('#files-picker').click(),
   template: () => {
-    // A sandbox run can build to a written format (.json) instead of filling a template.
-    $('#template-picker').accept = sandboxEngine() && state.deliverable === 'format' ? '.json' : '.xlsx';
+    // A run can build to a written format (.json) instead of filling a template.
+    $('#template-picker').accept = state.deliverable === 'format' ? '.json' : '.xlsx';
     $('#template-picker').click();
   },
   'toggle-files': () => (state.showFiles = !state.showFiles),

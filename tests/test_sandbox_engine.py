@@ -26,23 +26,15 @@ def client_for(tmp_path):
 def test_settings_page_values_are_stored_and_checked(tmp_path):
     with client_for(tmp_path) as client:
         body = client.get('/api/settings').json()
-        assert body['values']['engine'] == 'classic' and body['options']['engine']['choices'] == ['classic', 'sandbox']
-        saved = client.put('/api/settings', json={'values': {'engine': 'sandbox', 'max_scouts': 2}}).json()
-        assert saved['values']['engine'] == 'sandbox' and saved['values']['max_scouts'] == 2
+        assert body['values']['max_scouts'] == 0 and body['options']['proof']['choices'] == ['row', 'none']
+        saved = client.put('/api/settings', json={'values': {'reviewer': True, 'max_scouts': 2}}).json()
+        assert saved['values']['reviewer'] is True and saved['values']['max_scouts'] == 2
+        assert client.put('/api/settings', json={'values': {'engine': 'classic'}}).status_code == 400  # one engine now
         bad = client.put('/api/settings', json={'values': {'max_scouts': 99}})
         assert bad.status_code == 400 and 'from 0 to 8' in bad.json()['detail']
         assert client.put('/api/settings', json={'values': {'colour': 'red'}}).status_code == 400
     with client_for(tmp_path) as client:  # survives a restart
         assert client.get('/api/settings').json()['values']['max_scouts'] == 2
-
-
-def test_a_job_keeps_the_engine_it_was_created_with(tmp_path):
-    with client_for(tmp_path) as client:
-        client.put('/api/settings', json={'values': {'engine': 'sandbox'}})
-        job = create_job(client, legacy=False)
-        client.put('/api/settings', json={'values': {'engine': 'classic'}})
-        assert client.get(f'/api/jobs/{job["id"]}').json()['engine'] == 'sandbox'
-        assert create_job(client, legacy=False)['engine'] == 'classic'
 
 
 class FakeRun:
@@ -77,8 +69,8 @@ def write_output(outputs):
 
 
 def start_sandbox_job(client):
-    client.put('/api/settings', json={'values': {'engine': 'sandbox', 'max_scouts': 3, 'reviewer': True}})
-    job = create_job(client, legacy=False)
+    client.put('/api/settings', json={'values': {'max_scouts': 3, 'reviewer': True}})
+    job = create_job(client)
     assert client.post(f'/api/jobs/{job["id"]}/start').status_code == 200
     return job
 
@@ -351,7 +343,6 @@ def test_a_format_upload_makes_a_built_workbook_deliverable(tmp_path, monkeypatc
     fake = FakeRun(behaviour)
     monkeypatch.setattr(service, 'run_job', fake)
     with client_for(tmp_path) as client:
-        client.put('/api/settings', json={'values': {'engine': 'sandbox'}})
         files = [('files', ('a.csv', b'x', 'text/csv'))]
         upload = {'module': 'ap', 'period': '2026-11', 'instructions': 'Build the journal.'}
         broken = client.post('/api/jobs', data=upload, files=[('template', ('j.json', b'{"sheets": []}')), *files])
@@ -364,9 +355,6 @@ def test_a_format_upload_makes_a_built_workbook_deliverable(tmp_path, monkeypatc
         wait_for_job(client, job.json()['id'])
         deliverable = fake.calls[0].spec.deliverables[0]
         assert deliverable.name == 'journal.xlsx' and deliverable.format == fmt
-        client.put('/api/settings', json={'values': {'engine': 'classic'}})
-        refused = client.post('/api/jobs', data=upload, files=[('template', ('journal.json', b'{}')), *files])
-        assert refused.status_code == 400
 
 
 def test_resume_card_is_empty_before_any_run(tmp_path):
@@ -389,8 +377,8 @@ def test_the_document_map_and_check_summary_reach_the_screens(tmp_path, monkeypa
 
     monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
     with client_for(tmp_path) as client:
-        client.put('/api/settings', json={'values': {'engine': 'sandbox', 'max_scouts': 3, 'reviewer': True}})
-        job = create_job(client, legacy=False)
+        client.put('/api/settings', json={'values': {'max_scouts': 3, 'reviewer': True}})
+        job = create_job(client)
         assert client.get(f'/api/jobs/{job["id"]}/document-map').json() == {'files': [], 'error': None}  # not yet
         client.post(f'/api/jobs/{job["id"]}/start')
         done = wait_for_job(client, job['id'])
@@ -458,3 +446,112 @@ def test_instructions_given_during_a_run_carry_into_a_resumed_run(tmp_path, monk
     (run / 'run.json').write_text(json.dumps({'status': 'paused'}), encoding='utf-8')
     card = resume_card(store, store.get(job['id']))
     assert '- Use the November FX rate.' in card and 'override the goal' in card
+
+
+def test_a_run_from_the_earlier_engine_can_be_read_but_not_continued(tmp_path):
+    """Its saved answers and state mean nothing to this engine, so it must not quietly start over."""
+    store = Store(tmp_path)
+    old = store.create('payroll', '2026-10', 'Fill it.', 'ctx')
+    store.update(old['id'], status='waiting', question={'call_id': 'c1', 'text': 'Confirm the period?'})
+    (store.path(old['id']) / 'working' / 'history.json').write_text('[]')
+    (store.path(old['id']) / 'outputs' / 'draft.xlsx').write_bytes(b'kept')
+    done = store.create('payroll', '2026-09', 'Fill it.', 'ctx')
+    store.update(done['id'], status='partial', summary='Two rows open.')
+    (store.path(done['id']) / 'working' / 'history.json').write_text('[]')
+    for _ in range(2):  # the second start changes nothing more
+        with client_for(tmp_path) as client:
+            job = client.get(f'/api/jobs/{old["id"]}').json()
+            assert job['legacy'] and job['status'] == 'cancelled' and job['question'] is None
+            kept = client.get(f'/api/jobs/{done["id"]}').json()
+            assert kept['legacy'] and kept['status'] == 'partial' and kept['summary'] == 'Two rows open.'
+            for job_id in (old['id'], done['id']):
+                assert client.post(f'/api/jobs/{job_id}/resume').status_code == 409
+                assert client.post(f'/api/jobs/{job_id}/answer', json={'answer': 'Yes'}).status_code == 409
+                assert client.post(f'/api/jobs/{job_id}/message', json={'message': 'Go on'}).status_code == 409
+            notes = [e['message'] for e in client.get(f'/api/jobs/{old["id"]}/events').json()]
+            assert len([n for n in notes if 'earlier version' in n]) == 1
+    assert (store.path(old['id']) / 'outputs' / 'draft.xlsx').read_bytes() == b'kept'
+
+
+def test_pause_stop_and_messages_are_accepted_only_when_they_can_take_effect(tmp_path, monkeypatch):
+    release = asyncio.Event()
+
+    async def behaviour(control, outputs, **_):
+        write_output(outputs)
+        await release.wait()
+        return finished(status=control.stop_requested() or 'complete')
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0)
+    with client_for(tmp_path) as client:
+        job = create_job(client)
+        url = f'/api/jobs/{job["id"]}'
+        assert client.post(url + '/pause').status_code == 409  # nothing running yet
+        assert client.post(url + '/message', json={'message': 'Hello'}).status_code == 409
+        assert client.post(url + '/answer', json={'answer': 'Yes'}).status_code == 409
+        assert client.post(url + '/start').status_code == 200
+        wait_for_job(client, job['id'], statuses=('running',))
+        assert client.post(url + '/start').status_code == 409  # already going
+        assert client.post(url + '/message', json={'message': '  '}).status_code == 400
+        assert client.post(url + '/message', json={'message': 'Leave out contractors.'}).status_code == 200
+        assert client.get(url).json()['pending_messages'] == ['Leave out contractors.']
+        assert client.post(url + '/pause').json()['status'] == 'pausing'
+        release.set()
+        assert wait_for_job(client, job['id'], statuses=('paused',))['status'] == 'paused'
+        wait_for_runner_idle(client)
+        assert client.post(url + '/cancel').json()['status'] == 'cancelled'
+        assert client.post(url + '/pause').status_code == 409
+        stopped = [e['message'] for e in client.get(url + '/events').json() if e['name'] == 'job.cancelled']
+        assert stopped == ['Cancelled; existing output retained.']
+
+
+def test_a_run_that_crashes_or_was_cut_off_by_a_restart_is_kept_for_resuming(tmp_path, monkeypatch):
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        raise RuntimeError('sandbox vanished, key sk-abcdefghijklmnop')
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        failed = wait_for_job(client, job['id'])
+        assert (
+            failed['status'] == 'failed' and 'sandbox vanished' in failed['error'] and 'sk-abc' not in failed['error']
+        )
+        assert [a['name'] for a in failed['artifacts']] == ['notes.md', 'template_output.xlsx']  # drafts are kept
+        wait_for_runner_idle(client)
+        client.app.state.store.update(job['id'], status='running')  # as if the app stopped mid-run
+    with client_for(tmp_path) as client:
+        again = client.get(f'/api/jobs/{job["id"]}').json()
+        assert again['status'] == 'paused' and not again.get('legacy')
+        assert client.post(f'/api/jobs/{job["id"]}/resume').status_code == 200
+
+
+def test_an_instruction_that_arrives_after_the_last_step_keeps_the_run_open(tmp_path, monkeypatch):
+    async def first(outputs, **_):
+        write_output(outputs)
+        return finished()  # the agent is done; it never reads the message below
+
+    async def second(control, **_):
+        assert control.new_messages() == ['Round to whole ringgit.']
+        return finished()
+
+    runs = iter([first, second])
+
+    async def behaviour(**kwargs):
+        run = next(runs)
+        if run is first:
+            store.update(job['id'], pending_messages=['Round to whole ringgit.'])  # sent during the final check
+        return await run(**kwargs)
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0)
+    with client_for(tmp_path) as client:
+        store = client.app.state.store
+        job = start_sandbox_job(client)
+        held = wait_for_job(client, job['id'])
+        assert held['status'] == 'partial' and 'was not applied' in held['summary']
+        assert [a['status'] for a in held['artifacts'] if a['name'].endswith('.xlsx')] == ['validated']
+        wait_for_runner_idle(client)
+        assert client.post(f'/api/jobs/{job["id"]}/resume').status_code == 200
+        done = wait_for_job(client, job['id'], statuses=('completed', 'failed'))
+        assert done['status'] == 'completed' and 'was not applied' not in done['summary']

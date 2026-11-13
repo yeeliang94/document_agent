@@ -1,7 +1,7 @@
 // The pages around a run: starting a new one, the reusable instructions, Settings and the technical log.
 
 import {
-  attr, btn, bytes, currentModule, esc, fmtTime, isWarning, modules, sandboxEngine, state,
+  attr, btn, bytes, currentModule, esc, fmtTime, isWarning, modules, state,
 } from './core.js'; // prettier-ignore
 
 const page = (width, body) => `<div class="page"><div class="${width}">${body}</div></div>`;
@@ -24,18 +24,16 @@ const stepper = (name, label, value, low, high) => `
   </span>`;
 
 export function startBlocked() {
-  return state.busy || !state.files.length || !state.template || !state.period || (state.module === 'ap' && !sandboxEngine());
+  return state.busy || !state.files.length || !state.template || !state.period;
 }
 
 export function setupPage() {
-  const format = sandboxEngine() && state.deliverable === 'format';
+  const format = state.deliverable === 'format';
   const size = state.files.reduce((sum, f) => sum + f.size, 0);
   const picked = state.files.length
     ? `<em>${state.files.length === 1 ? esc(state.files[0].name) : `${state.files.length} files`} · ${bytes(size)}</em>`
     : '';
-  const deliver = sandboxEngine()
-    ? `<div class="seg">${segment('deliverable', 'template', 'Template', !format)}${segment('deliverable', 'format', 'Format', format)}</div>`
-    : '';
+  const deliver = `<div class="seg">${segment('deliverable', 'template', 'Template', !format)}${segment('deliverable', 'format', 'Format', format)}</div>`;
   const chosen = state.template ? esc(state.template.name) : format ? 'Choose format' : 'Choose workbook';
   return page(
     'narrow',
@@ -43,7 +41,7 @@ export function setupPage() {
     <div class="box"><textarea id="run-instructions" aria-label="What should the agent produce?" placeholder="What should the agent produce?">${esc(state.instructions[state.module] || '')}</textarea></div>
     <div class="rows">
       ${row('Source files', `<div class="val">${picked}${btn('folder', state.files.length ? 'Change folder' : 'Choose folder', 'quiet', false, 'clip')}${btn('files', 'Choose files or ZIP', 'text')}</div>`)}
-      ${row(sandboxEngine() ? 'Deliver as' : 'Template', `<div class="val">${deliver}${btn('template', chosen)}</div>`)}
+      ${row('Deliver as', `<div class="val">${deliver}${btn('template', chosen)}</div>`)}
       ${row('Period', `<input id="period" type="month" aria-label="Period" value="${esc(state.period)}">`)}
       ${row('Module', moduleSelect())}
     </div>
@@ -77,33 +75,25 @@ export function settingsPage() {
   const number = (name) =>
     `<input id="setting-${name}" type="number" data-setting="${name}" min="${options[name].low}" max="${options[name].high}" value="${esc(v[name])}" aria-label="${esc(options[name].label)}">`;
   const panel = (title, rows) => `<section class="rows"><h2>${esc(title)}</h2>${rows}</section>`;
-  const sandbox = v.engine === 'sandbox';
   const connection = state.settings.connection;
   const agent =
-    row('Engine', `<div class="seg">${segment('engine', 'classic', 'Classic', !sandbox)}${segment('engine', 'sandbox', 'Sandbox', sandbox)}</div>`) +
-    (sandbox
-      ? row('Parallel scouts', stepper('max_scouts', 'Parallel scouts', v.max_scouts, options.max_scouts.low, options.max_scouts.high)) +
-        row('Independent reviewer', toggle('reviewer', 'Independent reviewer', v.reviewer)) +
-        row('Proof level', select('proof', { row: 'Sources for every row', none: 'None' })) +
-        row('Reasoning effort', select('effort', { low: 'Low', medium: 'Medium', high: 'High' }))
-      : '');
-  const limits = sandbox
-    ? panel(
-        'Limits',
-        row('Turn limit per run', number('max_turns')) +
-          row('Time limit per run (minutes)', number('time_limit_minutes')) +
-          row('Token limit per run (thousands)', number('token_limit_thousands')) +
-          row('Hold sandbox for an answer (minutes)', number('question_wait_minutes')) +
-          row('Sandbox memory', select('sandbox_memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' })),
-      )
-    : '';
+    row('Parallel scouts', stepper('max_scouts', 'Parallel scouts', v.max_scouts, options.max_scouts.low, options.max_scouts.high)) +
+    row('Independent reviewer', toggle('reviewer', 'Independent reviewer', v.reviewer)) +
+    row('Proof level', select('proof', { row: 'Sources for every row', none: 'None' })) +
+    row('Reasoning effort', select('effort', { low: 'Low', medium: 'Medium', high: 'High' }));
+  const limits = panel(
+    'Limits',
+    row('Turn limit per run', number('max_turns')) +
+      row('Time limit per run (minutes)', number('time_limit_minutes')) +
+      row('Token limit per run (thousands)', number('token_limit_thousands')) +
+      row('Hold sandbox for an answer (minutes)', number('question_wait_minutes')) +
+      row('Sandbox memory', select('sandbox_memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' })),
+  );
   const link =
     row('Endpoint', `<span class="value">${esc(connection.base_url)}</span>`) +
     row('Model', `<span class="value">${esc(connection.model)}</span>`) +
-    (sandbox
-      ? row('LiteLLM provider header', `<input id="setting-litellm_provider" data-setting="litellm_provider" value="${esc(v.litellm_provider)}" placeholder="None" aria-label="LiteLLM provider header">`) +
-        row('Name the model when creating a sandbox', toggle('model_on_create', 'Name the model when creating a sandbox', v.model_on_create))
-      : '') +
+    row('LiteLLM provider header', `<input id="setting-litellm_provider" data-setting="litellm_provider" value="${esc(v.litellm_provider)}" placeholder="None" aria-label="LiteLLM provider header">`) +
+    row('Name the model when creating a sandbox', toggle('model_on_create', 'Name the model when creating a sandbox', v.model_on_create)) +
     row('Check the connection', btn('connection', 'Test', 'quiet', state.busy)) +
     (connection.warning ? `<p class="problem row">${esc(connection.warning)}</p>` : '');
   return page('narrow', head + panel('Agent', agent) + limits + panel('Connection', link));
@@ -111,9 +101,8 @@ export function settingsPage() {
 
 const FILTERS = [
   ['all', 'All'],
-  ['model', 'Model'],
-  ['tool', 'Tools'],
-  ['engine', 'Engine'],
+  ['engine', 'Agent'],
+  ['user', 'You'],
   ['warnings', 'Warnings'],
 ];
 
@@ -132,17 +121,12 @@ function facts(job) {
   const team = job.engine_team;
   const rows = [
     ['Run', job.id.slice(0, 8)],
-    ['Engine', job.engine === 'sandbox' ? 'Sandbox' : 'Classic'],
     ['Model', state.config?.model],
     team ? ['Team', `Lead${team.max_scouts ? ` + ${team.max_scouts} scouts` : ''}${team.reviewer ? ' + reviewer' : ''}`] : null,
     ['Model calls', job.request_count ?? usage.requests],
     ['Input tokens', usage.input_tokens?.toLocaleString()],
     ['Output tokens', usage.output_tokens?.toLocaleString()],
     job.engine_questions ? ['Questions asked', job.engine_questions.length] : null,
-    job.coverage ? ['Source observations', job.coverage.source_observations] : null,
-    job.coverage ? ['Rows included', job.coverage.records?.included] : null,
-    job.context_usage ? ['Context estimate', job.context_usage.estimated_tokens?.toLocaleString()] : null,
-    job.context_usage ? ['Context budget', job.context_usage.budget?.toLocaleString()] : null,
   ].filter((r) => r && r[1] != null && r[1] !== '');
   return `<div class="facts">${rows.map(([a, b]) => `<div><span>${a}</span>${esc(b)}</div>`).join('')}</div>`;
 }

@@ -1,7 +1,7 @@
 // The Files panel: the run's outputs, checks and source files, and a viewer to look inside any of them.
 
 import {
-  api, baseName, blobUrl, esc, extension, fileUrl, icon, isActive, jobUrl, pill, plural, sources,
+  api, baseName, blobUrl, esc, extension, fileUrl, icon, jobUrl, pill, plural, sources,
   state, storedPath,
 } from './core.js'; // prettier-ignore
 
@@ -15,7 +15,7 @@ const HIDDEN_OUTPUTS = ['document_map.json', 'provenance.json'];
 
 // --- What the agent decided about each source file -------------------------
 
-// The sandbox engine saves its file-by-file decisions with the outputs. Reload them when that file changes.
+// The agent saves its file-by-file decisions with the outputs. Reload them when that file changes.
 export async function loadMap() {
   const job = state.job;
   const saved = job?.artifacts?.find((a) => a.name === 'document_map.json');
@@ -38,22 +38,18 @@ export async function loadMap() {
   return true;
 }
 
-// Files the agent has opened so far, and the ones it is on right now, read from its activity.
+// Files the agent has opened so far, read from its activity: the files its scripts name, and for runs made by
+// the earlier engine, the file each tool worked on.
 function touched() {
   const read = new Set();
-  const reading = new Set();
-  const done = new Set(state.events.filter((e) => e.type === 'tool' && e.status !== 'running').map((e) => e.span_id));
   for (const e of state.events) {
-    if (e.type === 'tool' && e.arguments?.path) {
-      const stored = storedPath(e.arguments.path);
-      if (stored) (e.status === 'running' && !done.has(e.span_id) && isActive() ? reading : read).add(stored);
-    }
-    for (const path of Array.isArray(e.files) && e.type === 'engine' ? e.files : []) {
+    const paths = e.type === 'engine' && Array.isArray(e.files) ? e.files : e.type === 'tool' ? [e.arguments?.path] : [];
+    for (const path of paths) {
       const stored = storedPath(path);
       if (stored) read.add(stored);
     }
   }
-  return { read, reading };
+  return read;
 }
 
 function sourcePill(path, seen) {
@@ -62,8 +58,7 @@ function sourcePill(path, seen) {
     const [tone, label] = DECISIONS[entry.decision] || ['warn', entry.decision || 'Undecided'];
     return pill(tone, label);
   }
-  if (seen.reading.has(path)) return pill('live', 'Reading');
-  return seen.read.has(path) ? pill('', 'Read') : '';
+  return seen.has(path) ? pill('', 'Read') : '';
 }
 
 // --- The list --------------------------------------------------------------
@@ -86,12 +81,7 @@ function checksHtml(job) {
     const issues = !check.passed && check.issues?.length ? `<ul class="fix">${check.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
     return `<div class="list"><h3>Checks</h3>${rows.join('')}${issues}</div>`;
   }
-  const records = job.coverage?.records;
-  if (!records || !Object.values(records).some(Boolean)) return '';
-  const open = records.pending + records.unresolved;
-  return `<div class="list"><h3>Checks</h3>
-    ${fact('Rows to resolve', pill(open ? 'warn' : 'ok', open ? String(open) : 'None'))}
-    ${fact('Open items', pill(job.coverage.open_items ? 'warn' : 'ok', job.coverage.open_items ? String(job.coverage.open_items) : 'None'))}</div>`;
+  return '';
 }
 
 function listHtml(job) {
@@ -138,16 +128,13 @@ function listHtml(job) {
       return head + row(f.path, baseName(f.path), sourcePill(f.path, seen));
     })
     .join('');
-  // The sandbox engine's "read" marks come from the text of its scripts, so they are a hint and not a count.
-  const counted = !state.map && job.engine !== 'sandbox';
-  const progress = counted ? `${all.filter((f) => seen.read.has(f.path)).length} of ${all.length} read` : `${all.length}`;
   return `
     <div class="files-head"><h2>Files</h2><button class="icon-btn only-narrow" data-action="toggle-files" aria-label="Close">${icon('x')}</button></div>
     <div class="files-body">
       <div class="list"><h3>Output</h3>${outputRows}</div>
       ${checksHtml(job)}
       ${template ? `<div class="list"><h3>${/\.json$/i.test(template.path) ? 'Format' : 'Template'}</h3>${row(template.path, baseName(template.path))}</div>` : ''}
-      <div class="list"><h3><span>Sources</span><span>${progress}</span></h3>${filter}${sourceRows}</div>
+      <div class="list"><h3><span>Sources</span><span>${all.length}</span></h3>${filter}${sourceRows}</div>
     </div>`;
 }
 

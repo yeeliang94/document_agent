@@ -3,40 +3,10 @@
 
 import {
   attr, baseName, btn, duration, esc, icon, inGroup, isActive, isWarning, jobStatus, jobTitle, pill, plural,
-  sandboxEngine, state, STATUS, storedPath,
+  state, STATUS, storedPath,
 } from './core.js'; // prettier-ignore
 
-// How each classic-engine tool reads in plain words: with the file it worked on, and without one.
-const TOOLS = {
-  list_files: ['Listed the files'],
-  query_inventory: ['Checked the file list'],
-  read_document: ['Read', 'Read a file'],
-  read_sheet: ['Read', 'Read a file'],
-  inspect_workbook: ['Opened', 'Opened a workbook'],
-  inspect_source: ['Looked through', 'Looked through a file'],
-  inspect_regions: ['Found the tables in', 'Found the tables'],
-  extract_region: ['Pulled a table from', 'Pulled out a table'],
-  view_page: ['Looked at', 'Looked at a page'],
-  resolve_visual: ['Read the image', 'Read an image'],
-  search_cells: ['Searched', 'Searched the sheets'],
-  query_dataset: ['Looked up the data'],
-  transform_dataset: ['Reshaped the data'],
-  write_cells: ['Wrote to', 'Wrote cells'],
-  populate_template: ['Filled', 'Filled the template'],
-  create_output: ['Saved', 'Saved the output'],
-  validate_output: ['Checked', 'Checked the output'],
-  validate_job: ['Checked the whole job'],
-  update_work_plan: ['Updated its plan'],
-  read_job_state: ['Reviewed its progress'],
-  apply_instructions: ['Applied your instructions'],
-  save_memory: ['Made a note'],
-  save_interpretation: ['Made a note'],
-  record_decisions: ['Recorded its decisions'],
-  record_observations: ['Recorded what it found in', 'Recorded what it found'],
-  save_output_requirements: ['Noted what is needed in', 'Noted what the output needs'],
-  save_report: ['Wrote the summary'],
-};
-// Sandbox-engine events that are housekeeping, or that another item already shows.
+// Engine events that are housekeeping, or that another item already shows.
 const QUIET = new Set(['engine.question.answered', 'engine.run.finished', 'engine.instructions.delivered']);
 const ENDINGS = ['job.completed', 'job.partial', 'job.failed'];
 
@@ -46,19 +16,15 @@ const sentence = (text) => {
 };
 const time = (event) => new Date(event.timestamp).getTime();
 
+// Runs made before the sandbox engine logged one event per tool, with the file it worked on.
 function toolStep(event) {
-  const args = event.arguments || {};
-  const [withFile, alone] = TOOLS[event.name] || [sentence(event.message || event.name)];
-  const path = args.path || args.filename || '';
   const failed = isWarning(event) || event.status === 'failed';
-  const detail = [typeof args.sheet === 'string' ? args.sheet : '', event.name === 'view_page' ? `page ${args.page || 1}` : ''];
   return {
     seq: event.seq,
     at: time(event),
-    verb: path || !alone ? withFile : alone,
-    file: path,
-    // The agent corrects itself after a step is turned down; the reason is in the technical log.
-    more: failed ? 'did not go through' : detail.filter(Boolean).join(', '),
+    verb: sentence(event.message || event.name),
+    file: event.arguments?.path || event.arguments?.filename || '',
+    more: failed ? 'did not go through' : '',
     flag: failed,
   };
 }
@@ -88,7 +54,6 @@ export function threadItems() {
   const ending = events.findLast((e) => ENDINGS.includes(e.name));
   const settled = ending && ending.name === 'job.' + job.status ? ending.seq : -1;
   const asked = job.status === 'waiting' ? events.findLast((e) => e.type === 'question' || e.name === 'engine.question.asked') : null;
-  const finished = new Set(events.filter((e) => e.type === 'tool' && e.status !== 'running').map((e) => e.span_id));
 
   for (const e of events) {
     const base = { seq: e.seq, at: time(e) };
@@ -96,9 +61,7 @@ export function threadItems() {
     else if (e.type === 'question' || e.name === 'engine.question.asked') {
       if (e !== asked) push({ kind: 'say', ...base, text: String(e.message).replace(/^Question for you:\s*/, '') });
     } else if (e.type === 'tool') {
-      // A tool logs once when it starts and once when it ends; keep the start only while it is still running.
-      if (e.status !== 'running') step(toolStep(e));
-      else if (!finished.has(e.span_id)) step(base);
+      if (e.status !== 'running') step(toolStep(e)); // earlier-engine runs logged a start and an end per tool
     } else if (e.name === 'engine.code.started') {
       step(base);
       group.code += 1;
@@ -112,7 +75,7 @@ export function threadItems() {
     } else if (ENDINGS.includes(e.name)) {
       if (e.seq !== settled) push({ kind: e.name === 'job.failed' ? 'note' : 'say', ...base, text: e.message });
     } else if (e.name === 'job.paused') push({ kind: 'note', ...base, text: 'Paused.' });
-    else if (e.name === 'job.cancelled') push({ kind: 'note', ...base, text: 'Stopped. Everything so far is kept.' });
+    else if (e.name === 'job.cancelled') push({ kind: 'note', ...base, text: state.job.legacy ? e.message : 'Stopped. Everything so far is kept.' });
     else if (isWarning(e)) step({ ...base, verb: sentence(e.message), plain: true, flag: true });
   }
   return items;
@@ -166,10 +129,7 @@ function liveLine() {
   let text = 'Thinking';
   if (status === 'queued') text = 'Waiting to start';
   else if (status === 'pausing') text = 'Finishing the current step';
-  else if (last?.type === 'tool' && last.status === 'running') {
-    const s = toolStep(last);
-    text = s.file ? `${s.verb} ${baseName(s.file)}` : s.verb;
-  } else if (last?.name === 'engine.code.started') text = 'Running code in the sandbox';
+  else if (last?.name === 'engine.code.started') text = 'Running code in the sandbox';
   else if (['engine.scout.started', 'engine.review.started'].includes(last?.name)) text = sentence(last.message);
   return `<div class="live"><i></i><b>${esc(text)}</b><time data-since="${esc(last?.timestamp || state.job.updated_at || '')}"></time></div>`;
 }
@@ -189,14 +149,12 @@ function outputRows(job) {
 function endCard(job) {
   const status = job.status;
   if (status === 'waiting' && job.question) {
-    const hold = sandboxEngine()
-      ? `<p class="hint">The sandbox waits ${esc(state.settings?.values.question_wait_minutes ?? 10)} minutes for your answer. After that the run rests here and picks up when you reply.</p>`
-      : '';
-    return `<div class="card ask"><p>${esc(job.question.text)}</p>${hold}</div>`;
+    return `<div class="card ask"><p>${esc(job.question.text)}</p>
+      <p class="hint">The sandbox waits ${esc(state.settings?.values.question_wait_minutes ?? 10)} minutes for your answer. After that the run rests here and picks up when you reply.</p></div>`;
   }
   if (status === 'failed') {
     return `<div class="card bad"><p>${esc(job.error || 'The run stopped.')}</p>
-      <div class="choices">${btn('resume', 'Resume', 'primary', state.busy)}${btn('log', 'Technical log', 'text')}</div></div>`;
+      <div class="choices">${job.legacy ? '' : btn('resume', 'Resume', 'primary', state.busy)}${btn('log', 'Technical log', 'text')}</div></div>`;
   }
   if (!inGroup('finished', status)) return '';
   const issues = job.engine_check && !job.engine_check.passed ? job.engine_check.issues || [] : [];
@@ -204,7 +162,7 @@ function endCard(job) {
   return `${job.summary ? `<p class="say">${esc(job.summary)}</p>` : ''}
     ${rows ? `<div class="card">${rows}</div>` : ''}
     ${issues.length ? `<div class="card ask"><p>Still to fix</p><ul class="todo">${issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>` : ''}
-    ${status === 'partial' ? `<div class="choices">${btn('resume', 'Continue', 'primary', state.busy)}</div>` : ''}`;
+    ${status === 'partial' && !job.legacy ? `<div class="choices">${btn('resume', 'Continue', 'primary', state.busy)}</div>` : ''}`;
 }
 
 export function threadHtml() {
@@ -225,7 +183,7 @@ export function headHtml() {
   const controls = [
     status === 'ready' ? btn('start', 'Start run', 'primary', state.busy || !state.config?.configured) : '',
     inGroup('pausable', status) ? btn('pause', 'Pause', 'text', state.busy) : '',
-    ['paused', 'cancelled'].includes(status) ? btn('resume', 'Resume', 'text', state.busy) : '',
+    ['paused', 'cancelled'].includes(status) && !state.job.legacy ? btn('resume', 'Resume', 'text', state.busy) : '',
     isActive() || ['paused', 'waiting'].includes(status) ? btn('cancel', 'Stop', 'text', state.busy) : '',
     `<span class="hide-narrow">${btn('log', 'Technical log', 'text')}</span>`,
     `<span class="only-narrow">${btn('toggle-files', 'Files')}</span>`,
@@ -233,9 +191,9 @@ export function headHtml() {
   return `<h1>${esc(jobTitle(state.job))}</h1>${pill(tone, label)}<div class="controls">${controls}</div>`;
 }
 
-// The sandbox engine works, checks, then (if switched on) has a reviewer look. Only this run's events count.
+// The agent works, checks, then (if switched on) has a reviewer look. Only this run's events count.
 export function stagesHtml() {
-  if (!sandboxEngine() || !state.events.some((e) => e.type === 'engine')) return '';
+  if (!state.events.some((e) => e.type === 'engine')) return '';
   const engine = state.events.filter((e) => e.type === 'engine');
   const run = Math.max(0, ...engine.map((e) => e.run || 0));
   const current = engine.filter((e) => (e.run || 0) === run);
@@ -249,7 +207,7 @@ export function stagesHtml() {
 export function composerHtml() {
   const status = jobStatus();
   const answering = status === 'waiting' && !!state.job.question;
-  const usable = answering || inGroup('accepts_messages', status);
+  const usable = !state.job.legacy && (answering || inGroup('accepts_messages', status));
   const hint = answering ? 'Type your answer' : usable ? 'Message the agent' : status === 'ready' ? 'Start the run to message the agent' : 'This run has ended';
   // The typed text is put back by app.js after drawing, so typing never redraws the box.
   return `<form id="composer">
