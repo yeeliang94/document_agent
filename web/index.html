@@ -3,17 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Document Intelligence — monthly payroll workspace.">
-  <title>Payroll workspace · Document Intelligence</title>
-  <link rel="stylesheet" href="./styles.css?v=20261112b">
+  <meta name="description" content="Document Intelligence. Hand a folder of documents to an agent and check its work.">
+  <title>Document Intelligence</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181b'/%3E%3Cpath d='M10 9h8l4 4v10H10z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap">
+  <link rel="stylesheet" href="./styles.css?v=20261113a">
 </head>
 <body>
-  <div id="app"></div>
+  <div class="app">
+    <aside class="side" id="side"></aside>
+    <div class="topnav" id="topnav"></div>
+    <main id="main"></main>
+  </div>
   <div id="toast" role="status"></div>
   <dialog id="details"></dialog>
   <input id="folder-picker" type="file" webkitdirectory multiple hidden>
   <input id="files-picker" type="file" multiple hidden>
   <input id="template-picker" type="file" accept=".xlsx" hidden>
-  <script type="module" src="./app.js?v=20261112b"></script>
+  <script type="module" src="./app.js?v=20261113a"></script>
 </body>
 </html>

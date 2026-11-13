@@ -50,6 +50,8 @@ MESSAGES = {
     'instructions.delivered': lambda d: 'New instructions delivered to the agent',
     'sandbox.keepalive_failed': lambda d: 'The sandbox did not answer a keep-alive check',
     'run.finished': lambda d: f'Run finished: {d.get("status")}',
+    # Shown only when the script opened with a comment saying what it is for.
+    'code.ran': lambda d: d.get('summary'),
 }
 WARNINGS = {'tool.failed', 'scout.failed', 'sandbox.keepalive_failed'}
 
@@ -223,9 +225,11 @@ class SandboxEngine:
 
         def on_event(name: str, data: dict):
             message = MESSAGES.get(name)
-            if message is not None:
+            text = message(data) if message is not None else None
+            if text:
                 level = 'WARN' if name in WARNINGS else 'INFO'
-                store.event(job_id, 'engine.' + name, message(data), type='engine', level=level, run=attempt)
+                extra = {'files': data['files']} if isinstance(data.get('files'), list) else {}
+                store.event(job_id, 'engine.' + name, text, type='engine', level=level, run=attempt, **extra)
 
         one_question = asyncio.Lock()  # the agent may call tools in parallel; the user sees one question at a time
 

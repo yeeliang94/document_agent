@@ -13,13 +13,13 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
-from . import app_settings, jobstatus
+from . import app_settings, jobstatus, preview
 from .config import ROOT, Settings, settings
 from .context import estimate_text
 from .engine.checks import normal_decision, read_map
@@ -441,6 +441,40 @@ def create_app(settings_override: Settings | None = None, model_override=None):
         if not path.is_file() or path.name.endswith('.pending'):
             raise HTTPException(404, 'Output not found')
         return FileResponse(path, filename=path.name)
+
+    # The Files panel: look inside an upload, the template or an output without downloading it.
+    def job_file_error(error):
+        if isinstance(error, FileNotFoundError):
+            return HTTPException(404, 'File not found')
+        return HTTPException(400, 'Invalid file path' if 'path' in str(error).lower() else str(error))
+
+    @api.get('/api/jobs/{job_id}/preview')
+    def file_preview(job_id, path: str, sheet: str | None = None):
+        paths = [f['path'] for f in get(job_id)['files']]
+        try:
+            return preview.preview(store.path(job_id), path, sheet, paths)
+        except (FileNotFoundError, ValueError) as error:
+            raise job_file_error(error) from None
+
+    @api.get('/api/jobs/{job_id}/page')
+    def file_page(job_id, path: str, page: int = 1):
+        get(job_id)
+        try:
+            image = preview.page_png(store.path(job_id), path, page)
+        except (FileNotFoundError, ValueError) as error:
+            raise job_file_error(error) from None
+        except Exception as error:  # noqa: BLE001 - a damaged PDF
+            raise HTTPException(422, clean(f'This page cannot be shown: {error}')) from None
+        return Response(image, media_type='image/png', headers={'Cache-Control': 'private, max-age=3600'})
+
+    @api.get('/api/jobs/{job_id}/file')
+    def file_download(job_id, path: str):
+        get(job_id)
+        try:
+            found = preview.job_file(store.path(job_id), path)
+        except (FileNotFoundError, ValueError) as error:
+            raise job_file_error(error) from None
+        return FileResponse(found, filename=found.name)
 
     @api.post('/api/connection-check')
     async def connection_check():

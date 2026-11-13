@@ -108,6 +108,38 @@ def test_a_sandbox_job_runs_on_the_engine_and_settles(tmp_path, monkeypatch):
         assert 'Saved outputs; checks passed' in messages and not any('001-main' in m for m in messages)
 
 
+def test_the_feed_shows_what_a_script_was_for(tmp_path, monkeypatch):
+    async def behaviour(outputs, on_event, **_):
+        write_output(outputs)
+        on_event(
+            'code.ran', {'file': '001-main.py', 'summary': 'List the HR folder', 'files': ['HR/Reports/employees.txt']}
+        )
+        on_event('code.ran', {'file': '002-main.py', 'summary': ''})  # no opening comment, so nothing shown
+        on_event('scout.started', {'folder': 'HR', 'files': 1})
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        events = {e['name']: e for e in client.get(f'/api/jobs/{job["id"]}/events').json() if e['type'] == 'engine'}
+        assert events['engine.code.ran']['message'] == 'List the HR folder'
+        assert events['engine.code.ran']['files'] == ['HR/Reports/employees.txt']
+        assert [e for e in events if e.startswith('engine.code')] == ['engine.code.ran']
+        assert 'files' not in events['engine.scout.started']  # a count, not a list of files
+
+
+def test_a_script_is_described_by_its_first_comment_and_the_files_it_names():
+    from app.engine.agent import code_files, code_summary
+
+    code = "#!/usr/bin/env python\n# Read the payroll register\nimport openpyxl\nopenpyxl.load_workbook('/mnt/data/packet/HR/register.xlsx')"
+    assert code_summary(code) == 'Read the payroll register'
+    assert code_summary('import os\n# list the folder\nprint(os.listdir())') == ''  # never a line of code
+    assert code_summary('') == ''
+    files = [{'path': 'HR/register.xlsx'}, {'path': 'HR/other.pdf'}, {'path': 'Old/ster.xlsx'}]
+    assert code_files(code, files) == ['HR/register.xlsx']  # "ster.xlsx" is only part of another name
+
+
 def test_a_question_is_answered_in_the_app_while_the_sandbox_waits(tmp_path, monkeypatch):
     async def behaviour(answerer, outputs, **_):
         reply = await answerer.answer('Which salary is right for EMP001: 4,200 or 4,500?')

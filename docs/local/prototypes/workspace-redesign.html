@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workspace redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #ffffff; --panel: #f5f5f6; --sheet: #ffffff; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab; --line: #e7e7ea;
+  --accent: #2f6fdb; --accent-bg: #e8f0fd;
+  --ok-bg: #e6f3e6; --ok-fg: #24592a; --warn-bg: #fbf0dc; --warn-fg: #6b4206; --bad-bg: #fbe9e9; --bad-fg: #7a2020; --grey-bg: #ececee; --grey-fg: #55555c;
+  --bar: 40px;
+}
+:root[data-accent="green"] { --accent: #1f7a4d; --accent-bg: #e3f3ea; }
+:root[data-accent="ink"] { --accent: #18181b; --accent-bg: #ececee; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; cursor: pointer; padding: 0; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
+h2 { font-size: 15px; font-weight: 500; }
+h3 { font-size: 13px; font-weight: 400; color: var(--muted); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* Prototype strip: not part of the design */
+.proto { height: var(--bar); display: flex; align-items: center; gap: 8px; padding: 0 16px; background: #18181b; color: #fff; font-size: 13px; overflow-x: auto; white-space: nowrap; }
+.proto span { opacity: .6; margin: 0 4px 0 8px; }
+.proto span:first-child { margin-left: 0; }
+.proto button { padding: 4px 12px; border-radius: 999px; color: #fff; background: rgba(255,255,255,.1); }
+.proto button.on { background: #fff; color: #18181b; }
+.proto .sw { width: 20px; height: 20px; padding: 0; border-radius: 50%; box-shadow: inset 0 0 0 2px #18181b; }
+.proto .sw.on { box-shadow: inset 0 0 0 2px #18181b, 0 0 0 2px #fff; }
+
+.app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: calc(100dvh - var(--bar)); }
+
+/* Sidebar */
+.side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 24px; min-height: 0; }
+.brand { font-weight: 500; font-size: 15px; padding: 0 12px; }
+.side .new { margin: 0 4px; }
+.runs { display: flex; flex-direction: column; gap: 4px; overflow: auto; flex: 1; min-height: 0; }
+.runs h3 { padding: 0 12px 8px; }
+.item { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; padding: 8px 12px; border-radius: 12px; color: var(--muted); transition: background .15s; }
+.item:hover { background: var(--panel); }
+.item.on { background: var(--panel); color: var(--text); }
+.item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pulse 1.6s ease-in-out infinite; }
+.item i.ask { background: #c98a1b; animation: none; }
+.foot { display: flex; flex-direction: column; gap: 4px; }
+
+/* Buttons, pills */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; transition: background .15s, transform .1s, box-shadow .15s; }
+.btn:active { transform: scale(.98); }
+.btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+.btn.primary:hover { background: #2e2e33; }
+.btn.quiet { box-shadow: inset 0 0 0 1px var(--line); }
+.btn.quiet:hover { background: var(--panel); }
+.btn.text { padding: 8px 12px; color: var(--muted); }
+.btn.text:hover { color: var(--text); background: var(--panel); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok-fg); } .pill.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.pill.bad { background: var(--bad-bg); color: var(--bad-fg); } .pill.live { background: var(--accent-bg); color: var(--accent); }
+.tag { font-size: 10px; letter-spacing: .04em; color: var(--muted); width: 32px; flex: none; }
+
+/* Work area: conversation + files */
+.work { display: grid; grid-template-columns: minmax(0, 1fr) var(--files, 380px); min-width: 0; min-height: 0; transition: grid-template-columns .25s ease; }
+.work.viewing { --files: min(60%, 860px); }
+.work.solo { grid-template-columns: minmax(0, 1fr); }
+.work.solo .files { display: none; }
+.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.chat-head { display: flex; align-items: center; gap: 12px; padding: 24px 32px 12px; }
+.chat-head h1 { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stages { display: flex; gap: 8px; padding: 0 32px 12px; color: var(--faint); font-size: 13px; flex-wrap: wrap; }
+.stages b { font-weight: 400; }
+.stages .now { color: var(--text); } .stages .done { color: var(--muted); }
+.scroll { flex: 1; overflow: auto; min-height: 0; padding: 12px 32px 24px; scroll-behavior: smooth; }
+.thread { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.thread > * { animation: rise .25s ease both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes pulse { 50% { opacity: .35; } }
+.me { align-self: flex-end; max-width: 80%; background: var(--panel); border-radius: 12px; padding: 12px 16px; white-space: pre-wrap; }
+.say { max-width: 62ch; text-wrap: pretty; }
+
+/* A block of work the agent did */
+.grp { border-radius: 12px; }
+.grp-head { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 4px 0; color: var(--muted); }
+.grp-head:hover { color: var(--text); }
+.grp-head svg { width: 14px; height: 14px; transition: transform .2s; }
+.grp.open .grp-head svg { transform: rotate(90deg); }
+.grp-head time { color: var(--faint); font-variant-numeric: tabular-nums; }
+.grp-body { display: none; margin: 4px 0 4px 6px; padding-left: 16px; border-left: 1px solid var(--line); flex-direction: column; gap: 4px; }
+.grp.open .grp-body { display: flex; }
+.step { display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 13px; animation: rise .2s ease both; min-width: 0; }
+.step .file { color: var(--text); border-radius: 4px; text-align: left; }
+.step .file:hover { color: var(--accent); }
+.step .note { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step.flag .note { color: var(--warn-fg); }
+.live { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+.live b { font-weight: 400; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 40%, var(--text) 50%, var(--muted) 60%, var(--muted) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: sweep 1.8s linear infinite; }
+.live time { color: var(--faint); font-variant-numeric: tabular-nums; }
+@keyframes sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* Question, result, problem cards inside the conversation */
+.card { background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.card.ask { background: var(--warn-bg); }
+.card.bad { background: var(--bad-bg); }
+.card table { width: 100%; border-collapse: collapse; }
+.card th { text-align: left; font-weight: 400; color: var(--muted); padding: 0 0 8px; font-size: 13px; }
+.card td { padding: 8px 0; border-top: 1px solid rgba(0,0,0,.08); }
+.card th.num, .card td.num { text-align: right; }
+.choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.card.ask .btn.quiet { background: #fff; box-shadow: none; }
+.card.ask .btn.quiet:hover { background: #fff7e8; }
+.filerow { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.filerow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.look { display: flex; flex-direction: column; }
+.look button { text-align: left; padding: 8px 0; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+.look button:hover { color: var(--accent); }
+.look button span:last-child { color: var(--muted); white-space: nowrap; }
+
+/* Composer */
+.composer { padding: 0 32px 24px; }
+.composer form { max-width: 720px; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px; background: var(--panel); border-radius: 12px; padding: 8px 8px 8px 16px; transition: box-shadow .15s; }
+.composer form:focus-within { box-shadow: inset 0 0 0 1px var(--faint); }
+.composer textarea { flex: 1; border: 0; background: none; resize: none; outline: none; padding: 6px 0; height: 34px; max-height: 140px; }
+.send { width: 34px; height: 34px; border-radius: 50%; background: var(--text); color: #fff; display: grid; place-items: center; transition: transform .1s, opacity .15s; }
+.send:active { transform: scale(.94); }
+.send:disabled { opacity: .25; }
+
+/* New run */
+.setup { max-width: 640px; margin: 0 auto; padding: 64px 32px 48px; display: flex; flex-direction: column; gap: 24px; }
+.setup .goal { background: var(--panel); border-radius: 12px; padding: 16px; }
+.setup textarea { width: 100%; border: 0; background: none; resize: none; outline: none; min-height: 96px; }
+.setup .rows { background: var(--panel); border-radius: 12px; padding: 4px 16px; }
+.setup .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; min-height: 56px; }
+.setup .row + .row { border-top: 1px solid var(--line); }
+.setup .row > span:first-child { color: var(--muted); flex: none; }
+.setup .val { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.setup .val em { font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup input[type=month], .setup select { border: 0; background: var(--sheet); border-radius: 12px; padding: 8px 12px; }
+.seg { display: inline-flex; background: var(--sheet); border-radius: 999px; padding: 4px; }
+.seg button { padding: 4px 12px; border-radius: 999px; color: var(--muted); }
+.seg button.on { background: var(--text); color: #fff; }
+.setup .go { display: flex; justify-content: flex-end; }
+.drop { border-radius: 12px; outline: 1px dashed var(--faint); outline-offset: -1px; }
+
+/* Files panel */
+.files { margin: 16px 16px 16px 0; background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.files-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 12px 24px; min-height: 60px; }
+.files-head h2 { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+.icon-btn:hover { background: var(--grey-bg); color: var(--text); }
+.files-body { flex: 1; overflow: auto; min-height: 0; padding: 0 24px 24px; display: flex; flex-direction: column; gap: 24px; }
+.list { display: flex; flex-direction: column; }
+.list h3 { padding-bottom: 8px; display: flex; justify-content: space-between; }
+.frow { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); text-align: left; width: 100%; min-width: 0; }
+.frow:hover .name { color: var(--accent); }
+.frow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frow.static { cursor: default; }
+.empty { color: var(--muted); padding: 10px 0; border-top: 1px solid var(--line); }
+.folder { color: var(--faint); font-size: 12px; padding: 12px 0 4px; }
+
+/* File viewer */
+.meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.sheet { background: var(--sheet); border-radius: 12px; overflow: auto; }
+.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.grid th { position: sticky; top: 0; background: var(--sheet); text-align: left; font-weight: 400; color: var(--muted); padding: 10px 12px; white-space: nowrap; }
+.grid td { padding: 10px 12px; border-top: 1px solid var(--line); white-space: nowrap; }
+.grid th.num, .grid td.num { text-align: right; }
+.grid tbody tr { cursor: pointer; transition: background .12s; }
+.grid tbody tr:hover { background: #fafafb; }
+.grid tbody tr.sel { background: var(--accent-bg); }
+.grid td.blank { color: var(--faint); }
+.tabs { display: flex; gap: 4px; }
+.tabs button { padding: 4px 12px; border-radius: 999px; color: var(--muted); font-size: 13px; }
+.tabs button.on { background: var(--sheet); color: var(--text); }
+.proof { display: flex; flex-direction: column; gap: 12px; }
+.proof-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.src { background: var(--sheet); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.src .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.src .top button { color: var(--accent); white-space: nowrap; }
+.src .top span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snip { font-size: 13px; color: var(--muted); line-height: 1.7; }
+mark { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); border-radius: 4px; padding: 1px 3px; }
+.page { background: var(--sheet); border-radius: 12px; padding: 48px 56px; max-width: 640px; margin: 0 auto; width: 100%; font-size: 13px; line-height: 1.8; display: flex; flex-direction: column; gap: 12px; min-height: 520px; }
+.page .title { font-size: 16px; font-weight: 500; }
+.page .small { color: var(--muted); }
+.pager { display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--muted); font-size: 13px; }
+.scan { background: #e9e9ec; border-radius: 12px; min-height: 320px; display: grid; place-items: center; color: var(--muted); }
+
+.only-narrow { display: none; }
+@media (max-width: 1000px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side { display: none; }
+  .work, .work.viewing { grid-template-columns: minmax(0, 1fr); }
+  .files { display: none; position: fixed; inset: var(--bar) 0 0 0; margin: 0; border-radius: 0; z-index: 3; }
+  .work.show-files .files { display: flex; }
+  .only-narrow { display: inline-flex; }
+  .chat-head, .composer { padding-left: 16px; padding-right: 16px; }
+  .chat-head { flex-wrap: wrap; }
+  .chat-head h1 { flex-basis: 100%; }
+  .stages, .scroll { padding-left: 16px; padding-right: 16px; }
+  .setup { padding: 32px 16px; }
+  .page { padding: 24px; }
+  .hide-narrow { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .live b { color: var(--muted); background: none; } }
+</style>
+</head>
+<body>
+<div class="proto" id="proto">
+  <span>Prototype</span>
+  <button data-state="new">New run</button>
+  <button data-state="working">Working</button>
+  <button data-state="question">Question</button>
+  <button data-state="done">Finished</button>
+  <button data-state="problem">Problem</button>
+  <span>Accent</span>
+  <button class="sw" data-accent="blue" style="background:#2f6fdb" aria-label="Blue accent"></button>
+  <button class="sw" data-accent="green" style="background:#1f7a4d" aria-label="Green accent"></button>
+  <button class="sw" data-accent="ink" style="background:#8a8a92" aria-label="No accent"></button>
+</div>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand">Document Agent</div>
+    <button class="btn quiet new" data-state="new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New run</button>
+    <div class="runs">
+      <h3>Recent</h3>
+      <button class="item on" id="this-run"><span>October payroll</span></button>
+      <button class="item"><span>Supplier invoices, week 44</span></button>
+      <button class="item"><span>September payroll</span></button>
+      <button class="item"><span>August payroll</span></button>
+      <button class="item"><span>Q3 claims pack</span></button>
+    </div>
+    <div class="foot">
+      <button class="item"><span>Instructions</span></button>
+      <button class="item"><span>Settings</span></button>
+    </div>
+  </aside>
+
+  <main class="work solo" id="work">
+    <section class="chat" id="chat"></section>
+    <aside class="files" id="files"></aside>
+  </main>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const ico = { send: 'M12 19V5M6 11l6-6 6 6', x: 'M6 6l12 12M18 6L6 18', back: 'M15 6l-6 6 6 6', down: 'M12 4v12M7 11l5 5 5-5M5 20h14', chev: 'M9 6l6 6-6 6', clip: 'M20 11l-8.5 8.5a5 5 0 01-7-7L13 4a3.5 3.5 0 015 5l-8.5 8.5a2 2 0 01-3-3L14 7' };
+const svg = (n) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ico[n]}"/></svg>`;
+const money = (n) => n == null ? '' : n.toLocaleString('en-MY', { minimumFractionDigits: 2 });
+
+// ---- Sample data -----------------------------------------------------------
+const GOAL = 'Fill the October payroll workbook from this folder. Use the confirmation letters where they disagree with anything else.';
+const SOURCES = [
+  ['HR', 'payroll_register_oct.xlsx', 'used', 'Main list of 46 employees and salaries'],
+  ['HR', 'headcount_oct.xlsx', 'used', 'Start dates for every employee'],
+  ['HR', 'new_joiners.pdf', 'used', 'Three people who joined in October'],
+  ['HR', 'leavers.pdf', 'reference', 'Confirms nobody on the register has left'],
+  ['Letters', 'salary_letter_EMP014.pdf', 'used', 'New salary for Lim Wei Jie'],
+  ['Letters', 'salary_letter_EMP031.pdf', 'used', 'New salary for Kavitha Subramaniam'],
+  ['Letters', 'increment_memo_sept.pdf', 'used', 'Explains the two increments'],
+  ['Finance', 'epf_schedule_oct.pdf', 'used', 'EPF amounts to compare against'],
+  ['Finance', 'bank_file_oct.csv', 'reference', 'Net pay only, not needed for the workbook'],
+  ['Finance', 'socso_rates_2026.pdf', 'reference', 'Rate table, no employee data'],
+  ['Scans', 'epf_form_a_scan.png', 'used', 'Signed EPF form, totals match the schedule'],
+  ['Admin', 'office_rental_invoice.pdf', 'skip', 'Not about payroll'],
+  ['Admin', 'team_lunch_photo.jpg', 'skip', 'Not about payroll'],
+  ['', 'instructions.txt', 'used', 'Your notes on how to fill the workbook'],
+].map(([folder, name, decision, reason]) => ({ folder, name, decision, reason, seen: false, reading: false }));
+const DECISION = { used: ['ok', 'Used'], reference: ['', 'Reference'], skip: ['', 'Not relevant'] };
+const OUT = 'payroll_october_2026.xlsx';
+const ROWS = [
+  ['EMP011', 'Nurul Aisyah binti Rahman', 5200, '03 Feb 2021'], ['EMP012', 'Daniel Fernandez', 7350, '17 Aug 2019'],
+  ['EMP013', 'Tan Mei Ling', 4680, '01 Jun 2022'], ['EMP014', 'Lim Wei Jie', 6450, '12 Jan 2020', 'letter', 6200],
+  ['EMP015', 'Ahmad Faizal bin Osman', 3900, '09 Sep 2023'], ['EMP016', 'Priya Raman', 8125, '22 Mar 2018'],
+  ['EMP029', 'Chong Kah Hoe', 4410, '04 Nov 2021'], ['EMP030', 'Siti Hajar binti Ismail', 5575, '15 May 2020'],
+  ['EMP031', 'Kavitha Subramaniam', 5100, '28 Jul 2022', 'letter', 4850], ['EMP038', 'Marcus Wong', 6890, '11 Oct 2017'],
+  ['EMP039', 'Farah Nadia binti Yusof', 4240, '', 'blank'], ['EMP040', 'Rajesh Pillai', 3760, '06 Oct 2026'],
+].map(([id, name, pay, start, flag, was], i) => ({ id, name, pay, start, flag, was, reg: i + 2 }));
+
+// The run, as a script. Each entry is something the person sees in the conversation.
+const R = (file, note, flag) => ({ verb: 'Read', file, note, flag });
+const SCRIPT = [
+  { say: 'There are 14 files in the folder. I will start with the template and your notes so I know what the workbook needs.' },
+  { grp: 'Read the template and your notes', steps: [R('payroll_template.xlsx', '2 sheets, 46 rows to fill'), R('instructions.txt', 'letters win over the register')] },
+  { say: 'The workbook wants an ID, name, basic salary, EPF and start date for each of 46 people. Going through the HR folder next.', stage: 1 },
+  { grp: 'Went through the HR folder', steps: [R('payroll_register_oct.xlsx', '46 employees'), R('headcount_oct.xlsx', '45 start dates'), R('new_joiners.pdf', '3 joiners, all on the register'), R('leavers.pdf', 'no leavers this month')] },
+  { grp: 'Sorted the rest of the folder', steps: [R('epf_schedule_oct.pdf', '46 lines'), R('epf_form_a_scan.png', 'totals match the schedule'), R('bank_file_oct.csv', 'net pay only'), R('socso_rates_2026.pdf', 'rate table'), R('office_rental_invoice.pdf', 'not payroll'), R('team_lunch_photo.jpg', 'not payroll')] },
+  { say: 'The register covers all 46 people. Now checking each salary against the letters.' },
+  { grp: 'Compared salaries with the letters', steps: [R('increment_memo_sept.pdf', '2 increments from 1 October'), R('salary_letter_EMP014.pdf', 'MYR 6,450, register says 6,200', true), R('salary_letter_EMP031.pdf', 'MYR 5,100, register says 4,850', true), { verb: 'Compared', note: '44 of 46 salaries agree' }] },
+  { ask: true },
+  { say: 'Thanks. Using the letter amounts for both.', stage: 2 },
+  { grp: 'Filled the workbook', draft: true, steps: [{ verb: 'Wrote', file: OUT, note: '46 rows on the Employees sheet' }, { verb: 'Kept', note: 'the EPF formulas and the hidden Lookup sheet' }] },
+  { grp: 'Checked the result', stage: 3, steps: [{ verb: 'Checked', note: 'every row has a source' }, { verb: 'Checked', note: 'EPF matches the schedule for all 46' }, { verb: 'Found', note: 'no start date for EMP039 in any file', flag: true }] },
+  { done: true },
+];
+const STAGES = ['Read the folder', 'Match the records', 'Fill the workbook', 'Check'];
+const PRESET = { working: { instant: 3, stop: 'ask' }, question: { instant: 7, stop: 'ask' }, done: { instant: 99 }, problem: { instant: 5, fail: 6 } };
+
+// ---- State -----------------------------------------------------------------
+const ui = { state: 'new', run: 0, stage: 0, status: 'Working', open: null, row: null, draft: false, finished: false, picked: false, tab: 'Employees' };
+let timer;
+
+function setState(state) {
+  ui.run++;
+  clearInterval(timer);
+  Object.assign(ui, { state, stage: 0, status: 'Working', open: null, row: null, draft: false, finished: false, tab: 'Employees' });
+  SOURCES.forEach((s) => { s.seen = false; s.reading = false; });
+  document.querySelectorAll('.proto [data-state]').forEach((b) => b.classList.toggle('on', b.dataset.state === state));
+  $('#this-run').innerHTML = '<span>October payroll</span>';
+  if (state === 'new') return renderSetup();
+  renderChat();
+  renderFiles();
+  play(ui.run, PRESET[state]);
+}
+
+// ---- New run ---------------------------------------------------------------
+function renderSetup() {
+  $('#work').className = 'work solo';
+  $('#chat').innerHTML = `
+    <div class="scroll"><div class="setup">
+      <h1>New run</h1>
+      <div class="goal"><textarea id="goal" aria-label="What should the agent produce?" placeholder="What should the agent produce?"></textarea></div>
+      <div class="rows">
+        <div class="row"><span>Source files</span><div class="val"><em id="src-val"></em><button class="btn quiet" data-pick>${svg('clip')}Choose folder</button></div></div>
+        <div class="row"><span>Deliver as</span><div class="val"><div class="seg"><button class="on" data-seg>Template</button><button data-seg>Format</button></div><button class="btn quiet" data-pick>Choose workbook</button></div></div>
+        <div class="row"><span>Period</span><input type="month" value="2026-10" aria-label="Period"></div>
+        <div class="row"><span>Module</span><select aria-label="Module"><option>Payroll</option><option>Accounts payable</option></select></div>
+      </div>
+      <div class="go"><button class="btn primary" id="start" disabled>Start run</button></div>
+    </div></div>`;
+  $('#files').innerHTML = '';
+  ui.picked = false;
+}
+function pickSample() {
+  ui.picked = true;
+  $('#goal').value = $('#goal').value || GOAL;
+  const [files, wb] = document.querySelectorAll('[data-pick]');
+  $('#src-val').textContent = 'October 2026 · 14 files';
+  files.lastChild.textContent = 'Change';
+  wb.textContent = 'payroll_template.xlsx';
+  $('#start').disabled = false;
+}
+
+// ---- Conversation ----------------------------------------------------------
+function renderChat() {
+  $('#work').className = 'work';
+  $('#chat').innerHTML = `
+    <header class="chat-head">
+      <h1>October payroll</h1>
+      <span class="pill" id="status"></span>
+      <span id="controls" style="display:flex;gap:4px"></span>
+      <button class="btn quiet only-narrow" data-files>Files</button>
+    </header>
+    <div class="stages" id="stages"></div>
+    <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-live="polite"></div></div>
+    <div class="composer"><form id="composer">
+      <textarea id="msg" rows="1" aria-label="Message the agent" placeholder="Message the agent"></textarea>
+      <button class="send" aria-label="Send" disabled>${svg('send')}</button>
+    </form></div>`;
+  add(`<div class="me">${esc(GOAL)}</div>`);
+  renderHead();
+}
+function renderHead() {
+  const tone = { Working: 'live', 'Needs your answer': 'warn', Finished: 'ok', Stopped: 'bad', Paused: '' }[ui.status];
+  $('#status').className = 'pill ' + tone;
+  $('#status').textContent = ui.status;
+  $('#controls').innerHTML = ui.status === 'Working' ? '<button class="btn text" data-pause>Pause</button><button class="btn text" data-stop>Stop</button>'
+    : ui.status === 'Paused' ? '<button class="btn text" data-pause>Resume</button>' : '<button class="btn text hide-narrow" data-log>Technical log</button>';
+  $('#stages').innerHTML = STAGES.map((s, i) => `<b class="${ui.finished || i < ui.stage ? 'done' : i === ui.stage ? 'now' : ''}">${s}</b>`).join('<span>›</span>');
+  $('#msg').placeholder = ui.status === 'Needs your answer' ? 'Or type your answer' : ui.finished ? 'Ask for a change' : 'Message the agent';
+  const dot = ui.status === 'Working' ? '<i></i>' : ui.status === 'Needs your answer' ? '<i class="ask"></i>' : '';
+  $('#this-run').innerHTML = '<span>October payroll</span>' + dot;
+}
+function add(html) {
+  const box = $('#scroll');
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  $('#thread').insertAdjacentHTML('beforeend', html);
+  if (near) box.scrollTop = box.scrollHeight;
+  return $('#thread').lastElementChild;
+}
+const stepHtml = (s) => `<div class="step ${s.flag ? 'flag' : ''}"><span>${s.verb}</span>${s.file ? `<button class="file" data-open="${esc(s.file)}">${esc(s.file)}</button>` : ''}${s.note ? `<span class="note">${esc(s.note)}</span>` : ''}</div>`;
+const secs = (n) => (n < 60 ? `${n}s` : `${Math.floor(n / 60)}m ${n % 60}s`);
+
+async function play(run, { instant = 0, stop, fail }) {
+  const alive = () => run === ui.run;
+  let paused = () => ui.status === 'Paused';
+  const wait = async (ms, i) => {
+    if (i < instant) return;
+    await new Promise((r) => setTimeout(r, ms));
+    while (alive() && paused()) await new Promise((r) => setTimeout(r, 200));
+  };
+  for (let i = ui.resumeAt || 0; i < SCRIPT.length; i++) {
+    const it = SCRIPT[i];
+    if (!alive()) return;
+    if (fail === i) return problem();
+    if (it.stage != null) { ui.stage = it.stage; renderHead(); }
+    if (it.say) { await wait(500, i); if (!alive()) return; add(`<p class="say">${esc(it.say)}</p>`); await wait(700, i); }
+    if (it.grp) {
+      const live = i >= instant;
+      const el = add(`<div class="grp ${live ? 'open' : ''}"><button class="grp-head" aria-expanded="${live}">${svg('chev')}<span>${esc(it.grp)}</span><time></time></button><div class="grp-body"></div></div>`);
+      const body = $('.grp-body', el);
+      let total = 0;
+      for (const s of it.steps) {
+        const src = SOURCES.find((x) => x.name === s.file);
+        if (live) {
+          if (src) { src.reading = true; renderFiles(); }
+          const line = document.createElement('div');
+          line.className = 'live';
+          line.innerHTML = `<i></i><b>${s.file ? 'Reading ' + esc(s.file) : esc(s.verb === 'Wrote' ? 'Writing' : 'Checking')}</b><time>0s</time>`;
+          body.append(line);
+          $('#scroll').scrollTop = $('#scroll').scrollHeight;
+          const t0 = Date.now();
+          clearInterval(timer);
+          timer = setInterval(() => { $('time', line).textContent = secs(Math.round((Date.now() - t0) / 1000) + total); }, 250);
+          await wait(1100 + Math.random() * 900, i);
+          clearInterval(timer);
+          if (!alive()) return;
+          line.remove();
+        }
+        total += 3 + (s.note || '').length % 5;
+        if (src) { src.reading = false; src.seen = true; }
+        if (s.file === OUT || it.draft) ui.draft = true;
+        body.insertAdjacentHTML('beforeend', stepHtml(s));
+        if (live) renderFiles();
+      }
+      $('time', el).textContent = secs(total);
+      if (live) { await wait(400, i); el.classList.remove('open'); $('.grp-head', el).setAttribute('aria-expanded', 'false'); }
+    }
+    if (it.ask) {
+      const past = i < instant;
+      if (!past) { ui.status = 'Needs your answer'; renderHead(); renderFiles(); }
+      add(`<p class="say">Two salaries in the register are lower than the confirmation letters. Your notes say the letters win, but the increment memo is dated after the register. Which should I use?</p>`);
+      add(`<div class="card ask" id="ask">
+        <table><thead><tr><th>Employee</th><th class="num">Register</th><th class="num">Letter</th></tr></thead><tbody>
+          <tr><td>Lim Wei Jie</td><td class="num">6,200.00</td><td class="num">6,450.00</td></tr>
+          <tr><td>Kavitha Subramaniam</td><td class="num">4,850.00</td><td class="num">5,100.00</td></tr></tbody></table>
+        <div class="choices"><button class="btn quiet" data-answer>Use the letters</button><button class="btn quiet" data-answer>Use the register</button><button class="btn quiet" data-answer>Leave both blank</button></div>
+      </div>`);
+      if (!past) { ui.resumeAt = i + 1; return; }
+      $('#ask .choices').remove(); $('#ask').removeAttribute('id');
+      add('<div class="me">Use the letters</div>');
+    }
+    if (it.done) finish(i < instant);
+  }
+  ui.resumeAt = 0;
+}
+function answer(text) {
+  $('#ask')?.querySelector('.choices')?.remove();
+  add(`<div class="me">${esc(text)}</div>`);
+  ui.status = 'Working';
+  renderHead();
+  const at = ui.resumeAt;
+  ui.run++;
+  play(ui.run, { instant: 0 });
+  ui.resumeAt = at;
+}
+function finish() {
+  ui.status = 'Finished'; ui.finished = true; ui.draft = true;
+  renderHead();
+  add(`<p class="say">The workbook is filled and checked. All 46 rows trace back to a source file. Two things are worth a look before you use it.</p>`);
+  add(`<div class="card">
+    <div class="filerow"><span class="tag">XLSX</span><button class="name" data-open="${OUT}">${OUT}</button><span class="pill ok">Checked</span><button class="btn quiet" data-open="${OUT}">Open</button><button class="icon-btn" aria-label="Download" data-download>${svg('down')}</button></div>
+    <div class="look">
+      <button data-open="${OUT}" data-row="EMP039"><span>Farah Nadia has no start date in any file. I left it blank.</span><span>Row 40</span></button>
+      <button data-open="${OUT}" data-row="EMP014"><span>Lim Wei Jie and Kavitha use the letter amounts, as you chose.</span><span>Rows 15, 32</span></button>
+    </div></div>`);
+  renderFiles();
+}
+function problem() {
+  ui.status = 'Stopped';
+  renderHead();
+  add(`<div class="card bad"><p>The run stopped. The model did not answer after three tries.</p><p>Nothing is lost. The files read so far are saved, and the run picks up from the salary check.</p>
+    <div class="choices"><button class="btn primary" data-retry>Resume</button><button class="btn text" data-log>Technical log</button></div></div>`);
+  renderFiles();
+}
+
+// ---- Files panel -----------------------------------------------------------
+function renderFiles() {
+  const el = $('#files');
+  $('#work').classList.toggle('viewing', !!ui.open);
+  if (ui.open) return (el.innerHTML = viewer(ui.open));
+  const seen = SOURCES.filter((s) => s.seen).length;
+  let folder = null;
+  const rows = SOURCES.map((s) => {
+    const head = s.folder !== folder ? `<div class="folder">${esc(s.folder || 'Top folder')}</div>` : '';
+    folder = s.folder;
+    const [tone, label] = DECISION[s.decision];
+    const pill = s.reading ? '<span class="pill live">Reading</span>' : s.seen ? `<span class="pill ${tone}">${label}</span>` : '';
+    return `${head}<button class="frow" data-open="${esc(s.name)}"><span class="tag">${ext(s.name)}</span><span class="name">${esc(s.name)}</span>${pill}</button>`;
+  }).join('');
+  const out = ui.draft
+    ? `<button class="frow" data-open="${OUT}"><span class="tag">XLSX</span><span class="name">${OUT}</span><span class="pill ${ui.finished ? 'ok' : 'warn'}">${ui.finished ? 'Checked' : 'Draft'}</span></button>`
+    : '<div class="empty">Nothing yet</div>';
+  const checks = ui.finished ? `<div class="list"><h3>Checks</h3>
+      ${[['Template rules', 'Passed', 'ok'], ['Files decided', '14 of 14', 'ok'], ['Rows with a source', '46 of 46', 'ok'], ['Reviewer', '2 doubts checked', 'ok'], ['Left blank', '1 cell', 'warn']].map(([a, b, t]) => `<div class="frow static"><span class="name">${a}</span><span class="pill ${t}">${b}</span></div>`).join('')}</div>` : '';
+  el.innerHTML = `
+    <div class="files-head"><h2>Files</h2><button class="icon-btn only-narrow" data-files aria-label="Close">${svg('x')}</button></div>
+    <div class="files-body">
+      <div class="list"><h3>Output</h3>${out}</div>
+      ${checks}
+      <div class="list"><h3><span>Sources</span><span>${seen} of ${SOURCES.length} read</span></h3>${rows}</div>
+    </div>`;
+}
+const ext = (name) => name.split('.').pop().toUpperCase();
+
+function viewer(name) {
+  const src = SOURCES.find((s) => s.name === name);
+  const kind = ext(name);
+  const head = `<div class="files-head"><button class="icon-btn" data-back aria-label="Back to files">${svg('back')}</button><h2>${esc(name)}</h2>
+    <button class="icon-btn" aria-label="Download" data-download>${svg('down')}</button><button class="icon-btn" data-back aria-label="Close">${svg('x')}</button></div>`;
+  let meta = '', body = '';
+  if (name === OUT) {
+    meta = `<div class="meta"><span class="pill ${ui.finished ? 'ok' : 'warn'}">${ui.finished ? 'Checked' : 'Draft'}</span><span>46 rows</span>
+      <span class="tabs" style="margin-left:auto"><button class="${ui.tab === 'Employees' ? 'on' : ''}" data-tab="Employees">Employees</button><button class="${ui.tab === 'Lookup' ? 'on' : ''}" data-tab="Lookup">Lookup</button></span></div>`;
+    body = ui.tab === 'Lookup'
+      ? `<div class="sheet"><table class="grid"><thead><tr><th>Rate</th><th class="num">Value</th></tr></thead><tbody><tr><td>EPF, employee</td><td class="num">11%</td></tr><tr><td>EPF, employer</td><td class="num">13%</td></tr></tbody></table></div><p class="meta">Hidden sheet, kept from the template.</p>`
+      : outGrid() + proof();
+  } else if (kind === 'XLSX' || kind === 'CSV') {
+    meta = srcMeta(src);
+    body = `<div class="sheet"><table class="grid"><thead><tr><th>Row</th><th>ID</th><th>Name</th><th class="num">Basic salary</th></tr></thead><tbody>
+      ${ROWS.map((r) => `<tr class="${ui.row === r.id ? 'sel' : ''}"><td>${r.reg + (r.id > 'EMP016' ? (r.id > 'EMP031' ? 26 : 18) : 10)}</td><td>${r.id}</td><td>${esc(r.name)}</td><td class="num">${money(r.was || r.pay)}</td></tr>`).join('')}</tbody></table></div>`;
+  } else if (kind === 'PNG' || kind === 'JPG') {
+    meta = srcMeta(src);
+    body = `<div class="scan">Image preview</div>`;
+  } else {
+    meta = srcMeta(src);
+    body = docPage(name) + (kind === 'PDF' ? `<div class="pager"><button class="icon-btn" aria-label="Previous page" disabled>${svg('back')}</button>Page 1 of 2<button class="icon-btn" aria-label="Next page">${svg('chev')}</button></div>` : '');
+  }
+  return `${head}<div class="files-body">${meta}${body}</div>`;
+}
+function srcMeta(src) {
+  if (!src) return '<div class="meta"><span>Template</span></div>';
+  const [tone, label] = DECISION[src.decision];
+  return `<div class="meta">${src.seen ? `<span class="pill ${tone}">${label}</span><span>${esc(src.reason)}</span>` : '<span>Not read yet</span>'}</div>`;
+}
+function outGrid() {
+  return `<div class="sheet"><table class="grid"><thead><tr><th>ID</th><th>Name</th><th class="num">Basic salary</th><th class="num">EPF</th><th>Start date</th><th></th></tr></thead><tbody>
+    ${ROWS.map((r) => `<tr data-row="${r.id}" class="${ui.row === r.id ? 'sel' : ''}" tabindex="0"><td>${r.id}</td><td>${esc(r.name)}</td><td class="num">${money(r.pay)}</td><td class="num">${money(Math.round(r.pay * 11) / 100)}</td>
+      <td class="${r.start ? '' : 'blank'}">${r.start || 'Blank'}</td><td>${r.flag === 'blank' ? '<span class="pill warn">No source</span>' : r.flag === 'letter' ? '<span class="pill">Your choice</span>' : ''}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+function proof() {
+  const r = ROWS.find((x) => x.id === ui.row);
+  if (!r) return '<p class="meta">Select a row to see where its numbers came from.</p>';
+  const card = (file, where, snip) => `<div class="src"><div class="top"><span>${esc(file)}</span><button data-open="${esc(file)}" data-keep>Open</button></div><div class="snip">${where}<br>${snip}</div></div>`;
+  const cards = [card('payroll_register_oct.xlsx', `Sheet Oct 2026, row ${r.reg + 10}`, `${r.id} · ${esc(r.name)} · <mark>${money(r.was || r.pay)}</mark>`)];
+  if (r.flag === 'letter') cards.push(card(`salary_letter_${r.id}.pdf`, 'Page 1', `Your basic salary is revised to <mark>MYR ${money(r.pay)}</mark> from 1 October 2026.`));
+  cards.push(r.start ? card('headcount_oct.xlsx', `Sheet Staff, row ${r.reg + 3}`, `${r.id} · joined <mark>${r.start}</mark>`) : `<div class="src"><div class="top"><span>Start date</span></div><div class="snip">Not found in any of the 14 files. The cell is blank.</div></div>`);
+  cards.push(card('epf_schedule_oct.pdf', 'Page 1', `${r.id} · employee share <mark>${money(Math.round(r.pay * 11) / 100)}</mark>`));
+  return `<div class="proof"><h2>${esc(r.name)}</h2><div class="proof-grid">${cards.join('')}</div></div>`;
+}
+function docPage(name) {
+  const r = ROWS.find((x) => name.includes(x.id));
+  if (r) return `<div class="page"><div class="title">Tanjung Harbour Logistics Sdn Bhd</div><div class="small">24 September 2026 · Private and confidential</div>
+    <p>Dear ${esc(r.name)},</p><p>Following your annual review, we are pleased to confirm a change to your pay.</p>
+    <p><mark>Your basic salary is revised to MYR ${money(r.pay)} per month from 1 October 2026.</mark></p>
+    <p>All other terms of your employment stay the same. Please sign and return one copy of this letter to the HR office.</p><p class="small">Human Resources</p></div>`;
+  if (name === 'instructions.txt') return `<div class="page"><p>October payroll notes</p><p>1. Fill the Employees sheet only. Do not touch the Lookup sheet.</p><p>2. Where a confirmation letter disagrees with the register, the letter wins.</p><p>3. Leave a cell blank if you cannot find the value. Do not guess.</p></div>`;
+  if (name === 'epf_schedule_oct.pdf') return `<div class="page"><div class="title">EPF contribution schedule</div><div class="small">October 2026 · 46 members</div>
+    <table class="grid"><thead><tr><th>ID</th><th class="num">Wages</th><th class="num">Employee share</th></tr></thead><tbody>${ROWS.slice(0, 8).map((x) => `<tr><td>${x.id}</td><td class="num">${money(x.pay)}</td><td class="num">${x.id === ui.row ? '<mark>' : ''}${money(Math.round(x.pay * 11) / 100)}${x.id === ui.row ? '</mark>' : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  const src = SOURCES.find((s) => s.name === name);
+  return `<div class="page"><div class="title">${esc(name.replace(/\.\w+$/, '').replace(/_/g, ' '))}</div><div class="small">Tanjung Harbour Logistics Sdn Bhd</div><p>${esc(src?.reason || 'Document preview')}.</p></div>`;
+}
+function openFile(name, row, keep) {
+  ui.open = name;
+  if (!keep) ui.row = row || null;
+  if (name === OUT) ui.tab = 'Employees';
+  $('#work').classList.add('show-files');
+  renderFiles();
+  $('.grid tr.sel')?.scrollIntoView({ block: 'nearest' });
+}
+
+// ---- Wiring ----------------------------------------------------------------
+document.addEventListener('click', (e) => {
+  const t = (s) => e.target.closest(s);
+  let el;
+  if ((el = t('[data-accent]'))) {
+    document.documentElement.dataset.accent = el.dataset.accent;
+    document.querySelectorAll('.sw').forEach((b) => b.classList.toggle('on', b === el));
+  } else if ((el = t('[data-state]'))) { ui.resumeAt = 0; setState(el.dataset.state); }
+  else if (t('[data-pick]')) pickSample();
+  else if ((el = t('[data-seg]'))) el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
+  else if (t('#start')) { ui.resumeAt = 0; setState('working'); ui.run++; $('#thread').innerHTML = ''; add(`<div class="me">${esc(GOAL)}</div>`); play(ui.run, { instant: 0 }); document.querySelectorAll('.proto [data-state]').forEach((b) => b.classList.toggle('on', b.dataset.state === 'working')); }
+  else if ((el = t('[data-answer]'))) answer(el.textContent);
+  else if ((el = t('[data-open]'))) openFile(el.dataset.open, el.dataset.row, el.hasAttribute('data-keep'));
+  else if ((el = t('tr[data-row]'))) { ui.row = el.dataset.row; renderFiles(); }
+  else if ((el = t('[data-tab]'))) { ui.tab = el.dataset.tab; renderFiles(); }
+  else if (t('[data-back]')) { ui.open = null; renderFiles(); }
+  else if (t('[data-files]')) $('#work').classList.toggle('show-files');
+  else if ((el = t('.grp-head'))) { const open = el.parentNode.classList.toggle('open'); el.setAttribute('aria-expanded', open); }
+  else if (t('[data-pause]')) { ui.status = ui.status === 'Paused' ? 'Working' : 'Paused'; renderHead(); }
+  else if (t('[data-stop]')) { ui.run++; clearInterval(timer); document.querySelector('.live')?.remove(); ui.status = 'Stopped'; renderHead(); add('<p class="say">Stopped. Everything read so far is saved.</p>'); }
+  else if (t('[data-retry]')) { e.target.closest('.card').remove(); ui.status = 'Working'; renderHead(); ui.resumeAt = 6; ui.run++; play(ui.run, { instant: 0 }); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.matches('tr[data-row]')) e.target.click();
+  if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'msg') { e.preventDefault(); $('#composer').requestSubmit(); }
+});
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'msg') { $('.send').disabled = !e.target.value.trim(); e.target.style.height = '34px'; e.target.style.height = Math.min(140, e.target.scrollHeight) + 'px'; }
+  if (e.target.id === 'goal') $('#start').disabled = !(ui.picked && e.target.value.trim());
+});
+document.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = $('#msg').value.trim();
+  if (!text) return;
+  $('#msg').value = ''; $('#msg').style.height = '34px'; $('.send').disabled = true;
+  if (ui.status === 'Needs your answer') return answer(text);
+  add(`<div class="me">${esc(text)}</div>`);
+  const run = ui.run;
+  setTimeout(() => {
+    if (run !== ui.run && ui.status !== 'Working') return;
+    add(`<p class="say">${ui.finished ? 'On it. I will update the workbook and tell you what changed.' : 'Noted. I will apply that from the next step on.'}</p>`);
+  }, 900);
+});
+
+document.querySelector('.sw').classList.add('on');
+setState(new URLSearchParams(location.search).get('state') || 'working');
+</script>
+</body>
+</html>

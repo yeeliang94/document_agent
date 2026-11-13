@@ -1,588 +1,135 @@
-import { configure, documentMapPage, sandboxOutput, sandboxStages, segment, settingsPage } from './sandbox.js?v=20261112b';
+// Draws the app and handles what the person does. State and helpers live in core.js; the screens in thread.js,
+// files.js and pages.js.
 
-const $ = (selector) => document.querySelector(selector);
-const esc = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+import {
+  $, api, attr, baseName, btn, download, duration, esc, fileUrl, icon, isActive, jobStatus, jobTitle, jobUrl,
+  modules, sandboxEngine, state, toast,
+} from './core.js'; // prettier-ignore
+import { backFile, closeFile, filesHtml, loadMap, openFile, proofHtml, turnPage } from './files.js';
+import { instructionsPage, logPage, settingsPage, setupPage, startBlocked } from './pages.js';
+import { composerHtml, headHtml, stagesHtml, threadHtml } from './thread.js';
+
+const RUN = `
+  <div id="notices"></div>
+  <div class="work" id="work">
+    <section class="chat">
+      <header class="chat-head" id="chat-head"></header>
+      <div class="stages" id="stages"></div>
+      <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-label="Conversation with the agent" aria-live="polite"></div></div>
+      <div class="composer" id="composer-wrap"></div>
+    </section>
+    <aside class="files" id="files" aria-label="Files"></aside>
+  </div>`;
+
+// --- Drawing ---------------------------------------------------------------
+
+// Redraw one region only when its content changed, so typing, scrolling and open previews are left alone.
+function paint(selector, html) {
+  const el = $(selector);
+  if (!el || el.__html === html) return false;
+  el.innerHTML = html;
+  el.__html = html;
+  return true;
+}
+
+function runItems() {
+  return state.jobs.map((j) => {
+    const status = j.id === state.job?.id ? state.job.status : j.status;
+    const dot = state.config?.statuses?.active?.includes(status) ? '<i></i>' : status === 'waiting' ? '<i class="ask"></i>' : '';
+    const on = j.id === state.job?.id && ['run', 'log'].includes(state.view);
+    const day = new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' });
+    return `<button class="item ${on ? 'on' : ''}" data-job="${esc(j.id)}"><span>${esc(jobTitle(j))}</span>${dot}<time>${day}</time></button>`;
+  });
+}
+
+function sideHtml() {
+  const link = (view, label) => `<button class="item ${state.view === view ? 'on' : ''}" data-view="${view}"><span>${label}</span></button>`;
+  return `
+    <div class="brand">Document Intelligence</div>
+    ${btn('new', 'New run', 'quiet add', false, 'plus')}
+    <nav class="runs" aria-label="Recent runs"><h3>Recent</h3>${runItems().join('') || '<p class="empty item">No runs yet</p>'}</nav>
+    <div class="foot">${link('instructions', 'Instructions')}${link('settings', 'Settings')}</div>`;
+}
+
+// Narrow screens swap the sidebar for one menu.
+function topnavHtml() {
+  const here = state.view === 'run' ? (state.job ? 'job:' + state.job.id : 'new') : state.view;
+  const option = (value, label) => `<option value="${esc(value)}" ${attr('selected', value === here)}>${esc(label)}</option>`;
+  const runs = state.jobs.map((j) =>
+    option('job:' + j.id, `${jobTitle(j)}, ${new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}`),
   );
-const attr = (name, on) => (on ? name : '');
-
-const icons = {
-  folder: 'M3 6h6l2 2h10v12H3z',
-  file: 'M14 2H5v20h14V7z M14 2v6h5 M8 12h8 M8 16h6',
-  spark: 'M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z',
-  clock: 'M12 8v5l3 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
-  terminal: 'M4 7l5 5-5 5 M13 17h7',
-  sliders: 'M4 7h16 M4 17h16 M8 4v6 M16 14v6',
-  check: 'M5 12l4 4L19 6',
-  up: 'M12 19V5 M7 10l5-5 5 5',
-  down: 'M12 3v13 M7 11l5 5 5-5 M4 20h16',
-  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M19 12l2-1-1-3-2 .2-1.3-1.3.2-2-3-1-1 2h-1.8l-1-2-3 1 .2 2L6 7.2 4 7 3 10l2 1v2l-2 1 1 3 2-.2 1.3 1.3-.2 2 3 1 1-2h1.8l1 2 3-1-.2-2 1.3-1.3 2 .2 1-3-2-1z',
-  map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14 M15 6v14',
-};
-const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name] || icons.file}"/></svg>`;
-
-const monthParts = new Intl.DateTimeFormat('en', { year: 'numeric', month: '2-digit' }).formatToParts(new Date());
-const currentPeriod =
-  monthParts.find((p) => p.type === 'year').value + '-' + monthParts.find((p) => p.type === 'month').value;
-
-const PAGES = [
-  ['workspace', 'spark', 'Workspace'],
-  ['instructions', 'sliders', 'Instructions'],
-  ['history', 'clock', 'History'],
-  ['settings', 'gear', 'Settings'],
-  ['diagnostics', 'terminal', 'Diagnostics'],
-];
-const PAGE_TITLES = {
-  instructions: 'Instructions',
-  history: 'Run history',
-  settings: 'Settings',
-  map: 'Document map',
-  diagnostics: 'Diagnostics',
-};
-const FILTERS = [
-  ['all', 'All'],
-  ['model', 'Model'],
-  ['tool', 'Tools'],
-  ['warnings', 'Warnings'],
-];
-
-const state = {
-  drafts: {},
-  view: 'workspace',
-  module: 'payroll',
-  config: null,
-  job: null,
-  jobs: [],
-  events: [],
-  files: [],
-  template: null,
-  period: currentPeriod,
-  instructions: {},
-  contexts: {},
-  filter: 'all',
-  search: '',
-  busy: false,
-  polling: false,
-  loading: false,
-  connectionError: '',
-  notice: '',
-  token: sessionStorage.getItem('di-token') || '',
-  settings: null, // the Settings page values, options and connection, from /api/settings
-  settingsDraft: null,
-  deliverable: 'template', // a new sandbox run fills a template or builds to a format
-  settingsError: '',
-  documentMap: null,
-  mapError: '',
-  mapFilter: 'all',
-};
-
-// --- Derived state ---------------------------------------------------------
-
-const modules = () => state.config?.modules || [];
-const currentModule = () => modules().find((m) => m.id === state.module) || modules()[0];
-const jobStatus = () => state.job?.status || 'ready';
-// Status groups come from the server (/api/config) so the buttons always match what the API allows.
-const inGroup = (group, status = jobStatus()) => !!state.config?.statuses?.[group]?.includes(status);
-const isActive = () => inGroup('active');
-const isWarning = (event) => ['warn', 'error'].includes(String(event.level).toLowerCase());
-const runInstructions = () => state.job?.instructions || state.instructions[state.module] || '';
-const sandboxEngine = () => (state.job ? state.job.engine === 'sandbox' : state.settings?.values.engine === 'sandbox');
-
-const fmtTime = (t) =>
-  t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
-const bytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil((n || 0) / 1024)} KB`);
-const btn = (action, label, kind = '', disabled = false) =>
-  `<button class="btn ${kind}" data-action="${action}" ${attr('disabled', disabled)}>${esc(label)}</button>`;
-
-// --- Network ---------------------------------------------------------------
-
-function toast(message) {
-  $('#toast').textContent = message;
-  $('#toast').classList.add('visible');
-  clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 6000);
+  return `<div class="brand">Document Intelligence</div>
+    <select aria-label="Go to" data-nav>${option('new', 'New run')}${runs.join('')}${state.job ? option('log', 'Technical log') : ''}${option('instructions', 'Instructions')}${option('settings', 'Settings')}</select>`;
 }
 
-async function api(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
-  let res = await fetch(path, { ...options, headers });
-  if (res.status === 401) {
-    const token = window.prompt('Application access token');
-    if (token) {
-      state.token = token;
-      sessionStorage.setItem('di-token', token);
-      headers.set('Authorization', `Bearer ${token}`);
-      res = await fetch(path, { ...options, headers });
-    }
-  }
-  if (!res.ok) {
-    let detail;
-    try {
-      detail = (await res.json()).detail;
-    } catch {}
-    throw new Error(typeof detail === 'string' ? detail : `Request failed (${res.status})`);
-  }
-  return res.status === 204 ? null : res.json();
-}
-
-async function download(path, name) {
-  const headers = {};
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  const res = await fetch(path, { headers });
-  if (!res.ok) throw new Error(`Download failed (${res.status})`);
-  const url = URL.createObjectURL(await res.blob());
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
-}
-
-// --- Views -----------------------------------------------------------------
-
-function statusHtml(status) {
-  const tone = ['waiting', 'failed'].includes(status) ? 'attention' : status === 'running' ? 'running' : '';
-  return `<span class="status ${tone}"><i class="dot"></i>${esc(status)}</span>`;
-}
-
-function nav() {
-  const options = modules()
-    .map(
-      (m) => `
-        <option value="${esc(m.id)}" ${attr('selected', m.id === state.module)}>
-          ${esc(m.label)}${m.id === 'ap' ? ' · preview' : ''}
-        </option>`,
-    )
-    .join('');
-  const select = `<select class="module-select" aria-label="Module" data-module>${options}</select>`;
-  const pageButtons = (mobile) =>
-    PAGES.map(
-      ([id, iconName, label]) => `
-        <button class="${state.view === id || (id === 'workspace' && state.view === 'map') ? 'active' : ''}" data-view="${id}" ${mobile ? `aria-label="${label}"` : ''}>
-          ${icon(iconName)}${label}
-        </button>`,
-    ).join('');
-  return `
-    <aside class="sidebar">
-      <div class="brand">
-        <span class="brandmark"><i></i><i></i><i></i><i></i></span>
-        <div>Document<small>Intelligence</small></div>
-      </div>
-      <div class="module-block"><span class="section-label">Module</span>${select}</div>
-      <nav class="nav" aria-label="Main">${pageButtons(false)}</nav>
-      <div class="user">
-        <span class="avatar">DI</span>
-        <div>Shared agent runtime<small>${esc(state.config?.model || 'Connecting…')}</small></div>
-      </div>
-    </aside>
-    <div class="mobile-navigation">${select}${pageButtons(true)}</div>`;
-}
-
-function startButton() {
-  const label = state.busy ? 'Please wait…' : state.job || state.config?.configured ? 'Run agent' : 'Upload files';
-  const notReady = state.job
-    ? jobStatus() !== 'ready' || !state.config?.configured
-    : !state.files.length || !state.template || !state.period;
-  return btn('start', label, 'primary', state.busy || (state.module === 'ap' && !sandboxEngine()) || notReady);
-}
-
-function inputs() {
-  const locked = !!state.job;
-  const manifest = state.job?.files || [];
-  const files = locked
-    ? manifest.filter((f) => f.role !== 'template')
-    : state.files.map((f) => ({ path: f.webkitRelativePath || f.name, size: f.size }));
-  const format = locked
-    ? /\.json$/i.test(manifest.find((f) => f.role === 'template')?.path || '')
-    : sandboxEngine() && state.deliverable === 'format';
-  const templateName =
-    state.template?.name || manifest.find((f) => f.role === 'template')?.path || (format ? 'Choose format' : 'Choose workbook');
-  const fileTree = files.length
-    ? `<div class="filetree">${files
-        .map(
-          (f) => `
-            <div class="tree-row" title="${esc(f.path)}">
-              ${icon('file')}<span>${esc(f.path)}</span><span class="number">${bytes(f.size)}</span>
-            </div>`,
-        )
-        .join('')}</div>`
-    : '';
-  return `
-    <section class="panel">
-      <div class="panel-head">
-        <h2>${icon('folder')} Inputs</h2>
-        ${locked ? btn('new', 'New run', 'small', state.busy) : ''}
-      </div>
-      <div class="panel-body">
-        <div class="field">
-          <label for="period">Payroll period</label>
-          <input id="period" type="month" value="${esc(state.job?.period || state.period)}" ${attr('disabled', locked)}>
-        </div>
-        <div class="field">
-          <label>Source files <small>${files.length}</small></label>
-          <button class="dropzone" data-action="folder" ${attr('disabled', locked)}>
-            ${icon('folder')}<strong>${state.files.length ? 'Change folder' : 'Choose folder'}</strong>
-          </button>
-          <div class="file-options">${btn('files', 'Choose files / ZIP', 'small ghost', locked)}</div>
-          ${fileTree}
-        </div>
-        <div class="field">
-          <label>${sandboxEngine() ? 'Deliverable' : 'Output template'}</label>
-          ${
-            sandboxEngine() && !locked
-              ? `<div class="segmented deliverable-choice">${segment('deliverable', 'template', 'Template', !format)}${segment('deliverable', 'format', 'Format', format)}</div>`
-              : ''
-          }
-          <button class="template-file" data-action="template" ${attr('disabled', locked)}>
-            <span class="file-icon">${format ? 'JSON' : 'XLSX'}</span><strong>${esc(templateName)}</strong>
-          </button>
-        </div>
-        <div class="field">
-          <label for="run-instructions">${sandboxEngine() ? 'Goal' : 'Run instructions'}</label>
-          <textarea id="run-instructions" ${attr('disabled', locked)}>${esc(runInstructions())}</textarea>
-        </div>
-        <button class="context-link" data-view="instructions">${icon('sliders')} Module context</button>
-      </div>
-      <div class="inputs-footer">${startButton()}</div>
-    </section>`;
-}
-
-function eventHtml(event) {
-  return `
-    <div class="event ${isWarning(event) ? 'warn' : ''}">
-      <div class="event-icon">${icon(event.type === 'model' ? 'spark' : 'check')}</div>
-      <div>
-        <div class="event-heading">
-          <button class="event-title" data-event="${event.seq}">${esc(event.message || event.name)}</button>
-          <time>${fmtTime(event.timestamp)}</time>
-        </div>
-      </div>
-    </div>`;
-}
-
-// Hide a tool's "started" event once its result has arrived.
-function activityEvents() {
-  const finished = new Set(
-    state.events.filter((e) => e.type === 'tool' && e.status !== 'running').map((e) => e.span_id),
-  );
-  return state.events.filter((e) => !(e.type === 'tool' && e.status === 'running' && finished.has(e.span_id)));
-}
-
-function activityControls(status) {
-  return [
-    inGroup('pausable', status) ? btn('pause', 'Pause', 'small', state.busy) : '',
-    inGroup('startable', status) && status !== 'ready'
-      ? btn('resume', status === 'partial' ? 'Continue' : 'Resume', 'small', state.busy)
-      : '',
-    isActive() || ['paused', 'waiting'].includes(status) ? btn('cancel', 'Cancel', 'small', state.busy) : '',
-  ].join('');
-}
-
-function questionForm(question) {
-  return `
-    <form id="answer-form" class="question-box">
-      <strong>${esc(question.text)}</strong>
-      <div class="field">
-        <label for="answer" class="sr-only">Your answer</label>
-        <textarea id="answer" required>${esc(state.drafts[state.job.id + ':answer'] || '')}</textarea>
-      </div>
-      <button class="btn primary small" type="submit">Send answer</button>
-      ${sandboxEngine() ? `<p class="question-note">The sandbox is held for ${esc(state.settings?.values.question_wait_minutes ?? 10)} minutes. After that the job waits here and resumes when you answer.</p>` : ''}
-    </form>`;
-}
-
-
-function messageForm(status) {
-  const disabled = attr('disabled', !inGroup('accepts_messages', status));
-  return `
-    <div class="activity-footer">
-      <form class="steer" id="message-form">
-        <input id="message" value="${esc(state.drafts[state.job.id + ':message'] || '')}" aria-label="Message the agent"
-          placeholder="Message the agent…" required ${disabled}>
-        <button type="submit" aria-label="Send" ${disabled}>${icon('up')}</button>
-      </form>
-    </div>`;
-}
-
-function activity() {
-  const status = jobStatus();
-  const question = status === 'waiting' ? state.job?.question : null;
-  const body = state.events.length
-    ? activityEvents().map(eventHtml).join('')
-    : `<div class="quiet-empty"><div class="agent-logo">${icon('spark')}</div><p>No activity yet.</p></div>`;
-  return `
-    <section class="panel activity">
-      <div class="panel-head">
-        <h2>${icon('spark')} Activity</h2>
-        <div class="controls">${activityControls(status)}</div>
-      </div>
-      <div class="stream-bar">
-        <strong>${esc(state.job ? state.job.id : 'Ready')}</strong>
-        <span class="live">${isActive() ? 'LIVE UPDATES' : ''}</span>
-      </div>
-      ${sandboxEngine() && isActive() ? sandboxStages() : ''}
-      ${state.job?.work_plan ? `<div class="work-focus" aria-label="Current work"><strong>${esc(state.job.work_plan.focus)}</strong>${state.job.progress_checkpoint?.message ? `<p>${esc(state.job.progress_checkpoint.message)}</p>` : ''}${state.job.work_plan.items.filter(item => item.status === 'blocked').map(item => `<p class="error-message">${esc(item.blocker || item.objective)}</p>`).join('')}</div>` : ''}
-      <div class="activity-body" id="activity-scroll" role="log" aria-label="Agent activity" aria-live="polite">
-        ${body}${question ? questionForm(question) : ''}
-      </div>
-      ${state.job ? messageForm(status) : ''}
-    </section>`;
-}
-
-const detailRow = ([label, value]) =>
-  `<div class="session-row"><span>${label}</span><strong>${esc(value)}</strong></div>`;
-
-// Coverage and context figures belong with the trace, not on the task screen.
-function harnessDetails(job) {
-  if (!job?.coverage) return '';
-  return [
-    ['Accounting version', job.coverage.accounting_version ?? 1],
-    ['Discovered regions', Object.values(job.coverage.regions || {}).reduce((total, count) => total + count, 0)],
-    ['Context estimate method', job.context_usage?.method ?? '—'],
-    ['Fixed context cost', job.context_usage?.fixed_tokens ?? '—'],
-    ['Source observations', job.coverage.source_observations],
-    ['Rows included', job.coverage.records.included],
-    ['Open coverage items', job.coverage.open_items],
-    ['Context estimate', job.context_usage?.estimated_tokens ?? '—'],
-    ['Context input budget', job.context_usage?.budget ?? '—'],
-  ]
-    .map(detailRow)
-    .join('');
-}
-
-// Zero rows to resolve only means something once records have been registered.
-function rowsToResolve(coverage) {
-  if (!coverage) return '—';
-  const records = coverage.records;
-  const total = Object.values(records).reduce((sum, n) => sum + n, 0);
-  return total ? records.pending + records.unresolved : 'None registered yet';
-}
-
-function output() {
-  const job = state.job;
-  const usage = job?.usage || {};
-  const artifacts = job?.artifacts?.length
-    ? job.artifacts
-        .map(
-          (a, i) =>
-            `<button class="btn artifact-download" data-artifact="${i}">${icon('down')}${esc(a.name)}</button>` +
-            (a.status === 'draft'
-              ? '<div class="artifact-badge draft">Draft — not validated. It may still be an unchanged template copy.</div>'
-              : a.status === 'validated'
-                ? '<div class="artifact-badge validated">Validated against sources</div>'
-                : ''),
-        )
-        .join('')
-    : '<div class="artifact-meta">No output yet.</div>';
-  if (sandboxEngine()) return sandboxOutput(job);
-  const details = [
-    ['Model', state.config?.model || '—'],
-    ['Sources', job ? job.files.filter((f) => f.role !== 'template').length : state.files.length],
-    ['Model calls', usage.requests ?? '—'],
-    ['Input tokens', usage.input_tokens ?? '—'],
-    ['Output tokens', usage.output_tokens ?? '—'],
-    ['Rows to resolve', rowsToResolve(job?.coverage)],
-    ['Open items', job?.coverage ? job.coverage.open_items : '—'],
-  ]
-    .map(detailRow)
-    .join('');
-  return `
-    <aside class="right-stack">
-      <section class="panel">
-        <div class="panel-head"><h2>${icon('file')} Output</h2></div>
-        <div class="panel-body">
-          ${job?.error ? `<p class="error-message">${esc(job.error)}</p>` : ''}
-          ${job?.summary ? `<p class="output-summary">${esc(job.summary)}</p>` : ''}
-          ${artifacts}
-        </div>
-      </section>
-      <section class="panel session">
-        <div class="panel-head"><h2>${icon('terminal')} Run details</h2></div>
-        <div class="panel-body">${details}${btn('diagnostics', 'Diagnostics')}</div>
-      </section>
-    </aside>`;
-}
-
-// Lower-cased JSON of each event, built once, so searching thousands of events stays quick.
-const searchText = new WeakMap();
-function matchesSearch(event) {
-  if (!state.search) return true;
-  if (!searchText.has(event)) searchText.set(event, JSON.stringify(event).toLowerCase());
-  return searchText.get(event).includes(state.search.toLowerCase());
-}
-
-function matchesFilter(event) {
-  if (state.filter === 'warnings') return isWarning(event);
-  return state.filter === 'all' || event.type === state.filter;
-}
-
-function diagnostics() {
-  const list = state.events.filter((e) => matchesFilter(e) && matchesSearch(e));
-  const filterButtons = FILTERS.map(
-    ([id, label]) => `<button data-filter="${id}" class="${state.filter === id ? 'active' : ''}">${label}</button>`,
-  ).join('');
-  const rows = list
-    .map(
-      (e) => `
-        <tr tabindex="0" role="button" data-event="${e.seq}">
-          <td class="mono">${fmtTime(e.timestamp)}</td>
-          <td class="trace-name">${esc(e.name)}<div class="trace-message">${esc(e.message)}</div></td>
-          <td>${esc(e.level || 'info')}</td>
-          <td>${e.duration_ms == null ? '—' : esc(e.duration_ms) + ' ms'}</td>
-        </tr>`,
-    )
-    .join('');
-  return `
-    <section class="panel page-panel">
-      <div class="panel-head">
-        <h2>${icon('terminal')} Execution trace</h2>
-        ${btn('export', 'Export JSONL', 'small', !state.job)}
-      </div>
-      <div class="diagnostic-toolbar">
-        <div class="filter-buttons">${filterButtons}</div>
-        <input type="search" id="log-search" aria-label="Search diagnostics" placeholder="Search events…"
-          value="${esc(state.search)}">
-      </div>
-      ${harnessDetails(state.job)}
-      <div class="preview-table-wrap">
-        <table class="trace-table">
-          <thead><tr><th>Time</th><th>Operation</th><th>Level</th><th>Duration</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-        ${list.length ? '' : '<div class="empty-state">No events.</div>'}
-      </div>
-    </section>`;
-}
-
-function instructions() {
-  const context = state.contexts[state.module] ?? currentModule()?.context ?? '';
-  return `
-    <div class="page-panel instructions-grid">
-      <section class="panel instruction-card">
-        <h3>Module context</h3>
-        <div class="field">
-          <label class="sr-only" for="module-context">Reusable module context</label>
-          <textarea id="module-context">${esc(context)}</textarea>
-        </div>
-        <div class="instruction-foot">${btn('save-context', 'Save', 'primary', state.busy)}</div>
-      </section>
-      <section class="panel instruction-card">
-        <h3>This run</h3>
-        <div class="field">
-          <label class="sr-only" for="run-instructions">Run instructions</label>
-          <textarea id="run-instructions" ${attr('disabled', !!state.job)}>${esc(runInstructions())}</textarea>
-        </div>
-        <div class="instruction-foot">${btn('workspace', 'Done')}</div>
-      </section>
-    </div>`;
-}
-
-function history() {
-  const rows = state.jobs.length
-    ? state.jobs
-        .map(
-          (j) => `
-            <div class="history-row">
-              <div>
-                ${esc(j.period || '')} · ${esc(j.module)}
-                <small>${esc(j.id)} · ${esc(new Date(j.created_at).toLocaleString())}</small>
-              </div>
-              ${statusHtml(j.status)}
-              <button class="btn small" data-job="${esc(j.id)}">Open</button>
-            </div>`,
-        )
-        .join('')
-    : '<div class="empty-state">No runs yet.</div>';
-  return `
-    <section class="panel page-panel">
-      <div class="panel-head"><h2>${icon('clock')} Runs</h2>${btn('refresh-history', 'Refresh', 'small')}</div>
-      ${rows}
-    </section>`;
-}
-
-function notices() {
+function noticesHtml() {
   return [
     state.config && !state.config.configured
-      ? `<div class="notice">Set OPENAI_API_KEY in .env, then restart. ${btn('refresh-config', 'Refresh', 'small')}</div>`
+      ? `<div class="notice"><span>Add OPENAI_API_KEY to the .env file, then restart the app.</span>${btn('refresh-config', 'Check again', 'text')}</div>`
       : '',
-    state.connectionError ? `<div class="notice error-message">${esc(state.connectionError)}</div>` : '',
-    state.notice ? `<div class="notice error-message">${esc(state.notice)}</div>` : '',
-    state.module === 'ap' && !sandboxEngine() ? '<div class="notice">Accounts payable · coming soon</div>' : '',
+    state.connectionError ? `<div class="notice bad">${esc(state.connectionError)}</div>` : '',
+    state.notice ? `<div class="notice bad">${esc(state.notice)}</div>` : '',
+    !state.job && state.view === 'run' && state.module === 'ap' && !sandboxEngine()
+      ? `<div class="notice"><span>Accounts payable runs on the sandbox engine.</span><button class="btn text" data-view="settings">Open Settings</button></div>`
+      : '',
   ].join('');
 }
 
-function page() {
-  if (state.view === 'workspace') return `<div class="workspace-grid">${inputs()}${activity()}${output()}</div>`;
-  if (state.view === 'instructions') return instructions();
-  if (state.view === 'diagnostics') return diagnostics();
-  if (state.view === 'settings') return settingsPage();
-  if (state.view === 'map') return documentMapPage();
-  return history();
+function tick() {
+  for (const el of document.querySelectorAll('[data-since]')) {
+    const since = new Date(el.dataset.since).getTime();
+    if (since) el.textContent = duration(Date.now() - since);
+  }
 }
 
-function pageTitle() {
-  if (state.view !== 'workspace') return PAGE_TITLES[state.view];
-  return state.module === 'payroll' ? 'Monthly payroll ingestion' : 'Accounts payable';
+function syncComposer() {
+  const box = $('#msg');
+  if (!box) return;
+  const draft = state.drafts[state.job.id] || '';
+  if (box.value !== draft) box.value = draft;
+  box.style.height = '34px';
+  box.style.height = Math.min(140, box.scrollHeight) + 'px';
+  $('.send').disabled = box.disabled || !draft.trim();
 }
 
-// Re-render the whole app, keeping focus, caret position and the activity scroll position.
 function render() {
   const focused = document.activeElement?.id;
   const selection = focused ? document.activeElement.selectionStart : null;
-  const scroller = $('#activity-scroll');
-  const scroll = scroller?.scrollTop;
-  const nearBottom = !scroller || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
+  paint('#side', sideHtml());
+  paint('#topnav', topnavHtml());
+  document.title = `${state.job && state.view === 'run' ? jobTitle(state.job) + ' · ' : ''}Document Intelligence`;
 
-  $('#app').innerHTML = `
-    <div class="shell">
-      ${nav()}
-      <main class="main">
-        <header class="topbar">
-          <div class="crumb">Document Intelligence <span>/</span><b>${esc(currentModule()?.label)}</b></div>
-          <div class="mobile-brand">Document Intelligence</div>
-          <div class="topmeta">
-            <span>${esc(state.config?.model || '')}</span>
-            ${btn('connection', 'Test OpenAI', 'small', state.busy)}
-          </div>
-        </header>
-        <div class="content">
-          ${notices()}
-          <div class="heading">
-            <h1>${esc(pageTitle())}</h1>
-            <div class="heading-right">${
-              state.view === 'workspace' || state.view === 'map'
-                ? statusHtml(jobStatus())
-                : state.view === 'settings'
-                  ? btn('save-settings', 'Save', 'primary', state.busy || !state.settingsDraft)
-                  : ''
-            }</div>
-          </div>
-          ${page()}
-        </div>
-      </main>
-    </div>`;
+  if (state.view === 'run' && state.job) {
+    paint('#main', RUN);
+    $('#work').className = `work ${state.open ? 'viewing' : ''} ${state.showFiles ? 'show-files' : ''}`;
+    paint('#notices', noticesHtml());
+    paint('#chat-head', headHtml());
+    paint('#stages', stagesHtml());
+    const box = $('#scroll');
+    const first = box.__job !== state.job.id;
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    if (paint('#thread', threadHtml()) && (first || nearBottom)) box.scrollTop = box.scrollHeight;
+    box.__job = state.job.id;
+    state.seen = state.events.reduce((n, e) => Math.max(n, e.seq), state.seen);
+    paint('#composer-wrap', composerHtml());
+    syncComposer();
+    paint('#files', filesHtml());
+    tick();
+  } else {
+    const body = { run: setupPage, instructions: instructionsPage, settings: settingsPage, log: logPage }[state.view]();
+    paint('#main', noticesHtml() + body);
+  }
 
   const el = focused && $('#' + focused);
-  if (el) {
+  if (el && el !== document.activeElement) {
     el.focus();
-    if (typeof selection === 'number' && ['textarea', 'search', 'text'].includes(el.type)) {
-      el.setSelectionRange(selection, selection);
-    }
+    if (typeof selection === 'number' && ['textarea', 'search', 'text'].includes(el.type)) el.setSelectionRange(selection, selection);
   }
-  const newScroller = $('#activity-scroll');
-  if (newScroller) newScroller.scrollTop = nearBottom ? newScroller.scrollHeight : scroll || 0;
 }
 
 function detail(event) {
   $('#details').innerHTML = `
-    <div class="dialog-head">
-      <h2>${esc(event.name || 'Event')}</h2>
-      <button data-close aria-label="Close">×</button>
-    </div>
+    <div class="dialog-head"><h2>${esc(event.name || 'Event')}</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
     <pre>${esc(JSON.stringify(event, null, 2))}</pre>`;
   $('#details').showModal();
 }
@@ -604,27 +151,30 @@ async function refreshConfig() {
   for (const m of modules()) if (state.contexts[m.id] === undefined) state.contexts[m.id] = m.context || '';
 }
 
+function leaveRun() {
+  closeFile();
+  Object.assign(state, { events: [], seen: 0, map: null, mapKey: '', mapFilter: 'all', showFiles: false, search: '', filter: 'all' });
+  state.toggled.clear();
+}
+
 async function loadJob(id) {
   state.loading = true;
   try {
     const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
-    state.job = job;
-    state.module = job.module;
-    state.events = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=0`);
-    state.view = 'workspace';
+    const events = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=0`);
+    leaveRun();
+    Object.assign(state, { job, events, module: job.module, view: 'run', notice: '' });
+    state.seen = events.reduce((n, e) => Math.max(n, e.seq), 0); // an opened run appears whole, without animating in
+    await loadMap();
   } finally {
     state.loading = false;
   }
   render();
 }
 
-function resetRun() {
-  state.job = null;
-  state.documentMap = null;
-  if (state.view === 'map') state.view = 'workspace';
-  state.events = [];
-  state.files = [];
-  state.template = null;
+function newRun() {
+  leaveRun();
+  Object.assign(state, { job: null, files: [], template: null, view: 'run', notice: '' });
 }
 
 async function uploadAndStart() {
@@ -636,19 +186,21 @@ async function uploadAndStart() {
     form.append('context', state.contexts[state.module] || '');
     for (const f of state.files) form.append('files', f, f.webkitRelativePath || f.name);
     form.append('template', state.template, state.template.name);
-    state.job = await api('/api/jobs', { method: 'POST', body: form });
-    state.events = [];
+    const job = await api('/api/jobs', { method: 'POST', body: form });
+    leaveRun();
+    Object.assign(state, { job, files: [], template: null });
   }
-  if (state.config?.configured) await api(`/api/jobs/${state.job.id}/start`, { method: 'POST' });
+  if (state.config?.configured) await api(jobUrl('/start'), { method: 'POST' });
   else toast('Files uploaded. Add OPENAI_API_KEY to .env and restart to run.');
-  state.job = await api(`/api/jobs/${state.job.id}`);
+  state.job = await api(jobUrl());
   state.jobs = await api('/api/jobs');
 }
 
 // Actions that only change the screen; they run instantly.
 const localActions = {
-  workspace: () => (state.view = 'workspace'),
-  diagnostics: () => (state.view = 'diagnostics'),
+  new: newRun,
+  run: () => (state.view = 'run'),
+  log: () => (state.view = 'log'),
   folder: () => $('#folder-picker').click(),
   files: () => $('#files-picker').click(),
   template: () => {
@@ -656,17 +208,19 @@ const localActions = {
     $('#template-picker').accept = sandboxEngine() && state.deliverable === 'format' ? '.json' : '.xlsx';
     $('#template-picker').click();
   },
-  new: resetRun,
+  'toggle-files': () => (state.showFiles = !state.showFiles),
+  'close-file': closeFile,
 };
+localActions['back-file'] = () => backFile(render);
 
-// Actions that call the server; the page shows "busy" while they run.
+// Actions that call the server; buttons are held while they run.
 const serverActions = {
   'refresh-config': refreshConfig,
   connection: async () => {
-    detail({ name: 'OpenAI connection', ...(await api('/api/connection-check', { method: 'POST' })) });
+    const result = await api('/api/connection-check', { method: 'POST' });
+    toast(`Connected to ${result.model}.`);
     await refreshConfig();
   },
-  'refresh-history': async () => (state.jobs = await api('/api/jobs')),
   'save-settings': async () => {
     const draft = { ...state.settingsDraft };
     for (const [name, option] of Object.entries(state.settings.options)) {
@@ -681,15 +235,15 @@ const serverActions = {
       method: 'PUT',
       body: JSON.stringify({ context: state.contexts[state.module] || '' }),
     });
-    toast('Module context saved.');
+    toast('Instructions saved.');
   },
   start: uploadAndStart,
-  export: () => download(`/api/jobs/${state.job.id}/logs`, `${state.job.id}.jsonl`),
+  export: () => download(jobUrl('/logs'), `${state.job.id}.jsonl`),
 };
 for (const name of ['pause', 'resume', 'cancel']) {
   serverActions[name] = async () => {
-    await api(`/api/jobs/${state.job.id}/${name}`, { method: 'POST' });
-    state.job = await api(`/api/jobs/${state.job.id}`);
+    await api(jobUrl('/' + name), { method: 'POST' });
+    await refreshJob();
   };
 }
 
@@ -706,7 +260,6 @@ async function action(name) {
     await serverActions[name]();
   } catch (e) {
     state.notice = e.message;
-    toast(e.message);
   } finally {
     state.busy = false;
     render();
@@ -716,108 +269,129 @@ async function action(name) {
 async function openView(view) {
   state.view = view;
   state.notice = '';
-  try {
-    if (view === 'history') state.jobs = await api('/api/jobs');
-    if (view === 'settings') await refreshSettings();
-    if (view === 'map' && state.job) {
-      state.documentMap = null;
-      state.mapError = '';
-      state.mapFilter = 'all';
-      render();
-      try {
-        state.documentMap = await api(`/api/jobs/${state.job.id}/document-map`);
-      } catch (e) {
-        state.mapError = `The document map could not be loaded: ${e.message}`;
-      }
-    }
-  } catch (e) {
-    toast(e.message);
+  render();
+  if (view === 'settings') {
+    await refreshSettings();
+    render();
   }
-  render();
 }
 
-async function downloadArtifact(index) {
-  const artifact = state.job.artifacts[index];
-  await download(`/api/jobs/${state.job.id}/artifacts/${encodeURIComponent(artifact.name)}`, artifact.name);
-}
-
-async function sendText(form) {
-  const input = form.querySelector('textarea,input');
-  const text = input.value.trim();
+async function sendText() {
+  const text = (state.drafts[state.job.id] || '').trim();
   if (!text) return;
-  const kind = form.id === 'answer-form' ? 'answer' : 'message';
-  await api(`/api/jobs/${state.job.id}/${kind}`, { method: 'POST', body: JSON.stringify({ [kind]: text }) });
-  input.value = '';
-  state.drafts[state.job.id + ':' + kind] = '';
-  state.job = await api(`/api/jobs/${state.job.id}`);
-  if (kind === 'message') toast('Instruction sent.');
-  render();
+  const kind = jobStatus() === 'waiting' && state.job.question ? 'answer' : 'message';
+  state.drafts[state.job.id] = '';
+  syncComposer();
+  try {
+    await api(jobUrl('/' + kind), { method: 'POST', body: JSON.stringify({ [kind]: text }) });
+    await refreshJob();
+  } catch (e) {
+    state.drafts[state.job.id] = text; // keep what they typed
+    throw e;
+  } finally {
+    render();
+  }
 }
 
 // --- Event wiring ----------------------------------------------------------
 
 document.addEventListener('click', async (e) => {
   const target = (selector) => e.target.closest(selector);
+  let el;
   try {
     if (target('[data-close]')) $('#details').close();
-    else if (target('[data-action]')) await action(target('[data-action]').dataset.action);
-    else if (target('[data-view]')) await openView(target('[data-view]').dataset.view);
-    else if (target('[data-segment]')) {
-      const { segment: name, value } = target('[data-segment]').dataset;
+    else if ((el = target('[data-action]'))) await action(el.dataset.action);
+    else if ((el = target('[data-view]'))) await openView(el.dataset.view);
+    else if ((el = target('[data-job]'))) await loadJob(el.dataset.job);
+    else if ((el = target('[data-download]'))) await download(fileUrl('file', el.dataset.download), baseName(el.dataset.download));
+    else if ((el = target('[data-open]'))) {
+      const from = target('.proof') && state.preview;
+      const back = from ? { path: from.path, sheet: from.data?.sheet, row: state.row } : null;
+      await openFile(el.dataset.open, render, { back });
+    } else if ((el = target('[data-sheet]'))) await openFile(state.open, render, { sheet: el.dataset.sheet, back: state.preview?.back });
+    else if ((el = target('[data-page]'))) await turnPage(Number(el.dataset.page), render);
+    else if ((el = target('tr[data-row]'))) {
+      // Mark the row and fill in its sources in place: redrawing the sheet would lose the person's scroll position.
+      state.row = Number(el.dataset.row);
+      $('.grid tr.sel')?.classList.remove('sel');
+      el.classList.add('sel');
+      $('#proof').innerHTML = proofHtml();
+      $('#files').__html = filesHtml();
+    } else if ((el = target('[data-group]'))) {
+      const id = Number(el.dataset.group);
+      state.toggled.has(id) ? state.toggled.delete(id) : state.toggled.add(id);
+      render();
+    } else if ((el = target('[data-segment]'))) {
+      const { segment: name, value } = el.dataset;
       if (name === 'deliverable') {
         state.deliverable = value;
         state.template = null;
       } else state.settingsDraft[name] = value;
       render();
-    } else if (target('[data-toggle]')) {
-      const name = target('[data-toggle]').dataset.toggle;
-      state.settingsDraft[name] = !state.settingsDraft[name];
+    } else if ((el = target('[data-toggle]'))) {
+      state.settingsDraft[el.dataset.toggle] = !state.settingsDraft[el.dataset.toggle];
       render();
-    } else if (target('[data-step]')) {
-      const { step: name, delta } = target('[data-step]').dataset;
+    } else if ((el = target('[data-step]'))) {
+      const { step: name, delta } = el.dataset;
       const option = state.settings.options[name];
       state.settingsDraft[name] = Math.min(option.high, Math.max(option.low, state.settingsDraft[name] + Number(delta)));
       render();
-    } else if (target('[data-map-filter]')) {
-      state.mapFilter = target('[data-map-filter]').dataset.mapFilter;
+    } else if ((el = target('[data-map-filter]'))) {
+      state.mapFilter = el.dataset.mapFilter;
       render();
-    } else if (target('[data-filter]')) {
-      state.filter = target('[data-filter]').dataset.filter;
+    } else if ((el = target('[data-filter]'))) {
+      state.filter = el.dataset.filter;
       render();
-    } else if (target('[data-event]')) {
-      const item = state.events.find((x) => String(x.seq) === target('[data-event]').dataset.event);
+    } else if ((el = target('[data-event]'))) {
+      const item = state.events.find((x) => String(x.seq) === el.dataset.event);
       if (item) detail(item);
-    } else if (target('[data-job]')) await loadJob(target('[data-job]').dataset.job);
-    else if (target('[data-artifact]')) await downloadArtifact(Number(target('[data-artifact]').dataset.artifact));
+    }
   } catch (err) {
     toast(err.message);
   }
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.target.matches('tr[data-event]')) e.target.click();
+  if (e.key === 'Enter' && e.target.matches('tr[data-event], tr[data-row]')) e.target.click();
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.id === 'msg') {
+    e.preventDefault();
+    $('#composer').requestSubmit();
+  }
 });
 
 let searchTimer;
 document.addEventListener('input', (e) => {
   const { id, value } = e.target;
-  if (id === 'message' || id === 'answer') state.drafts[state.job?.id + ':' + id] = value;
+  if (id === 'msg') {
+    state.drafts[state.job.id] = value;
+    syncComposer();
+  }
   if (id === 'run-instructions') state.instructions[state.module] = value;
   if (id === 'module-context') state.contexts[state.module] = value;
-  if (id === 'period') state.period = value;
+  if (id === 'period') {
+    state.period = value;
+    $('[data-action="start"]').disabled = startBlocked();
+  }
   if (e.target.dataset.setting) state.settingsDraft[e.target.dataset.setting] = value;
   if (id === 'log-search') {
     state.search = value;
-    // Wait for a pause in typing before filtering the trace.
+    // Wait for a pause in typing before filtering the log.
     clearTimeout(searchTimer);
     searchTimer = setTimeout(render, 150);
   }
 });
 
-document.addEventListener('change', (e) => {
-  if (e.target.matches('[data-module]')) {
-    state.module = e.target.value;
-    resetRun();
+document.addEventListener('change', async (e) => {
+  if (e.target.matches('[data-module]')) state.module = e.target.value;
+  else if (e.target.matches('[data-nav]')) {
+    const value = e.target.value;
+    try {
+      if (value === 'new') newRun();
+      else if (value.startsWith('job:')) return await loadJob(value.slice(4));
+      else return await openView(value);
+    } catch (err) {
+      toast(err.message);
+    }
   } else if (e.target.id === 'folder-picker' || e.target.id === 'files-picker') {
     state.files = Array.from(e.target.files);
     e.target.value = '';
@@ -829,10 +403,10 @@ document.addEventListener('change', (e) => {
 });
 
 document.addEventListener('submit', async (e) => {
-  if (!['answer-form', 'message-form'].includes(e.target.id)) return;
+  if (e.target.id !== 'composer') return;
   e.preventDefault();
   try {
-    await sendText(e.target);
+    await sendText();
   } catch (err) {
     toast(err.message);
   }
@@ -842,15 +416,16 @@ document.addEventListener('submit', async (e) => {
 
 async function refreshJob() {
   const id = state.job.id;
-  const after = state.events.reduce((n, e) => Math.max(n, e.seq), 0);
+  const after = state.events.reduce((n, ev) => Math.max(n, ev.seq), 0);
   const [job, events] = await Promise.all([api(`/api/jobs/${id}`), api(`/api/jobs/${id}/events?after=${after}`)]);
   if (state.job?.id !== id) return;
-  const changed = JSON.stringify(job) !== JSON.stringify(state.job) || events.length > 0 || !!state.connectionError;
+  const statusChanged = job.status !== state.job.status;
   state.connectionError = '';
   state.job = job;
-  const seen = new Set(state.events.map((e) => e.seq));
-  state.events.push(...events.filter((e) => !seen.has(e.seq)));
-  if (changed) render();
+  const seen = new Set(state.events.map((ev) => ev.seq));
+  state.events.push(...events.filter((ev) => !seen.has(ev.seq)));
+  await loadMap();
+  if (statusChanged) state.jobs = await api('/api/jobs');
 }
 
 async function poll() {
@@ -859,19 +434,17 @@ async function poll() {
     try {
       await refreshJob();
     } catch (e) {
-      if (state.connectionError !== e.message) {
-        state.connectionError = e.message;
-        render();
-      }
+      state.connectionError = e.message;
     } finally {
       state.polling = false;
     }
+    render();
   }
   setTimeout(poll, isActive() ? 1500 : 8000);
 }
 
-configure({ state, esc, attr, btn, icon, detailRow });
 render();
+setInterval(tick, 1000);
 (async () => {
   try {
     await Promise.all([refreshConfig(), refreshSettings()]); // refreshSettings keeps its own error for its page
