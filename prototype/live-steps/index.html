@@ -1,0 +1,220 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: live sandbox steps in the run conversation. Open this file in a browser; no server needed. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live steps prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f5f6; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab; --line: #e7e7ea;
+    --accent: #2f6fdb; --accent-bg: #e8f0fd; --ok-bg: #e6f3e6; --ok-fg: #24592a;
+    --warn-bg: #fbf0dc; --warn-fg: #6b4206; --grey-bg: #ececee; --grey-fg: #55555c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; }
+
+  /* Prototype controls, not part of the design */
+  .proto { position: sticky; top: 0; z-index: 2; background: #18181b; color: #fff; padding: 8px 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+  .proto span { color: #a3a3ab; margin-right: 4px; }
+  .proto button { padding: 4px 12px; border-radius: 999px; background: #2a2a2e; }
+  .proto button[aria-pressed="true"] { background: #fff; color: #18181b; }
+  .proto .sep { width: 1px; height: 20px; background: #3a3a3f; margin: 0 4px; }
+
+  /* Run header */
+  .head { max-width: 720px; margin: 0 auto; padding: 24px 16px 8px; display: flex; align-items: center; gap: 12px; }
+  .head h1 { font-size: 22px; font-weight: 500; margin: 0; flex: 1; }
+  .pill { border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+  .pill.work { background: var(--accent-bg); color: var(--accent); }
+  .pill.ask { background: var(--warn-bg); color: var(--warn-fg); }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .btn { border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; font-size: 13px; }
+
+  .thread { max-width: 720px; margin: 0 auto; padding: 12px 16px 120px; display: flex; flex-direction: column; gap: 16px; }
+  .me { align-self: flex-end; max-width: 80%; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .say { max-width: 62ch; }
+
+  .grp-head { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 4px 0; color: var(--muted); }
+  .grp-head:hover { color: var(--text); }
+  .grp-head svg { width: 14px; height: 14px; transition: transform .2s; }
+  .grp.open .grp-head svg { transform: rotate(90deg); }
+  .grp-head time { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .grp-head .flagged { color: var(--warn-fg); }
+  .grp-body { display: none; margin: 4px 0 4px 6px; padding-left: 16px; border-left: 1px solid var(--line); flex-direction: column; gap: 4px; }
+  .grp.open .grp-body { display: flex; }
+
+  .step { display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 13px; min-width: 0; }
+  .step > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file { color: var(--text); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button.file:hover { color: var(--accent); }
+  .more { color: var(--faint); white-space: nowrap; }
+  .step.flag, .step.flag .more { color: var(--warn-fg); }
+  .step time { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+
+  .live { display: flex; align-items: baseline; gap: 8px; font-size: 13px; min-height: 24px; min-width: 0; }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; align-self: center; animation: pulse 1.4s ease-in-out infinite; }
+  .live b { font-weight: 400; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 40%, var(--text) 50%, var(--muted) 60%, var(--muted) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: sweep 1.8s linear infinite; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live time { color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+  .live .file { color: var(--muted); flex: 0 1 auto; min-width: 48px; }
+  .live b { flex: 0 1 auto; min-width: 0; }
+  .file { flex: 0 1 auto; min-width: 48px; }
+  .step > span:first-child { flex: 0 1 auto; min-width: 0; }
+  .grp-body .live { margin-top: 2px; }
+
+  .card { background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .card.ask { background: var(--warn-bg); }
+  .choices { display: flex; gap: 8px; flex-wrap: wrap; }
+  .choices button { border-radius: 999px; padding: 6px 14px; background: #fff; }
+  .choices button.primary { background: #18181b; color: #fff; }
+
+  .composer { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); background: var(--panel); border-radius: 12px; padding: 12px 16px; color: var(--faint); }
+
+  @media (max-width: 560px) { .live .file, .live .more { display: none; } }
+  .fresh { animation: rise .25s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @keyframes sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+</style>
+</head>
+<body>
+<div class="proto" role="toolbar" aria-label="Prototype controls">
+  <span>Version</span>
+  <button data-mode="today">Today</button>
+  <button data-mode="new">Proposed</button>
+  <div class="sep"></div>
+  <span>State</span>
+  <button data-state="live">Working</button>
+  <button data-state="unnamed">Script with no description</button>
+  <button data-state="error">Script hit an error</button>
+  <button data-state="ask">Question</button>
+  <button data-state="done">Finished</button>
+  <div class="sep"></div>
+  <button data-play>Play a run</button>
+</div>
+
+<header class="head">
+  <h1>Nov 2026 payroll</h1>
+  <span class="pill work" id="status">Working</span>
+  <button class="btn" id="pause">Pause</button>
+</header>
+<main class="thread" id="thread"></main>
+<div class="composer">Message the agent</div>
+
+<script>
+const CHEV = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>';
+const ASK = 'fill in the central depository sheet for this client using the inputs from the folder, check the payroll input excel from the client, as well as check each input files to validate their accuracy in the input file';
+
+// Finished scripts, each described in the agent's own words, with the files it opened.
+const STEPS = [
+  { text: 'Unpacked the client folder', files: [], secs: 4 },
+  { text: 'Listed every file in the packet with its sheets and size', files: [], secs: 9 },
+  { text: 'Read the template and its lookup tabs', files: ['Central_Depository_Template.xlsx'], secs: 12 },
+  { text: 'Profiled the payroll input sheet', files: ['Payroll_Input_Nov2026.xlsx'], secs: 18 },
+  { text: 'Read the new joiner forms', files: ['Joiner_TanWeiMing.pdf', 'Joiner_NurAisyah.pdf', 'Joiner_RajKumar.pdf'], secs: 21 },
+  { text: 'Checked allowances against the approved claims', files: ['Allowance_Claims_Nov.xlsx', 'Payroll_Input_Nov2026.xlsx'], secs: 34 },
+];
+const NOW = { text: 'Matching each employee in the payroll input to the bank file', files: ['Payroll_Input_Nov2026.xlsx', 'Bank_Details_Nov.csv'], secs: 47 };
+const UNNAMED = { text: '', files: ['Resignation_Letters.zip'], secs: 26 };
+const ERROR_STEP = { text: 'Script stopped on an error; the agent is trying again', files: ['Bank_Details_Nov.csv'], secs: 3, flag: true };
+
+let mode = 'new', view = 'live', timer = null, play = null, clock = 0;
+
+const fmt = (s) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const files = (list, max = 2) => list.slice(0, max).map((f) => `<button class="file" title="${esc(f)}">${esc(f)}</button>`).join('')
+  + (list.length > max ? `<span class="more">and ${list.length - max} more</span>` : '');
+
+function stepHtml(s, fresh) {
+  return `<div class="step ${s.flag ? 'flag' : ''} ${fresh ? 'fresh' : ''}"><span>${esc(s.text)}</span>${files(s.files)}${s.secs === undefined ? '' : `<time>${fmt(s.secs)}</time>`}</div>`;
+}
+
+// The live line. Falls back to the file being read, then to a plain line, when the script has no description.
+function liveHtml(cur) {
+  const text = cur.text || (cur.files.length ? 'Reading' : 'Running code in the sandbox');
+  return `<div class="live"><i></i><b>${esc(text)}</b>${files(cur.files, 1)}<time data-tick>${fmt(cur.secs + clock)}</time></div>`;
+}
+
+function group({ steps, live, open, total, flagged, freshLast }) {
+  const names = new Set(steps.flatMap((s) => s.files).concat(live ? live.files : []));
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const title = names.size ? `Worked through ${plural(names.size, 'file')}` : plural(steps.length, 'step');
+  return `<div class="grp ${open ? 'open' : ''}"><button class="grp-head" data-toggle>${CHEV}<span>${title}</span>
+    ${flagged ? '<span class="flagged">1 problem</span>' : ''}<time>${total}</time></button>
+    <div class="grp-body">${steps.map((s, i) => stepHtml(s, freshLast && i === steps.length - 1)).join('')}${live ? liveHtml(live) : ''}</div></div>`;
+}
+
+function render(opts = {}) {
+  const status = document.getElementById('status');
+  const pause = document.getElementById('pause');
+  let html = `<div class="me">${esc(ASK)}</div>`;
+  status.className = 'pill work'; status.textContent = 'Working'; pause.hidden = false;
+
+  if (mode === 'today') {
+    // What the app shows now: no detail until the model finishes a whole reply.
+    html += group({ steps: [{ text: 'Started on 5 files', files: [], secs: 0 }, { text: 'Sandbox ready; inputs uploaded', files: [], secs: 0 }].map((s) => ({ ...s, secs: undefined })), open: true, total: '52s' });
+    html += `<div class="live"><i></i><b>Running code in the sandbox</b><time data-tick>${fmt(63 + clock)}</time></div>`;
+  } else if (view === 'live') {
+    const steps = opts.steps ?? STEPS;
+    html += group({ steps, live: opts.live === undefined ? NOW : opts.live, open: true, total: fmt(steps.reduce((a, s) => a + s.secs, 0)), freshLast: opts.fresh });
+  } else if (view === 'unnamed') {
+    html += group({ steps: STEPS.slice(0, 4), live: UNNAMED, open: true, total: '1m 03s' });
+  } else if (view === 'error') {
+    html += group({ steps: [...STEPS, ERROR_STEP], live: { ...NOW, secs: 2 }, open: true, total: '1m 42s', flagged: true });
+  } else if (view === 'ask') {
+    html += group({ steps: [...STEPS, { ...NOW, text: 'Matched each employee in the payroll input to the bank file' }], open: false, total: '2m 24s' });
+    html += `<div class="card ask fresh"><p>Raj Kumar joins on 17 November in the joiner form but on 3 November in the payroll input. Which date should I use?</p>
+      <div class="choices"><button class="primary">17 November</button><button>3 November</button></div></div>`;
+    status.className = 'pill ask'; status.textContent = 'Needs you';
+  } else if (view === 'done') {
+    html += group({ steps: [...STEPS, { ...NOW, text: 'Matched each employee in the payroll input to the bank file' },
+      { text: 'Filled the central depository sheet', files: ['Central_Depository_Nov2026.xlsx'], secs: 41 },
+      { text: 'Checked the saved workbook', files: [], secs: 6 }], open: false, total: '4m 10s' });
+    html += `<p class="say fresh">The central depository sheet is filled for 142 employees. Two bank account numbers in the payroll input differ from the bank file; both are listed under Still to fix.</p>`;
+    status.className = 'pill ok'; status.textContent = 'Done'; pause.hidden = true;
+  }
+  document.getElementById('thread').innerHTML = html;
+  for (const b of document.querySelectorAll('[data-toggle]')) b.onclick = () => b.parentElement.classList.toggle('open');
+  for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', b.dataset.mode === mode);
+  for (const b of document.querySelectorAll('[data-state]')) {
+    b.setAttribute('aria-pressed', mode === 'new' && b.dataset.state === view && !play);
+    b.disabled = mode === 'today'; b.style.opacity = mode === 'today' ? .4 : 1;
+  }
+}
+
+// Ticks the live timer once a second.
+function startClock() {
+  clearInterval(timer); clock = 0;
+  timer = setInterval(() => { clock += 1; for (const t of document.querySelectorAll('[data-tick]')) {
+    const base = mode === 'today' ? 63 : (play ? play.cur.secs : view === 'unnamed' ? UNNAMED.secs : view === 'error' ? 2 : NOW.secs);
+    t.textContent = fmt(base + clock); } }, 1000);
+}
+
+// A short simulated run: each script shows its description while it runs, then joins the list.
+function playRun() {
+  stopPlay(); mode = 'new'; view = 'live';
+  const queue = [...STEPS, { ...NOW, text: 'Matched each employee in the payroll input to the bank file' }];
+  const done = [];
+  play = { cur: { ...queue[0], secs: 0 } };
+  const live = (s) => ({ ...s, text: s.text.replace(/^Unpacked/, 'Unpacking').replace(/^Listed/, 'Listing').replace(/^Read /, 'Reading ')
+    .replace(/^Profiled/, 'Profiling').replace(/^Checked/, 'Checking').replace(/^Matched/, 'Matching'), secs: 0 });
+  let i = 0;
+  const next = () => {
+    if (i >= queue.length) { stopPlay(); view = 'ask'; render(); return; }
+    play.cur = live(queue[i]); clock = 0;
+    render({ steps: [...done], live: play.cur, fresh: done.length > 0 });
+    play.t = setTimeout(() => { done.push(queue[i]); i += 1; next(); }, 1800);
+  };
+  next();
+}
+function stopPlay() { if (play) clearTimeout(play.t); play = null; }
+
+document.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => { stopPlay(); mode = b.dataset.mode; render(); startClock(); });
+document.querySelectorAll('[data-state]').forEach((b) => b.onclick = () => { stopPlay(); view = b.dataset.state; render(); startClock(); });
+document.querySelector('[data-play]').onclick = () => { playRun(); startClock(); };
+render(); startClock();
+</script>
+</body>
+</html>

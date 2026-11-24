@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+data/
+logs/
+output/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+.ruff_cache/
+
+# Private working notes and prototypes: kept on this machine, never published
+docs/local/

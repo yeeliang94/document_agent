@@ -1,0 +1,186 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: the agent's question as a card with choices. Open this file in a browser; no server needed. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question card prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f5f6; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab; --line: #e7e7ea;
+    --accent: #2f6fdb; --accent-bg: #e8f0fd; --ok-bg: #e6f3e6; --ok-fg: #24592a; --warn-bg: #fbf0dc; --warn-fg: #6b4206;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { border: 0; background: none; cursor: pointer; padding: 0; }
+
+  /* Prototype controls, not part of the design */
+  .proto { position: sticky; top: 0; z-index: 2; background: #18181b; color: #fff; padding: 8px 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+  .proto span { color: #a3a3ab; margin-right: 4px; }
+  .proto button { padding: 4px 12px; border-radius: 999px; background: #2a2a2e; }
+  .proto button[aria-pressed="true"] { background: #fff; color: #18181b; }
+  .proto .sep { width: 1px; height: 20px; background: #3a3a3f; margin: 0 4px; }
+
+  .head { max-width: 720px; margin: 0 auto; padding: 24px 16px 8px; display: flex; align-items: center; gap: 12px; }
+  .head h1 { font-size: 22px; font-weight: 500; margin: 0; flex: 1; }
+  .pill { border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+  .pill.work { background: var(--accent-bg); color: var(--accent); }
+  .pill.ask { background: var(--warn-bg); color: var(--warn-fg); }
+  .btn { border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; font-size: 13px; }
+
+  .thread { max-width: 720px; margin: 0 auto; padding: 12px 16px 140px; display: flex; flex-direction: column; gap: 16px; }
+  .me { align-self: flex-end; max-width: 80%; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .grp { color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .grp svg { width: 14px; height: 14px; }
+  .grp time { color: var(--faint); }
+
+  /* The question card */
+  .q { background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .q h2 { font-size: 15px; font-weight: 500; margin: 0; text-wrap: pretty; }
+  .facts { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .facts li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+  .facts b { font-weight: 400; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+  .facts .file { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .facts .file:hover { color: var(--accent); }
+
+  .opts { display: flex; flex-direction: column; gap: 4px; }
+  .opt { display: flex; gap: 12px; align-items: flex-start; text-align: left; width: 100%; background: var(--bg); border-radius: 12px; padding: 12px; border: 1px solid transparent; }
+  .opt:hover { border-color: var(--line); }
+  .opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .opt.picked { border-color: var(--text); }
+  .opt kbd { font: 500 12px/20px Geist, system-ui, sans-serif; width: 20px; height: 20px; border-radius: 999px; background: var(--panel); color: var(--muted); text-align: center; flex: none; }
+  .opt.picked kbd { background: var(--text); color: #fff; }
+  .opt .body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .opt .detail { color: var(--muted); font-size: 13px; }
+  .tag { font-size: 12px; border-radius: 999px; padding: 0 8px; background: var(--accent-bg); color: var(--accent); flex: none; align-self: center; }
+
+  .own { display: flex; gap: 12px; align-items: center; background: var(--bg); border-radius: 12px; padding: 8px 8px 8px 12px; border: 1px solid transparent; }
+  .own:focus-within { border-color: var(--text); }
+  .own kbd { font: 500 12px/20px Geist, system-ui, sans-serif; width: 20px; height: 20px; border-radius: 999px; background: var(--panel); color: var(--muted); text-align: center; flex: none; }
+  .own textarea { flex: 1; border: 0; outline: 0; resize: none; background: none; min-height: 24px; padding: 2px 0; }
+  .own textarea::placeholder { color: var(--faint); }
+  .send { border-radius: 999px; background: var(--text); color: #fff; padding: 6px 14px; font-size: 13px; flex: none; }
+  .send:disabled { background: var(--line); color: var(--faint); cursor: not-allowed; }
+
+  .foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint); }
+  .foot .skip { margin-left: auto; color: var(--muted); font-size: 13px; }
+  .foot .skip:hover { color: var(--text); }
+
+  /* Answered: the card folds to one line */
+  .done { display: flex; flex-direction: column; gap: 4px; }
+  .done .asked { color: var(--muted); font-size: 13px; }
+  .done .me { align-self: flex-end; }
+  .say { max-width: 62ch; }
+
+  .composer { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); background: var(--panel); border-radius: 12px; padding: 12px 16px; color: var(--faint); }
+  .fresh { animation: rise .25s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @media (max-width: 560px) { .tag { display: none; } .foot .keys { display: none; } }
+</style>
+</head>
+<body>
+<div class="proto" role="toolbar" aria-label="Prototype controls">
+  <span>Version</span>
+  <button data-mode="today">Today</button>
+  <button data-mode="new">Proposed</button>
+  <div class="sep"></div>
+  <span>State</span>
+  <button data-state="choices">Question with choices</button>
+  <button data-state="open">Open question</button>
+  <button data-state="typing">Typing own answer</button>
+  <button data-state="answered">Answered</button>
+</div>
+
+<header class="head">
+  <h1>Nov 2026 payroll</h1>
+  <span class="pill ask" id="status">Needs you</span>
+  <button class="btn">Stop</button>
+</header>
+<main class="thread" id="thread"></main>
+<div class="composer" id="composer">Message the agent</div>
+
+<script>
+const CHEV = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>';
+const ASK = 'fill in the central depository sheet for this client using the inputs from the folder, check the payroll input excel from the client, as well as check each input files to validate their accuracy in the input file';
+
+// What the agent would send through ask_user: the question, the evidence behind it, and up to four choices.
+const Q = {
+  text: 'Which start date should I use for Raj Kumar?',
+  facts: [
+    ['17 Nov 2026', 'Joiner_RajKumar.pdf'],
+    ['3 Nov 2026', 'Payroll_Input_Nov2026.xlsx, row 48'],
+  ],
+  options: [
+    { label: '17 November', detail: 'Use the signed joiner form. Pays 14 days in November.', recommended: true },
+    { label: '3 November', detail: 'Use the payroll input. Pays the full month.' },
+    { label: 'Leave him out this month', detail: 'Mark the row for follow-up under Still to fix.' },
+  ],
+};
+const OPEN = { text: 'The bank file has no account for Nur Aisyah. What account number should I use?', facts: [['Missing', 'Bank_Details_Nov.csv']], options: [] };
+
+let mode = 'new', view = 'choices', picked = null;
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function card(q, typing) {
+  const facts = q.facts.length ? `<ul class="facts">${q.facts.map(([v, f]) => `<li><b>${esc(v)}</b><button class="file">${esc(f)}</button></li>`).join('')}</ul>` : '';
+  const opts = q.options.map((o, i) => `<button class="opt ${picked === i ? 'picked' : ''}" data-pick="${i}">
+      <kbd>${i + 1}</kbd><span class="body"><span>${esc(o.label)}</span>${o.detail ? `<span class="detail">${esc(o.detail)}</span>` : ''}</span>
+      ${o.recommended ? '<span class="tag">Suggested</span>' : ''}</button>`).join('');
+  const n = q.options.length + 1;
+  const own = `<div class="own"><kbd>${q.options.length ? n : '›'}</kbd>
+      <textarea id="own" rows="1" placeholder="${q.options.length ? 'Something else' : 'Type your answer'}" aria-label="Your answer">${typing ? 'Use 3 November, but pay from 17 November' : ''}</textarea>
+      <button class="send" id="send" ${typing ? '' : 'disabled'}>Send</button></div>`;
+  const keys = q.options.length ? `<span class="keys">Press 1–${n} to choose</span>` : '';
+  return `<section class="q fresh" aria-label="Question from the agent"><h2>${esc(q.text)}</h2>${facts}
+    <div class="opts" role="group" aria-label="Choices">${opts}${own}</div>
+    <div class="foot">${keys}<button class="skip">Let the agent decide</button></div></section>`;
+}
+
+function render() {
+  const status = document.getElementById('status');
+  const composer = document.getElementById('composer');
+  let html = `<div class="me">${esc(ASK)}</div><div class="grp">${CHEV}<span>Worked through 7 files</span><time>2m 24s</time></div>`;
+  status.className = 'pill ask'; status.textContent = 'Needs you';
+  composer.textContent = 'Message the agent';
+
+  if (mode === 'today') {
+    html += `<div class="q" style="background:var(--warn-bg)"><p style="margin:0">Raj Kumar joins on 17 November in the joiner form but on 3 November in the payroll input. Which date should I use?</p></div>`;
+    composer.textContent = 'Type your answer';
+  } else if (view === 'answered') {
+    html += `<div class="done"><span class="asked">Which start date should I use for Raj Kumar?</span><div class="me">17 November</div></div>
+      <div class="grp">${CHEV}<span>Worked through 2 files</span><time>18s</time></div>`;
+    status.className = 'pill work'; status.textContent = 'Working';
+  } else {
+    html += card(view === 'open' ? OPEN : Q, view === 'typing');
+    composer.hidden = true; // the card has its own answer box
+  }
+  if (mode === 'today' || view === 'answered') composer.hidden = false;
+  document.getElementById('thread').innerHTML = html;
+  for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', b.dataset.mode === mode);
+  for (const b of document.querySelectorAll('[data-state]')) {
+    b.setAttribute('aria-pressed', mode === 'new' && b.dataset.state === view);
+    b.disabled = mode === 'today'; b.style.opacity = mode === 'today' ? .4 : 1;
+  }
+  // Picking a choice answers at once; the card then folds into the answer.
+  for (const b of document.querySelectorAll('[data-pick]')) b.onclick = () => { picked = +b.dataset.pick; render(); setTimeout(() => { picked = null; view = 'answered'; render(); }, 450); };
+  const own = document.getElementById('own');
+  if (own) own.oninput = () => { document.getElementById('send').disabled = !own.value.trim(); };
+  const send = document.getElementById('send');
+  if (send) send.onclick = () => { view = 'answered'; render(); };
+}
+
+document.addEventListener('keydown', (e) => {
+  if (mode !== 'new' || !['choices', 'typing'].includes(view) || e.target.tagName === 'TEXTAREA') return;
+  const n = Number(e.key);
+  if (n >= 1 && n <= Q.options.length) document.querySelector(`[data-pick="${n - 1}"]`).click();
+  else if (n === Q.options.length + 1) { e.preventDefault(); document.getElementById('own').focus(); }
+});
+document.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => { mode = b.dataset.mode; render(); });
+document.querySelectorAll('[data-state]').forEach((b) => b.onclick = () => { view = b.dataset.state; render(); });
+render();
+</script>
+</body>
+</html>

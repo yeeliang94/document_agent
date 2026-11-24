@@ -1,0 +1,9 @@
+.venv/
+runs/
+sandbox_settings.json
+# Keep real packets and workbooks out of git; the synthetic fixture is built under runs/.
+*.zip
+*.xlsx
+*.xlsm
+*.xls
+*.csv

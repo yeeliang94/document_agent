@@ -1,0 +1,5 @@
+openai-agents==0.24.0
+openpyxl==3.1.5
+python-dotenv==1.2.4
+truststore==0.10.5
+pytest==9.2.0

@@ -1,0 +1,38 @@
+"""Job status groups shared by the API, the runner and (through /api/config) the browser.
+
+Lifecycle: ready -> queued -> running -> completed | partial | waiting | paused | failed | cancelled.
+`pausing` is a running job asked to stop at its next saved tool boundary.
+"""
+
+ACTIVE = frozenset({'running', 'queued', 'pausing'})
+# A finished job; `partial` can still continue with a new turn.
+FINISHED = frozenset({'completed', 'partial'})
+STARTABLE = frozenset({'ready', 'paused', 'failed', 'cancelled', 'partial'})
+PAUSABLE = frozenset({'running', 'queued'})
+# Instructions are queued and delivered on the next model request.
+ACCEPTS_MESSAGES = ACTIVE | {'paused', 'partial'}
+# Comments on the files of a run that has produced something. A run that is going gets them between steps; one
+# that has stopped, a completed one included, starts again to act on them. A run waiting for an answer needs the
+# answer first.
+ACCEPTS_COMMENTS = ACTIVE | FINISHED | {'paused', 'failed', 'cancelled'}
+# Nothing will change until the user acts, so live streams can close.
+IDLE = FINISHED | {'failed', 'cancelled', 'paused', 'waiting'}
+
+GROUPS = {
+    'active': ACTIVE,
+    'finished': FINISHED,
+    'startable': STARTABLE,
+    'pausable': PAUSABLE,
+    'accepts_messages': ACCEPTS_MESSAGES,
+    'accepts_comments': ACCEPTS_COMMENTS,
+    'idle': IDLE,
+}
+
+
+def stop_status(status: str) -> str | None:
+    """The status a run settles in when the user stopped it, or None to keep going."""
+    return {'pausing': 'paused', 'cancelled': 'cancelled'}.get(status)
+
+
+def as_json():
+    return {name: sorted(statuses) for name, statuses in GROUPS.items()}
