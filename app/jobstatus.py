@@ -9,8 +9,10 @@ ACTIVE = frozenset({'running', 'queued', 'pausing'})
 FINISHED = frozenset({'completed', 'partial'})
 STARTABLE = frozenset({'ready', 'paused', 'failed', 'cancelled', 'partial'})
 PAUSABLE = frozenset({'running', 'queued'})
-# Instructions are queued and delivered on the next model request.
-ACCEPTS_MESSAGES = ACTIVE | {'paused', 'partial'}
+# A message to a run that is going is delivered between its steps (or at once, when the user asks). A message to a run
+# that has stopped, a completed one included, starts it again to act on it. A run waiting for an answer needs the
+# answer first.
+ACCEPTS_MESSAGES = ACTIVE | FINISHED | {'paused', 'failed', 'cancelled'}
 # Comments on the files of a run that has produced something. A run that is going gets them between steps; one
 # that has stopped, a completed one included, starts again to act on them. A run waiting for an answer needs the
 # answer first.

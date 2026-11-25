@@ -9,7 +9,9 @@ import json
 import os
 import re
 import shutil
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import PurePosixPath
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -22,10 +24,11 @@ from pydantic import BaseModel, Field
 
 from . import app_settings, cases, feedback, jobstatus, preview, replay, tuning
 from .config import ROOT, Settings, settings
+from .engine.agent import UPLOAD_LIMIT
 from .engine.checks import normal_decision, read_map
 from .engine.rules import check_format_definition
 from .engine.service import DAY_USED_UP
-from .files import add_file, add_zip, is_junk, within
+from .files import add_file, add_zip, added_name, is_junk, within
 from .playbooks import MAX_NAME, MAX_TEXT, StaleVersion
 from .runtime import Runner
 from .skills import MAX_ZIP_BYTES
@@ -34,6 +37,7 @@ from .store import Store, clean
 VERSION = '0.3.0'
 MAX_TEXT_CHARS = MAX_TEXT
 MAX_VERSION = 2**31
+MAX_ADDED_FILES = 10  # files sent with one message
 
 
 class TextInput(BaseModel):
@@ -455,15 +459,135 @@ def create_app(settings_override: Settings | None = None):
         return get(job_id)
 
     @api.post('/api/jobs/{job_id}/message')
-    async def message(job_id, body: TextInput):
-        j = get(job_id)
-        if j['status'] not in jobstatus.ACCEPTS_MESSAGES or j.get('legacy'):
-            raise HTTPException(409, 'Start or resume a run to send instructions')
-        if not body.message.strip():
-            raise HTTPException(400, 'Enter an instruction')
-        # Delivered once into the conversation; also adding it to the task would repeat it.
-        store.mutate(job_id, lambda job: job.update(pending_messages=job.get('pending_messages', []) + [body.message]))
-        store.event(job_id, 'user.instruction', body.message, type='user')
+    async def message(
+        job_id,
+        message: str = Form('', max_length=MAX_TEXT_CHARS),
+        files: list[UploadFile] | None = File(None),  # added to the run's packet, for files the user forgot
+    ):
+        uploads = files or []
+        try:
+            j = get(job_id)
+            refuse_message(j)
+            text = message.strip()
+            if not text and not uploads:
+                raise HTTPException(400, 'Enter a message or add a file')
+            if len(uploads) > MAX_ADDED_FILES:
+                raise HTTPException(400, f'Add at most {MAX_ADDED_FILES} files at a time')
+            if j['status'] not in jobstatus.ACTIVE:  # a run that has stopped starts again to act on the message
+                if not conf.api_key:
+                    raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
+                if store.day_used_up():
+                    raise HTTPException(409, DAY_USED_UP)
+            received = await read_added(uploads, j['files'])
+        finally:
+            for f in uploads:
+                await f.close()
+        entry, starts = await asyncio.to_thread(keep_message, job_id, text, received)
+        shown = [{k: f[k] for k in ('path', 'packet')} for f in entry['files']]
+        store.event(job_id, 'user.instruction', text, type='user', message_id=entry['id'], files=shown)
+        if starts:
+            await runner.enqueue(job_id)
+        return get(job_id)
+
+    def refuse_message(job):
+        if job['status'] not in jobstatus.ACCEPTS_MESSAGES or job.get('legacy'):
+            if job['status'] == 'waiting':
+                raise HTTPException(409, 'Answer the question first')
+            raise HTTPException(409, 'Start the run to send messages')
+        # A run that was stopped (cancelled, paused, failed) starts again for the message, but not while the last run
+        # is still letting go of it: queuing then would undo a cancel the engine has not seen yet, or be overwritten
+        # as that run settles. A finished run needs no wait: the runner starts it again as it lets go
+        # (runtime.resume_if_answered).
+        if job['status'] not in jobstatus.ACTIVE | jobstatus.FINISHED and runner.active == job['id']:
+            raise HTTPException(409, 'The previous operation is still finishing')
+
+    def too_big() -> str:
+        return f'The run would exceed {conf.max_upload_mb} MB or {conf.max_files} files'
+
+    async def read_added(uploads, manifest) -> list[tuple[str, bytes]]:
+        """The files sent with a message, each checked on its own; where they go is settled when they are kept.
+        Reading stops as soon as they would not fit in the run, so an oversized drop is never held in memory whole.
+        (keep_message checks again against the manifest as it is then.)"""
+        room = conf.max_upload_mb * 1024 * 1024 - sum(e['size'] for e in manifest)
+        if len(manifest) + len(uploads) > conf.max_files:
+            raise HTTPException(400, too_big())
+        received = []
+        for upload in uploads:
+            name = upload.filename or 'unnamed'
+            if name.lower().endswith('.zip'):
+                raise HTTPException(400, 'Add the files inside a ZIP one by one')
+            data = await upload.read(UPLOAD_LIMIT + 1)
+            if not data:
+                raise HTTPException(400, clean('Empty file: ' + name))
+            if len(data) > UPLOAD_LIMIT:
+                raise HTTPException(400, clean(f'{name} is larger than {UPLOAD_LIMIT // 1024**2} MB'))
+            room -= len(data)
+            if room < 0:
+                raise HTTPException(400, too_big())
+            received.append((name, data))
+        return received
+
+    def keep_message(job_id, text, received) -> tuple[dict, bool]:
+        """Add the files to the job's packet and the message to its queue in one step, so two messages sent at once
+        never pick the same file name, and a run that finishes meanwhile is either still going and reads the message,
+        or has stopped and is queued again here. The next run's packet holds the files; a run that is going gets them
+        in its sandbox when the message reaches it. Returns the message and whether the run starts again for it."""
+        root, limit = store.path(job_id), conf.max_upload_mb * 1024 * 1024
+        entry = {'id': uuid.uuid4().hex, 'text': text, 'files': []}
+        kept = {}
+
+        def change(job):
+            refuse_message(job)
+            manifest, written = job['files'], []
+            total = sum(e['size'] for e in manifest)
+            try:
+                for name, data in received:
+                    total += len(data)
+                    if total > limit or len(manifest) >= conf.max_files:
+                        raise ValueError(too_big())
+                    stored, packet = added_name(manifest, name)
+                    add_file(root, 'inputs', stored, data, manifest)
+                    written.append(root / manifest[-1]['path'])
+                    manifest[-1]['added'] = True
+                    entry['files'].append(
+                        {'name': PurePosixPath(packet).name, 'path': manifest[-1]['path'], 'packet': packet}
+                    )
+            except BaseException:
+                # Nothing half added: the change is not saved, so its files go too. Removed here, while the job is
+                # still locked, so another message can never have taken one of these names in the meantime.
+                for path in written:
+                    path.unlink(missing_ok=True)
+                raise
+            mark_duplicates(manifest)
+            # Delivered once into the conversation; also adding it to the task would repeat it.
+            job['pending_messages'] = [*(job.get('pending_messages') or []), entry]
+            kept['starts'] = job['status'] not in jobstatus.ACTIVE
+            if kept['starts']:
+                job.update(status='queued', error=None)
+
+        try:
+            store.mutate(job_id, change)
+        except (ValueError, HTTPException) as error:
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(400, clean(str(error))) from None
+        return entry, kept['starts']
+
+    @api.post('/api/jobs/{job_id}/interrupt')
+    async def interrupt(job_id):
+        """Stop the agent's current step so it reads the messages waiting for it now. When the agent took them in the
+        moment before (the button was still showing), there is nothing left to do, and that is not an error."""
+        get(job_id)
+        flagged = []
+
+        def flag(job):  # in one step with the check, so it never outlives the messages it was for
+            if job['status'] == 'running' and job.get('pending_messages'):
+                job['interrupt'] = True
+                flagged.append(True)
+
+        store.mutate(job_id, flag)
+        if flagged:  # for the Technical log; the thread says the step was stopped once it really was
+            store.event(job_id, 'user.interrupt', 'Stopping the current step to read your message', type='job')
         return get(job_id)
 
     # Synchronous handlers run in the threadpool, so file and SQLite waits never block the event loop.

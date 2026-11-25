@@ -9,6 +9,7 @@ import {
   canFind, changedOnly, changesBarHtml, changesOn, findBarHtml, isFound, loadChanges, marked, pageMarksHtml, placeHtml, searchPdf,
   startMarks,
 } from './review.js'; // prettier-ignore
+import { fullHtml, resetZoom, zoomHtml } from './zoom.js';
 
 const DECISIONS = {
   used: ['ok', 'Used'],
@@ -334,7 +335,7 @@ function viewerHtml(view) {
   return `
     <div class="files-head"><button class="icon-btn" data-action="back-file" aria-label="${esc(back)}" title="${esc(back)}">${icon('back')}</button>
       <h2 title="${esc(view.path)}">${esc(baseName(view.path))}</h2>
-      ${canComment() && hasSpots(view) ? modesHtml() : ''}${find}
+      ${canComment() && hasSpots(view) ? modesHtml() : ''}${zoomHtml()}${find}${fullHtml()}
       <button class="icon-btn" data-download="${esc(view.path)}" aria-label="Download">${icon('down')}</button>
       <button class="icon-btn" data-action="close-file" aria-label="Close">${icon('x')}</button></div>
     ${findBarHtml(view)}
@@ -360,6 +361,7 @@ function dropImage() {
 export function closeFile() {
   dropImage();
   state.open = state.preview = state.row = state.places = null;
+  state.full = false;
 }
 
 // Loads in steps and calls `draw` after each, so the panel opens at once and fills in.
@@ -368,6 +370,7 @@ export function closeFile() {
 export async function openFile(path, draw, { sheet = null, row = null, back = null, found = null, page = 1 } = {}) {
   dropImage();
   const view = { path, data: null, page: 1, image: null, error: '', back, found, hits: null, changes: null };
+  if (state.open !== path) resetZoom();
   state.open = path;
   state.preview = view;
   state.showFiles = true;

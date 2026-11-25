@@ -733,12 +733,20 @@ button.file:hover {
   max-width: 720px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
   background: var(--panel);
   border-radius: 12px;
-  padding: 8px 8px 8px 16px;
+  padding: 8px;
   transition: box-shadow 0.15s;
+}
+.composer .line {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.composer .line .icon-btn {
+  height: 34px;
 }
 .composer form:focus-within {
   box-shadow: inset 0 0 0 1px var(--faint);
@@ -1897,4 +1905,177 @@ mark.hit.now {
 .doc .gap,
 .doc .ln.gone {
   color: var(--faint);
+}
+
+/* Files added to a message: waiting in the message box, and on a sent message */
+.chips,
+.me .att {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chips {
+  padding: 4px 4px 0;
+}
+.me .att {
+  margin-top: 8px;
+  white-space: normal;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 240px;
+  background: var(--sheet);
+  border-radius: 999px;
+  padding: 4px 4px 4px 12px;
+  font-size: 13px;
+}
+.chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip button {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.chip button:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.chip button svg {
+  width: 12px;
+  height: 12px;
+}
+button.chip {
+  padding: 4px 12px;
+}
+button.chip:hover {
+  color: var(--accent);
+}
+/* A message the agent has not read yet */
+.me.queued {
+  background: var(--sheet);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.me.queued .chip {
+  background: var(--panel);
+}
+.queue-foot {
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -8px;
+}
+.chat {
+  position: relative;
+}
+.chat.dropping::after {
+  content: 'Drop files to add them';
+  position: absolute;
+  inset: 16px;
+  border-radius: 12px;
+  background: rgba(232, 240, 253, 0.92);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Zoom in the file preview */
+.zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--sheet);
+  flex: none;
+}
+.zoom button {
+  height: 28px;
+  min-width: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.zoom button:hover:not(:disabled) {
+  background: var(--panel);
+  color: var(--text);
+}
+.zoom button:disabled {
+  opacity: 0.3;
+}
+.zoom .pct {
+  min-width: 52px;
+  padding: 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.zoom .fit {
+  padding: 0 10px;
+  font-size: 13px;
+}
+.zoom .fit[aria-pressed='true'],
+.zoom .fit[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.shot {
+  overflow: auto;
+}
+.shot.big {
+  place-items: start;
+}
+.shot .stage[style*='width'] img {
+  width: 100%;
+  max-width: none;
+}
+/* The file on show fills the window; comment boxes and messages still open above it */
+.work.full .files {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  border-radius: 0;
+  z-index: 7;
+  display: flex;
+}
+.work.full .files-head {
+  padding: 16px 24px 12px 32px;
+}
+.work.full .files-body {
+  padding: 0 32px 24px;
+}
+/* On a narrow screen the file already fills the screen, so there is no full screen. At any width the head wraps when
+   its buttons and the file's name do not fit on one line (a laptop with the run list showing). On a phone, a pinch
+   zooms, so the zoom buttons give way to the file's name. */
+@media (max-width: 1000px) {
+  .files-head [data-zoom='full'] {
+    display: none;
+  }
+}
+@media (min-width: 561px) {
+  .files-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .files-head h2 {
+    flex: 1 1 96px;
+  }
+}
+@media (max-width: 560px) {
+  .files-head .zoom {
+    display: none;
+  }
 }

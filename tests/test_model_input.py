@@ -84,7 +84,7 @@ def drive(monkeypatch, runs, prompt=None):
     with the refused ids as they stood at that call."""
     calls = []
 
-    def run_streamed(agent_, prompt, context=None, max_turns=0, run_config=None):
+    def run_streamed(agent_, prompt, context=None, max_turns=0, run_config=None, hooks=None):
         calls.append((run_config, prompt, SimpleNamespace(refused=set(context.refused))))
         return runs.pop(0)
 

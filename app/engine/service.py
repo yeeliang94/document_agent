@@ -12,13 +12,15 @@ which picks up from the saved outputs, notes and the question and answer (the re
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import json
 import time
 import zipfile
 from pathlib import Path
 
-from .. import feedback, lessons
-from ..jobstatus import stop_status
+from .. import feedback, lessons, preview
+from ..jobstatus import FINISHED, stop_status
 from ..modules import MODULE_LABELS
 from ..store import clean
 from .agent import Control, run_job
@@ -54,7 +56,9 @@ MESSAGES = {
     'skill.run': lambda d: f'Running {d.get("program")} from skill {d.get("skill")}',
     'rules.held': lambda d: 'Checks passed; holding the result against your house rules',
     'past_run.opened': lambda d: f'Looking at an earlier run: {d.get("title")}',
-    'instructions.delivered': lambda d: 'New instructions delivered to the agent',
+    'instructions.delivered': lambda d: (
+        'Stopped the current step to read your message' if d.get('interrupted') else 'Your message reached the agent'
+    ),
     'sandbox.keepalive_failed': lambda d: 'The sandbox did not answer a keep-alive check',
     'run.finished': lambda d: f'Run finished: {d.get("status")}',
     # A script, as it streams in: what it is for once its opening comment is written, then the files it names.
@@ -99,6 +103,44 @@ def with_hint(error: str | None) -> str | None:
     return error
 
 
+def message_text(message) -> str:
+    """A message as the agent reads it. Files the user added with it are named by their path in the packet, so the
+    agent can find them, cite them and give each one a decision like any other packet file."""
+    if isinstance(message, str):
+        return message
+    text = message.get('text') or ''
+    names = [f['packet'] for f in message.get('files') or ()]
+    if names:
+        text = (text + '\n' if text else '') + 'Files the user added to the packet: ' + ', '.join(names) + '.'
+    return text
+
+
+def picture_of(path: Path) -> dict | None:
+    """An added picture, so the agent sees it as well as having the file. None for any other file. It is made as small
+    as a page the user pins a comment to, and a JPEG unless it has see-through parts: it travels in every later
+    request, and the agent has the full file in its sandbox to enlarge any part."""
+    if path.suffix.lower() not in preview.IMAGES:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            if image.width * image.height > feedback.MAX_IMAGE_PIXELS:
+                return None
+            image.seek(0)  # the first frame of an animation
+            image.thumbnail((preview.PAGE_PIXELS, preview.PAGE_PIXELS))
+            out = io.BytesIO()
+            if 'A' in image.getbands() or image.info.get('transparency') is not None:
+                image.convert('RGBA').save(out, 'PNG')
+                kind = 'image/png'
+            else:
+                image.convert('RGB').save(out, 'JPEG', quality=85)
+                kind = 'image/jpeg'
+        return {'name': path.name, 'data': out.getvalue(), 'type': kind}
+    except Exception:  # noqa: BLE001 - a picture that does not open is still in the packet for the agent to read
+        return None
+
+
 class AppControl(Control):
     """Reads the job record at most once a second, to learn about pauses, cancels and new instructions."""
 
@@ -121,8 +163,8 @@ class AppControl(Control):
         return stop_status(self._current().get('status', ''))
 
     def new_messages(self) -> list:
-        """What the user sent since the last look: instructions typed in the conversation, and rounds of comments
-        pinned to the files (app/feedback.py), which come with their pictures."""
+        """What the user sent since the last look: messages typed in the conversation, with any files added to the
+        packet, and rounds of comments pinned to the files (app/feedback.py), which come with their pictures."""
         if not self._current().get('pending_messages'):
             return []
         taken: list = []
@@ -130,27 +172,39 @@ class AppControl(Control):
         def take(job):
             taken.extend(job.get('pending_messages') or [])
             job['pending_messages'] = []
+            job['interrupt'] = False  # an interrupt asked for the messages taken here
             # Kept for good: a resumed run in a fresh sandbox must still follow them.
-            texts = [m if isinstance(m, str) else m['text'] for m in taken]
+            texts = [message_text(m) for m in taken]
             job['engine_instructions'] = [*(job.get('engine_instructions') or []), *texts]
-            rounds = {m['round'] for m in taken if not isinstance(m, str)}
+            rounds = {m['round'] for m in taken if isinstance(m, dict) and 'round' in m}
             for entry in job.get('feedback') or []:
                 if entry['number'] in rounds:
                     entry['status'] = 'delivered'
 
         self.store.mutate(self.job_id, take)
-        self._job = {**self._job, 'pending_messages': []}
+        self._job = {**self._job, 'pending_messages': [], 'interrupt': False}
         root, messages = self.store.path(self.job_id), []
         for item in taken:
             if isinstance(item, str):
                 messages.append(item)
-                continue
-            self.store.event(
-                self.job_id, 'feedback.delivered', 'Your comments reached the agent', type='engine', round=item['round']
-            )
-            images = [{'name': i['name'], 'data': (root / i['path']).read_bytes()} for i in item['images']]
-            messages.append({'text': item['text'], 'images': images})
+            elif 'round' in item:
+                self.store.event(
+                    self.job_id, 'feedback.delivered', 'Your comments reached the agent', type='engine',
+                    round=item['round'],
+                )  # fmt: skip
+                images = [{'name': i['name'], 'data': (root / i['path']).read_bytes()} for i in item['images']]
+                messages.append({'text': item['text'], 'images': images})
+            elif item.get('files'):
+                added = [{'packet': f['packet'], 'local': root / f['path']} for f in item['files']]
+                images = [p for f in added if (p := picture_of(f['local'])) is not None]
+                messages.append({'text': message_text(item), 'images': images, 'files': added})
+            else:
+                messages.append(item['text'])
         return messages
+
+    def interrupt_requested(self) -> bool:
+        job = self._current()
+        return bool(job.get('interrupt') and job.get('pending_messages'))
 
     @property
     def can_remember(self) -> bool:
@@ -172,18 +226,23 @@ class AppControl(Control):
         return {'comment_changes': report} if report else {}
 
 
-def packet_zip(root: Path, files: list[dict], target: Path) -> Path:
-    """The job's source files as one zip, paths relative to inputs/. Inputs never change after upload, so the zip
-    is built once per job. Compressed, because OpenAI sandboxes take files of at most 50 MB."""
+def packet_zip(root: Path, files: list[dict], folder: Path) -> Path:
+    """The job's source files as one zip, paths relative to inputs/. Its name comes from what it holds, so a file the
+    user adds later makes a new zip and an older one is never reused for it. A run keeps its own link to the zip it
+    started with, so older zips can go. Compressed, because OpenAI sandboxes take files of at most 50 MB."""
+    inputs = sorted((e['path'], e['sha256']) for e in files if e['role'] == 'inputs')
+    target = folder / f'packet-{hashlib.sha256(json.dumps(inputs).encode()).hexdigest()[:16]}.zip'
     if target.exists():
         return target
-    target.parent.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix('.partial')
     with zipfile.ZipFile(partial, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for entry in files:
-            if entry['role'] == 'inputs':
-                archive.write(root / entry['path'], entry['path'].removeprefix('inputs/'))
+        for path, _ in inputs:
+            archive.write(root / path, path.removeprefix('inputs/'))
     partial.replace(target)
+    for older in folder.glob('packet*.zip'):
+        if older != target:
+            older.unlink(missing_ok=True)
     return target
 
 
@@ -254,7 +313,7 @@ def job_spec(store, job: dict) -> JobSpec:
         skills_dir=root / 'skills',
         past_runs=past_runs(store, job),
         goal=goal + (f'\nReporting month: {job["period"]}.' if job.get('period') else ''),
-        zip=packet_zip(root, job['files'], root / 'working' / 'engine' / 'packet.zip'),
+        zip=packet_zip(root, job['files'], root / 'working' / 'engine'),
         deliverables=deliverables,
         context=job.get('context') or '',
     )
@@ -355,11 +414,13 @@ class SandboxEngine:
         control = AppControl(store, job_id)
         # A run that continues an earlier one opens with whatever the user sent in between, so it starts on that at
         # once. (job was read before these are taken, so the card lists them as new, not as earlier instructions.)
-        fresh = control.new_messages() if attempt > 1 else []
+        # Files added with them are already in this run's packet, rebuilt when they were added.
+        fresh = await asyncio.to_thread(control.new_messages) if attempt > 1 else []
         resume = resume_card(store, job, [m if isinstance(m, str) else m['text'] for m in fresh])
         # The card repeats the text of every round of comments still being acted on, those just taken included;
         # the pictures that text names go with it.
         pictures = tuple(await asyncio.to_thread(feedback.open_pictures, store, job_id)) if resume else ()
+        pictures += tuple(i for m in fresh if isinstance(m, dict) and m.get('files') for i in m['images'])
         spec = await asyncio.to_thread(job_spec, store, job)
 
         def on_event(name: str, data: dict):
@@ -368,6 +429,8 @@ class SandboxEngine:
             if text:
                 level = 'WARN' if name in WARNINGS else 'INFO'
                 extra = {'files': data['files']} if isinstance(data.get('files'), list) else {}
+                if data.get('interrupted'):
+                    extra['interrupted'] = True  # the thread says the step was stopped only once it was
                 store.event(job_id, 'engine.' + name, text, type='engine', level=level, run=attempt, **extra)
 
         one_question = asyncio.Lock()  # the agent may call tools in parallel; the user sees one question at a time
@@ -544,14 +607,10 @@ class SandboxEngine:
             job.update(updates, status=final['status'])
             if final['status'] != 'waiting':
                 job['question'] = None
-            # An instruction that arrived after the agent's last turn was never read. Keep the run open for it.
-            if final['status'] == 'completed' and job.get('pending_messages'):
-                final['status'] = job['status'] = 'partial'
+            # A message that arrived after the agent's last turn was never read. The runner starts the job again for it
+            # as soon as this run lets go (runtime.resume_if_answered), so the run ends as it is; only its lessons wait.
+            if final['status'] in FINISHED and job.get('pending_messages'):
                 final['unread'] = True
-                job['summary'] = final['summary'] = (
-                    summary
-                    + '\nA new instruction arrived after the last step and was not applied. Continue to apply it.'
-                ).strip()
 
         # The agent finished its work (rather than being paused, cut off or left waiting), so the rounds of comments
         # it read are finished too: keep their final report. Done before the status shows, so the two arrive together.
@@ -564,10 +623,10 @@ class SandboxEngine:
         store.mutate(job_id, apply)
         # What the agent learned is decided on how the job really ended, which only apply knows: a cancel that came
         # late wins, and an instruction the agent never read keeps the question open for the run that reads it.
-        if final['status'] == 'completed':
-            outcome = 'passed'
-        elif final.get('unread') or final['status'] in ('paused', 'waiting'):
+        if final.get('unread') or final['status'] in ('paused', 'waiting'):
             outcome = 'later'
+        elif final['status'] == 'completed':
+            outcome = 'passed'
         else:
             outcome = 'failed'
         try:

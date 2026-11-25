@@ -35,6 +35,7 @@ from agents import (
     ModelSettings,
     RunConfig,
     RunContextWrapper,
+    RunHooks,
     Runner,
     function_tool,
     set_tracing_disabled,
@@ -45,7 +46,7 @@ from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
 
 from .checks import inventory, run_checks
-from .control import Control, user_content, without_pictures
+from .control import Control, added_files, user_content, without_pictures
 from .control import instructions as _instructions
 from .control import texts as _texts
 from .control import with_message as _with_message
@@ -149,6 +150,8 @@ class Job:
     past_opened: dict = field(default_factory=dict)  # earlier runs the agent opened: label -> what it was given
     semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(SCOUT_CONCURRENCY))
     refused: set = field(default_factory=set)  # ids of steps OpenAI could not find; sent as notes from then on
+    added: list = field(default_factory=list)  # files the user added during this run: {'packet', 'local', 'remote'}
+    tools_running: list = field(default_factory=list)  # names of this agent's own tools at work now; see ToolWatch
 
 
 COORDINATOR = """You are a document-processing agent with a Python sandbox (the code interpreter). You own one job from start to finish: decide what matters, do the work, check it, and hand back a result a finance team can trust. The goal card at the end says what this job needs.
@@ -178,7 +181,7 @@ How to work:
 - Check the outcome, not just that a script ran. Before finishing, re-open what you saved and check it against the sources: rows per group, totals, duplicates, and anything that should have been excluded. Then look at each finished sheet as the person receiving it would: every record inside the table it belongs to, totals covering them, nothing stranded below the template's notes, instructions and labels intact. You see any image your code shows, so you can draw the parts that matter (each table with the rows around it, totals and notes) with matplotlib and plt.show() them.
 - Call save_outputs to copy your outputs to the user's run folder. It checks them on the user's machine and lists any problems. Fix them and call it again. You are done when save_outputs passes. It also lists template_changes: template content that moved or is no longer there as it was. Moves caused by rows you inserted are expected. Explain every other change in notes.md, or undo it if it was not deliberate. It also lists empty_rows: rows left empty among your records, with what each one holds. Fill each one, or say in notes.md why the template means it to stay empty; rows you have explained stay on the list.
 
-Finish with status "complete" only if save_outputs passed on your final files. List anything unresolved in open_questions. Write the summary for a finance user who will act on it: short and plain, what was done and what needs their attention, naming files plainly, without sandbox paths or links.
+Finish with status "complete" only if save_outputs passed on your final files. List anything unresolved in open_questions. Write the summary for a finance user who will act on it: short and plain, what was done, what needs their attention and the answer to anything they asked you, naming files plainly, without sandbox paths or links.
 
 {card}"""
 
@@ -309,12 +312,14 @@ async def _upload_packet(box: Sandbox, parts: list[Path]) -> str:
 
 
 def folder_zip(zip_path: Path, files: list[dict], folder: str) -> tuple[bytes, int]:
-    """A zip of one packet folder, with entries named by their packet-relative paths."""
+    """A zip of one packet folder, with entries named by their packet-relative paths. A file the user added during
+    the run is not in the packet zip; it is read from where it is kept on this machine."""
     members = [f for f in files if f['path'].startswith(folder + '/')]
     buffer = io.BytesIO()
     with zipfile.ZipFile(zip_path) as source, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
         for entry in members:
-            target.writestr(entry['path'], source.read(entry['member']))
+            data = source.read(entry['member']) if entry['member'] else Path(entry['local']).read_bytes()
+            target.writestr(entry['path'], data)
     return buffer.getvalue(), len(members)
 
 
@@ -603,17 +608,110 @@ def _out_of_tokens(job: Job, live=None) -> bool:
     return _tokens_used(job, live) > job.max_tokens
 
 
+INTERRUPT_POLL_SECONDS = 1.0
+
+
+class ToolWatch(RunHooks):
+    """Keeps job.tools_running: the agent's own tools (a save, a scout, opening a past run) at work now. Send now
+    waits for them, since cutting one off part way can leave its work half done with no record of it. The model's
+    thinking and its scripts in the sandbox can be stopped at once. The list is emptied whenever the model is called,
+    as no tool of the turn before can still be running then."""
+
+    async def on_tool_start(self, context, agent, tool) -> None:
+        context.context.tools_running.append(tool.name)
+
+    async def on_tool_end(self, context, agent, tool, result) -> None:
+        running = context.context.tools_running
+        if tool.name in running:
+            running.remove(tool.name)
+
+    async def on_llm_start(self, context, agent, *_) -> None:
+        context.context.tools_running.clear()
+
+
+TOOL_WATCH = ToolWatch()
+
+
+def _history(result, prompt) -> list:
+    """The conversation as far as it is whole, after a run was stopped part way through a turn: what came before
+    that turn. A tool call that never got its result is left out, with the reasoning that led to it, since OpenAI
+    refuses a conversation holding one."""
+    items = (
+        result.to_input_list() if result.new_items else _with_message([], prompt) if isinstance(prompt, str) else prompt
+    )
+    answered = {i.get('call_id') for i in items if isinstance(i, dict) and i.get('type') == 'function_call_output'}
+    kept: list = []
+    for item in items:
+        if isinstance(item, dict) and item.get('type') == 'function_call' and item.get('call_id') not in answered:
+            while kept and isinstance(kept[-1], dict) and kept[-1].get('type') == 'reasoning':
+                kept.pop()
+            continue
+        kept.append(item)
+    return kept
+
+
+async def _watch_for_interrupt(result, job: Job, control: Control, fired: list) -> None:
+    """Stop the turn at once when the user asks for their message to be read now, unless one of the agent's own tools
+    is at work: then as soon as it has finished. Watched apart from the stream, because a long script in the sandbox
+    sends nothing for minutes."""
+    while True:
+        await asyncio.sleep(INTERRUPT_POLL_SECONDS)
+        if not job.tools_running and control.interrupt_requested():
+            fired.append(True)
+            result.cancel(mode='immediate')
+            return
+
+
+async def _place_files(job: Job, messages: list) -> list[dict]:
+    """Put the files the user added into the sandbox, and make them packet files for the checks and the reviewer.
+    Returns where each landed, as {'packet', 'remote'}. A file already in this run's packet (sent just before the run
+    started) is left where it is."""
+    known = {f['path'] for f in job.files}
+    placed = []
+    for added in added_files(messages):
+        if added['packet'] in known:
+            continue
+        local = Path(added['local'])
+        remote = await job.main.upload_file(local, f'added__{local.name}')
+        data = await asyncio.to_thread(local.read_bytes)
+        job.files.append({'path': added['packet'], 'member': '', 'bytes': len(data),
+                          'sha256': hashlib.sha256(data).hexdigest(), 'type': local.suffix.lower().lstrip('.') or 'none',
+                          'junk': False, 'local': str(local)})  # fmt: skip
+        job.added.append({'packet': added['packet'], 'local': local})
+        known.add(added['packet'])
+        placed.append({'packet': added['packet'], 'remote': remote})
+        job.store.event('files.added', files=[added['packet']])
+    return placed
+
+
+async def _deliver(
+    job: Job, store: RunStore, echo, base, messages: list, interrupted: bool = False, running=()
+) -> list:
+    """The conversation `base` with the user's messages added, their files placed in the sandbox first. running: what
+    the scripts the user stopped were doing."""
+    placed = await _place_files(job, messages)
+    store.event('instructions.delivered', messages=_texts(messages), **({'interrupted': True} if interrupted else {}))
+    echo(f'  {"the user stopped the step to say" if interrupted else "new message from the user"}: '
+         f'{" / ".join(_texts(messages))[:120]}')  # fmt: skip
+    return _with_message(base, _instructions(messages, placed, interrupted, running))
+
+
 async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control: Control):
     """Stream the lead agent until it finishes. Between turns, deliver new user instructions in the same sandbox, or
     stop cleanly when the user pauses or cancels (raises RunStopped) or the run's turn or token allowance, shared by
-    every continuation of this run, is used up (raises LimitReached). Returns the finished result."""
+    every continuation of this run, is used up (raises LimitReached). When the user asks for their message to be read
+    now, the turn stops where it is and the message goes in at once. Returns the finished result."""
     failures = 0
     while True:
         remaining = job.max_turns - job.turns_used
         if remaining <= 0:
             raise LimitReached(f'Reached the {job.max_turns}-turn limit.', 'turns')
-        result = Runner.run_streamed(agent, prompt, context=job, max_turns=remaining, run_config=RUN_CONFIG)
-        stop, messages = None, []
+        result = Runner.run_streamed(
+            agent, prompt, context=job, max_turns=remaining, run_config=RUN_CONFIG, hooks=TOOL_WATCH
+        )
+        stop, messages, interrupted = None, [], []
+        job.tools_running.clear()
+        watcher = asyncio.create_task(_watch_for_interrupt(result, job, control, interrupted))
         try:
             live: dict = {}
             async for event in result.stream_events():
@@ -624,7 +722,8 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
                     stop = 'limit'
                 else:
                     stop = control.stop_requested()
-                    messages = [] if stop else control.new_messages()
+                    # Taken off the event loop: messages with pictures are made smaller as they are taken.
+                    messages = [] if stop else await asyncio.to_thread(control.new_messages)
                 if stop or messages:
                     result.cancel(mode='after_turn')  # finish the current turn, so no tool call is left half done
         except APIError as error:
@@ -650,12 +749,11 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
                 await asyncio.sleep(wait)
                 if (stopped := control.stop_requested()) in ('paused', 'cancelled'):  # asked for during the wait
                     raise RunStopped(stopped, result) from None
-            prompt = sent
-            if messages:  # already taken from the user's queue, so they travel with the retry or they are lost
-                store.event('instructions.delivered', messages=_texts(messages))
-                prompt = _with_message(prompt, _instructions(messages))
+            # Messages already taken from the user's queue travel with the retry, or they are lost.
+            prompt = await _deliver(job, store, echo, sent, messages) if messages else sent
             continue
         finally:
+            watcher.cancel()
             job.usage.append(_usage(result.context_wrapper.usage))
             job.turns_used += result.current_turn
         if stop == 'limit':
@@ -663,11 +761,21 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
         # A cancel always wins; a pause that arrives as the agent finishes lets the finished result stand.
         if stop == 'cancelled' or (stop and result.final_output is None):
             raise RunStopped(stop, result)
+        if interrupted:
+            # The turn was stopped where it was: carry on from what came before it, with the user's message.
+            messages = [*messages, *await asyncio.to_thread(control.new_messages)]
+            history = _history(result, prompt)
+            # The scripts still running when the turn stopped: their code came in full, but they never finished.
+            running = [code_summary(s['code']) for s in live.values() if s.get('code') and not s.get('shown')]
+            prompt = (
+                await _deliver(job, store, echo, history, messages, interrupted=True, running=running)
+                if messages
+                else history
+            )
+            continue
         if not messages:
             return result
-        store.event('instructions.delivered', messages=_texts(messages))
-        echo(f'  new instructions from the user: {" / ".join(_texts(messages))[:120]}')
-        prompt = _continue(result, _instructions(messages))
+        prompt = await _deliver(job, store, echo, result.to_input_list(), messages)
 
 
 async def _upload_outputs(box: Sandbox, outputs: Path) -> str:
@@ -686,6 +794,11 @@ async def review(job: Job, round_number: int, changes: list[str]) -> dict:
     store.event('review.started', round=round_number)
     async with Sandbox.open(job.settings, f'review-{store.id}-{round_number}', '4g') as box:
         zip_path = await _upload_packet(box, job.zip_parts)
+        # Files the user added during the run are packet files too, though not in the zip.
+        added = [f'{await box.upload_file(Path(a["local"]), f"added__{Path(a["local"]).name}")} (packet path {a["packet"]})'
+                 for a in job.added]  # fmt: skip
+        if added:
+            zip_path += ', and files the user added later: ' + ', '.join(added)
         listing = [{'path': f['path'], 'bytes': f['bytes'], 'type': f['type']} for f in job.files]
         inventory_path = await box.upload_bytes('packet_files.json', json.dumps(listing, indent=1).encode())
         outputs_dir = await _upload_outputs(box, store.outputs)

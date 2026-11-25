@@ -147,6 +147,10 @@ class Runner:
 
     async def submit(self, job_id):
         self.store.update(job_id, status='queued', error=None)
+        await self.enqueue(job_id)
+
+    async def enqueue(self, job_id):
+        """Queue a job whose status the caller has already set to queued, in the same write as what it queued for."""
         self.store.event(job_id, 'job.queued', 'Queued', type='job')
         await self.queue.put(job_id)
 
@@ -180,9 +184,9 @@ class Runner:
                     )
 
     async def resume_if_answered(self, job_id):
-        """Queue a job whose question was answered after its run stopped holding the sandbox, or whose comments
-        arrived while its run was finishing and so were never read. Safe to call from both the answer endpoint and
-        the worker: only the first call that finds the answer or the comments queues the job."""
+        """Queue a job whose question was answered after its run stopped holding the sandbox, or whose comments or
+        messages arrived while its run was finishing and so were never read. Safe to call from both the answer
+        endpoint and the worker: only the first call that finds the answer, comments or message queues the job."""
         queued = []
 
         def claim(job):
@@ -191,6 +195,8 @@ class Runner:
                 queued.append('answer')
             elif job['status'] in jobstatus.FINISHED and unread and self.settings.api_key:
                 queued.append('comments')
+            elif job['status'] in jobstatus.FINISHED and job.get('pending_messages') and self.settings.api_key:
+                queued.append('message')  # sent as the run was finishing, so the agent never read it
             if queued:
                 job.update(status='queued', error=None)
 

@@ -32,7 +32,7 @@ The UI can open without a key. Real agent runs require a valid key, model access
 
 After editing `.env`, reload the application with `./start.sh --restart` (Windows: `.\start.bat --restart`). The launcher restarts only a server identifying itself as this project; it leaves unrelated processes untouched. Pause active work before restarting. On Windows, process termination may interrupt the current operation; saved jobs can be resumed after restart.
 
-Choose New run, describe what the agent should produce, pick the source folder (or ZIP) and the `.xlsx` template or `.json` format, then start. Follow the run in the conversation, answer the agent's questions there, and open any file in the Files panel. The Technical log holds every event. Download the workbook and review anything listed under Still to fix.
+Choose New run, describe what the agent should produce, pick the source folder (or ZIP) and the `.xlsx` template or `.json` format, then start. Follow the run in the conversation, answer the agent's questions there, and open any file in the Files panel; zoom it, fit it to the panel, or show it full screen. Message the agent at any time, with files you forgot attached: while it works, it reads the message at its next step, or at once with Send now; after it has stopped or finished, the message starts it again. The Technical log holds every event. Download the workbook and review anything listed under Still to fix.
 
 ## Sample payroll submission
 

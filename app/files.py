@@ -91,3 +91,25 @@ def add_zip(root, name, data, manifest, max_files, remaining_bytes, depth=0):
                 add_file(root, 'inputs', (prefix / rel).as_posix(), payload, manifest)
             if len(manifest) > max_files or sum(item['size'] for item in manifest) - initial_size > remaining_bytes:
                 raise ValueError('Nested archive exceeds expanded job limits')
+
+
+ADDED = 'Added'  # the packet folder for files the user adds to a run after it was created
+
+
+def added_name(manifest: list[dict], name: str) -> tuple[str, str]:
+    """Where a file the user adds to a running job goes: (its name under inputs/, its path in the packet).
+
+    It sits in the packet's own top folder when the packet has one, so every earlier packet path stays as it was: the
+    packet's paths are counted from that folder. A name already taken gets " (2)", " (3)" and so on."""
+    inputs = [PurePosixPath(e['path']).parts[1:] for e in manifest if e['role'] == 'inputs']
+    tops = {parts[0] for parts in inputs}
+    top = tops.pop() if len(tops) == 1 and all(len(parts) > 1 for parts in inputs) else None
+    base = PurePosixPath(relative_name(name).name)
+    taken = {e['path'].casefold() for e in manifest}
+    for n in range(1, 1000):
+        candidate = base.name if n == 1 else f'{base.stem} ({n}){base.suffix}'
+        packet = f'{ADDED}/{candidate}'
+        stored = f'{top}/{packet}' if top else packet
+        if f'inputs/{stored}'.casefold() not in taken:
+            return stored, packet
+    raise ValueError('Too many files with this name')
