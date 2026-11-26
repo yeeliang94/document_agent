@@ -414,14 +414,15 @@ class SandboxEngine:
         control = AppControl(store, job_id)
         # A run that continues an earlier one opens with whatever the user sent in between, so it starts on that at
         # once. (job was read before these are taken, so the card lists them as new, not as earlier instructions.)
-        # Files added with them are already in this run's packet, rebuilt when they were added.
         fresh = await asyncio.to_thread(control.new_messages) if attempt > 1 else []
         resume = resume_card(store, job, [m if isinstance(m, str) else m['text'] for m in fresh])
         # The card repeats the text of every round of comments still being acted on, those just taken included;
         # the pictures that text names go with it.
         pictures = tuple(await asyncio.to_thread(feedback.open_pictures, store, job_id)) if resume else ()
         pictures += tuple(i for m in fresh if isinstance(m, dict) and m.get('files') for i in m['images'])
-        spec = await asyncio.to_thread(job_spec, store, job)
+        # The packet is built from the file list as it is now, after the messages were taken: a file sent with one of
+        # them a moment ago is in it, though not in `job`, which was read before.
+        spec = await asyncio.to_thread(job_spec, store, store.get(job_id))
 
         def on_event(name: str, data: dict):
             message = MESSAGES.get(name)

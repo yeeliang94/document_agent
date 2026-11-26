@@ -907,3 +907,43 @@ def test_an_added_picture_is_shown_to_the_agent_no_larger_than_a_page(tmp_path):
     assert user_content('Look', [shown])[2]['image_url'].startswith('data:image/jpeg;base64,')
     (tmp_path / 'rates.csv').write_text('MYR,4.4')
     assert picture_of(tmp_path / 'rates.csv') is None  # only pictures are shown; every file is in the sandbox
+
+
+def test_a_file_sent_as_a_run_restarts_is_in_its_packet(tmp_path, monkeypatch):
+    import hashlib
+
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        return finished()
+
+    fake = FakeRun(behaviour)
+    monkeypatch.setattr(service, 'run_job', fake)
+    real_take = service.AppControl.new_messages
+
+    def file_arrives_first(self):
+        # The file lands after the run read the job and before it takes the waiting messages.
+        def add(job):
+            if not any(f['path'].endswith('late.csv') for f in job['files']):
+                path = self.store.path(self.job_id) / 'inputs' / 'HR' / 'Added' / 'late.csv'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'MYR,4.4')
+                job['files'].append({'path': 'inputs/HR/Added/late.csv', 'size': 7, 'role': 'inputs', 'added': True,
+                                     'sha256': hashlib.sha256(b'MYR,4.4').hexdigest(), 'supported': True})  # fmt: skip
+                job['pending_messages'] = [*(job.get('pending_messages') or []),
+                                           {'id': 'm2', 'text': '', 'files': [{'packet': 'Added/late.csv',
+                                                                               'path': 'inputs/HR/Added/late.csv'}]}]  # fmt: skip
+
+        if fake.calls:
+            self.store.mutate(self.job_id, add)
+        return real_take(self)
+
+    monkeypatch.setattr(service.AppControl, 'new_messages', file_arrives_first)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        assert client.post(f'/api/jobs/{job["id"]}/message', data={'message': 'Use the late rates.'}).status_code == 200
+        deadline = time.monotonic() + 30
+        while not (len(fake.calls) == 2 and client.get(f'/api/jobs/{job["id"]}').json()['status'] == 'completed'):
+            assert time.monotonic() < deadline, 'the second run never finished'
+            time.sleep(0.02)
+        assert 'HR/Added/late.csv' in zipfile.ZipFile(fake.calls[1].spec.zip).namelist()

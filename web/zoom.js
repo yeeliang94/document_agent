@@ -8,6 +8,9 @@ const STEPS = [25, 33, 50, 67, 75, 90, 100, 110, 125, 150, 175, 200, 250, 300, 4
 const [LOWEST, HIGHEST] = [STEPS[0], STEPS[STEPS.length - 1]];
 // Kept unrounded, so the many small steps of a slow pinch add up; rounded only where it is shown.
 const clamp = (level) => Math.min(HIGHEST, Math.max(LOWEST, level));
+// Fit may go below the lowest step, so a very wide sheet or a tall page still fits whole.
+const FIT_LOWEST = 5;
+const fitClamp = (level) => Math.min(HIGHEST, Math.max(FIT_LOWEST, level));
 const shown = () => Math.round(state.zoom.level);
 
 const kind = () => (state.preview?.data && !state.preview.error ? state.preview.data.kind : null);
@@ -60,7 +63,10 @@ export function wheelZoom(deltaY) {
   const wasFit = state.zoom.fit;
   // A wheel notch (about 100) is about a quarter larger or smaller; a pinch sends many small steps.
   const step = Math.max(-50, Math.min(50, deltaY));
-  Object.assign(state.zoom, { level: clamp(state.zoom.level * Math.exp(-step * 0.005)), fit: false });
+  // From below the lowest step (where Fit can leave it), zooming out stays put rather than jumping up.
+  const floor = Math.min(LOWEST, state.zoom.level);
+  const level = Math.min(HIGHEST, Math.max(floor, state.zoom.level * Math.exp(-step * 0.005)));
+  Object.assign(state.zoom, { level, fit: false });
   applyZoom();
   return wasFit;
 }
@@ -76,7 +82,7 @@ function fitLevel(files) {
     const table = sheet?.querySelector('.grid');
     if (!table) return null;
     table.style.zoom = ''; // measured at its own size
-    return Math.min(100, clamp(((sheet.clientWidth - 2) / table.offsetWidth) * 100));
+    return Math.min(100, fitClamp(((sheet.clientWidth - 2) / table.offsetWidth) * 100));
   }
   const body = files.querySelector('.files-body');
   const shot = files.querySelector('.shot');
@@ -90,7 +96,7 @@ function fitLevel(files) {
   };
   const base = baseWidth(shot, img);
   const fits = Math.min(room.width / base, (room.height * img.naturalWidth) / (img.naturalHeight * base));
-  return clamp(fits * 100);
+  return fitClamp(fits * 100);
 }
 
 // Show the preview at the zoom chosen. Called after every redraw. Fit measures the file again only when the panel was
