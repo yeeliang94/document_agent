@@ -1,234 +1,179 @@
 <!doctype html>
-<!-- PROTOTYPE ONLY: plan Step 50, "A new client's first screen".
-     Made-up data: a client called Northwind Trading on the Monthly payroll playbook. Open this file in a browser;
-     no server needed. The dark bar at the bottom jumps between states; it is not part of the design.
-     Drawn to sit with the app as it is (its client page with the Notes / Runs / History tabs, the notes box, Save
-     and the "Added from" card).
-     What changes:
-     - A client with no notes yet shows, above the notes box, what notes are for and the two ways they grow:
-       typed here, or kept from a comment on a run with Remember (drawn with the same control the comment box has).
-       The box keeps an example as its placeholder, so the person can start typing at once.
-     - The explanation goes once the first notes are saved.
-     - A client whose notes were all removed says so in one line, with the way to bring the last notes back,
-       instead of the first-time explanation. -->
+<!-- PROTOTYPE ONLY (plan Step 50, redrawn 2026-11-26): after a client's first run, offer to keep what it learned.
+     When a run finishes for a client with no notes yet, a slim strip at the top of the run says what the agent found
+     worth keeping. Opened, it lists those things; one button saves them all to the client's notes (with Undo).
+     A client with no notes shows a plain notes box. Made-up data. The dark bar at the bottom jumps between states. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>New client notes prototype</title>
+<title>First run for a client: keep what it learned (prototype)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #ffffff; --panel: #f5f5f6; --sheet: #ffffff; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab;
     --line: #e7e7ea; --accent: #2f6fdb; --accent-bg: #e8f0fd; --ok-bg: #e6f3e6; --ok-fg: #24592a;
-    --warn-bg: #fbf0dc; --warn-fg: #6b4206; --grey-bg: #ececee; --grey-fg: #55555c;
+    --grey-bg: #ececee; --grey-fg: #55555c;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.6 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
   button, textarea { font: inherit; color: inherit; }
   button { border: 0; background: none; cursor: pointer; padding: 0; }
-  button:disabled { cursor: not-allowed; }
   button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  h1, h2, h3, p { margin: 0; }
-  h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
-  h2 { font-size: 15px; font-weight: 500; }
+  h1, h2, p, ul { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; }
   svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-
-  /* The app as it is */
-  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100%; }
-  .side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 24px; min-height: 0; }
-  .brand { font-weight: 500; font-size: 15px; padding: 0 12px; }
-  .runs { display: flex; flex-direction: column; gap: 4px; flex: 1; }
-  .runs h3 { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 12px 8px; }
-  .item { display: flex; align-items: center; text-align: left; padding: 8px 12px; border-radius: 12px; color: var(--muted); width: 100%; }
-  .item:hover, .item.on { background: var(--panel); }
-  .item.on { color: var(--text); }
-  .foot { display: flex; flex-direction: column; gap: 4px; }
-  .topnav { display: none; }
-  main { min-width: 0; min-height: 0; overflow: auto; padding-bottom: 64px; }
-  .narrow { max-width: 704px; margin: 0 auto; padding: 48px 32px; display: flex; flex-direction: column; gap: 24px; }
-  .page-head { display: flex; align-items: center; gap: 12px; min-height: 40px; }
-  .page-head h1 { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; margin-left: -8px; }
-  .icon-btn:hover { background: var(--panel); color: var(--text); }
-  .filter { display: flex; gap: 4px; flex-wrap: wrap; }
-  .filter button { padding: 4px 12px; border-radius: 999px; color: var(--muted); font-size: 13px; }
-  .filter button.on { background: var(--panel); color: var(--text); }
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
-  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
-  .btn.primary:disabled, .btn:disabled { opacity: .4; }
-  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); }
-  .btn.quiet:hover { background: var(--panel); }
-  .btn.text { padding: 8px 12px; color: var(--muted); }
-  .btn.text:hover { color: var(--text); background: var(--panel); }
-  .btn.small { padding: 4px 12px; font-size: 13px; }
-  .box { background: var(--panel); border-radius: 12px; padding: 16px; }
-  .box textarea { display: block; width: 100%; border: 0; background: none; resize: vertical; outline: none; min-height: max(240px, calc(100dvh - 440px)); }
-  .box textarea::placeholder { color: var(--faint); }
-  .box.short textarea { min-height: 160px; }
-  .end { display: flex; justify-content: flex-end; gap: 8px; }
-  .saved { display: flex; align-items: center; gap: 8px; color: var(--muted); flex-wrap: wrap; }
-  .card { background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .filerow { display: flex; align-items: center; gap: 12px; }
-  .filerow .name { flex: 1; min-width: 0; }
-  .rows { background: var(--panel); border-radius: 12px; padding: 4px 16px; }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; min-height: 56px; }
-  .row + .row { border-top: 1px solid var(--line); }
-  .row .name { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .name .desc { color: var(--muted); font-size: 13px; }
-  .val { display: flex; align-items: center; gap: 8px; flex: none; }
-  .when { color: var(--muted); font-size: 13px; white-space: nowrap; }
   .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
   .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
-  .empty { color: var(--muted); padding: 12px 0; }
-  .seg { display: inline-flex; background: var(--sheet); border-radius: 999px; padding: 4px; }
-  .seg span { padding: 4px 12px; border-radius: 999px; color: var(--muted); font-size: 13px; white-space: nowrap; }
-  .seg span.on { background: var(--text); color: #fff; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+  .btn.primary { background: var(--text); color: #fff; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.outline { box-shadow: inset 0 0 0 1px var(--line); background: var(--bg); }
+  .btn.quiet { color: var(--muted); }
+  .btn.quiet:hover { color: var(--text); }
+  .icon-btn { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+  .icon-btn:hover { background: var(--grey-bg); color: var(--text); }
+  .link { color: var(--accent); font-size: 13px; }
 
-  /* New: what notes are for, on a client with none yet */
-  .intro { display: flex; flex-direction: column; gap: 16px; }
-  .intro > p { max-width: 60ch; }
-  .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .way { background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .way p { color: var(--muted); }
-  .way .show { margin-top: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
-  .way .show .lbl { color: var(--muted); }
-  .gone { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .gone p { flex: 1; min-width: 240px; color: var(--muted); }
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100%; }
+  .side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .brand { font-weight: 500; padding: 0 12px; }
+  .item { display: block; padding: 8px 12px; border-radius: 12px; color: var(--muted); text-align: left; width: 100%; }
+  .item.on { background: var(--panel); color: var(--text); }
+  .main { padding: 24px 32px 96px; min-width: 0; }
+  .col { max-width: 720px; display: flex; flex-direction: column; gap: 24px; }
+  .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .head h1 { margin-right: auto; }
+  .head .muted { color: var(--muted); font-size: 13px; }
+
+  /* The offer: one slim line until opened */
+  .offer { background: var(--panel); border-radius: 12px; }
+  .offer-line { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px; min-height: 44px; }
+  .offer-line .open { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; text-align: left; font-size: 13px; }
+  .offer-line .open span { min-width: 0; }
+  .offer-line .open svg { width: 12px; height: 12px; color: var(--muted); transition: transform .12s; }
+  .offer-line .open[aria-expanded="true"] svg { transform: rotate(90deg); }
+  .offer-line .open .count { color: var(--muted); }
+  .offer-body { padding: 0 16px 16px 36px; display: flex; flex-direction: column; gap: 12px; }
+  .offer-body ul { padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .offer-body .end { display: flex; gap: 8px; }
+  .saved { display: flex; align-items: center; gap: 12px; padding: 8px 16px; min-height: 44px; font-size: 13px; flex-wrap: wrap; }
+  .saved .what { margin-right: auto; }
+
+  .say { color: var(--text); }
+  .report { display: flex; flex-direction: column; gap: 12px; }
+  .report h2 { font-size: 14px; font-weight: 500; }
+  .report ul { padding-left: 18px; color: var(--text); }
+  .filerow { display: flex; align-items: center; gap: 12px; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .filerow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: 10px; color: var(--muted); width: 32px; text-transform: uppercase; letter-spacing: .04em; flex: none; }
+
+  /* Client page */
+  .tabs { display: flex; gap: 4px; }
+  .tabs button { padding: 4px 12px; border-radius: 999px; color: var(--muted); font-size: 13px; }
+  .tabs button.on { background: var(--panel); color: var(--text); }
+  textarea { width: 100%; min-height: 240px; border: 0; border-radius: 12px; background: var(--panel); padding: 16px; resize: vertical; outline: none; line-height: 1.6; }
+  textarea::placeholder { color: var(--faint); }
+  .row-end { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+  .note { color: var(--muted); font-size: 13px; margin-right: auto; }
 
   .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
   .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
   .switcher button.on { background: #fff; color: #18181b; }
 
-  @media (max-width: 1000px) {
-    .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
     .side { display: none; }
-    .topnav { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
-    .topnav .brand { padding: 0; margin-right: auto; }
-    .topnav .pick { background: var(--panel); border-radius: 999px; padding: 8px 12px; font-size: 13px; }
-    .narrow { padding: 24px 16px; }
-    main { padding-bottom: 120px; }
+    .main { padding: 16px 16px 120px; }
+    .offer-body { padding-left: 16px; }
   }
-  @media (max-width: 640px) { .ways { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <div class="app">
   <nav class="side">
     <div class="brand">Document Intelligence</div>
-    <div><button class="btn primary" style="width:100%">New run</button></div>
-    <div class="runs"><h3>Runs</h3><button class="item">October payroll</button><button class="item">September payroll</button></div>
-    <div class="foot"><button class="item">Playbooks</button><button class="item on">Clients</button><button class="item">Settings</button></div>
+    <div><button class="item" data-go="run">October 2026 payroll</button><button class="item" data-go="client">Northwind Trading</button></div>
   </nav>
-  <div class="topnav"><span class="brand">Document Intelligence</span><span class="pick">Clients</span></div>
-  <main><div class="narrow" id="page"></div></main>
+  <main class="main" id="main"></main>
 </div>
 <div class="switcher" id="switcher"></div>
-
 <script>
-const $ = (s) => document.querySelector(s);
-const NAME = 'Northwind Trading';
-const BACK = '<svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg>';
-const NOTES = `Their financial year ends on 31 March.
-Show amounts in thousands, rounded to one decimal place.
-Leavers are paid up to their last working day, not the end of the month.
-The Singapore entity uses the month-end exchange rate.`;
-const EXAMPLE = 'For example: their year ends on 31 March. Show amounts in thousands.';
-
+const svg = (d) => `<svg viewBox="0 0 16 16"><path d="${d}"/></svg>`;
+const CHEV = 'M6 4l4 4-4 4', X = 'M4 4l8 8M12 4l-8 8', DOWN = 'M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10';
+const LEARNED = [
+  'The FINAL payroll register wins over a DRAFT or "superseded" copy of the same month.',
+  'Singapore amounts are converted at the month-end rate in fx_rates_2026.xlsx.',
+  'UK leavers after the 15th are paid in full this month and dropped next month.',
+  'Stipends go in Allowances; there is no separate one-time payment column.',
+];
+const NOTES = LEARNED.map((l) => `- ${l}`).join('\n');
 let state = {};
-const RESET = { tab: 'notes', kind: 'new', text: '', saved: '', justSaved: false, added: false };
+const RESET = { view: 'run', offer: 'folded', notes: '', saved: '' };
 
-// The client's versions, newest first, for each state.
-function versions() {
-  if (state.kind === 'new') return state.justSaved
-    ? [[2, 'Edited by you', 'Today'], [1, 'Created', 'Today']]
-    : [[1, 'Created', 'Today']];
-  if (state.kind === 'cleared') return [[4, 'Edited by you', '24 Nov', 'All notes removed'], [3, 'Remembered from October payroll', '12 Nov', 'The Singapore entity uses the month-end exchange rate.'], [2, 'Edited by you', '3 Nov'], [1, 'Created', '3 Nov']];
-  return [[3, 'Remembered from October payroll', '12 Nov', 'The Singapore entity uses the month-end exchange rate.'], [2, 'Edited by you', '3 Nov'], [1, 'Created', '3 Nov']];
+function offerHtml() {
+  if (state.offer === 'gone') return '';
+  if (state.offer === 'saved') {
+    return `<div class="offer"><div class="saved"><span class="what">Saved to Northwind Trading's notes.</span>
+      <button class="link" data-act="undo">Undo</button><button class="link" data-go="client">View notes</button>
+      <button class="icon-btn" data-act="hide" aria-label="Close">${svg(X)}</button></div></div>`;
+  }
+  const open = state.offer === 'open';
+  return `<div class="offer"><div class="offer-line">
+      <button class="open" data-act="toggle" aria-expanded="${open}">${svg(CHEV)}<span>First run for Northwind Trading: <span class="count">${LEARNED.length} things worth keeping for next time</span></span></button>
+      <button class="icon-btn" data-act="notnow" aria-label="Not now" title="Not now">${svg(X)}</button></div>
+    ${open ? `<div class="offer-body"><ul>${LEARNED.map((l) => `<li>${l}</li>`).join('')}</ul>
+      <div class="end"><button class="btn primary" data-act="save">Save to notes</button><button class="btn quiet" data-act="notnow">Not now</button></div></div>` : ''}</div>`;
 }
 
-// A client that has never had notes: what they are for, and the two ways they grow.
-function introHtml() {
-  return `<div class="intro">
-    <p>Notes are what the agent follows on every ${NAME} run, on top of the playbook.</p>
-    <div class="ways">
-      <div class="way"><h2>Type them here</h2><p>Write down how this client likes things done, in the box below.</p></div>
-      <div class="way"><h2>Keep them from a run</h2><p>When you comment on a run's file, choose ${NAME.split(' ')[0]} under Remember. The comment is added here.</p>
-        <div class="show"><span class="lbl">Remember</span><span class="seg"><span>This run</span><span class="on">${NAME.split(' ')[0]}</span><span>All monthly payroll</span></span></div></div>
+function runHtml() {
+  return `<div class="col">
+    <div class="head"><h1>October 2026 payroll</h1><span class="pill ok">Finished</span><span class="muted">Payroll · Northwind Trading</span></div>
+    ${offerHtml()}
+    <div class="report">
+      <p class="say">The workbook is ready: 215 employees across five entities, with the October joiners and leavers reconciled.</p>
+      <h2>Decisions I made</h2>
+      <ul><li>Took the SG01 FINAL register over its superseded draft.</li><li>Converted SGD at the month-end rate.</li><li>Left two UK leavers out of next month's list.</li></ul>
+      <div class="filerow"><span class="tag">xlsx</span><span class="name">northwind_payroll_October_2026.xlsx</span><span class="pill ok">Checked</span><button class="btn outline">${svg(DOWN)}Download</button></div>
     </div></div>`;
 }
 
-// A client whose notes were all removed: said once, with the way back.
-function goneHtml() {
-  return `<div class="gone"><p>All notes were removed on 24 Nov. Runs for ${NAME} now follow only the playbook.</p>
-    <button class="btn quiet small" data-act="restore">Bring back version 3</button></div>`;
-}
-
-function notesTab() {
-  const unsaved = state.text !== state.saved;
-  const empty = !state.saved;
-  const top = state.kind === 'new' && !state.justSaved && empty ? introHtml() : state.kind === 'cleared' && empty ? goneHtml() : '';
-  const placeholder = empty ? EXAMPLE : `What to follow for ${NAME}`;
-  const saved = state.justSaved && !unsaved
-    ? `<div class="saved"><span>Saved as version 2</span><button class="btn text small">Undo</button></div>` : '';
-  const added = state.added
-    ? `<div class="card"><div class="filerow"><span class="name">Added from October payroll: “The Singapore entity uses the month-end exchange rate.”</span>
-        <button class="btn text small">Undo</button></div></div>` : '';
-  return `${top}<div class="box ${top ? 'short' : ''}"><textarea id="notes" aria-label="Notes for ${NAME}" placeholder="${placeholder}"></textarea></div>
-    ${saved}${added}<div class="end"><button class="btn primary" data-act="save" ${unsaved ? '' : 'disabled'}>Save</button></div>`;
-}
-
-function runsTab() {
-  if (state.kind === 'new') return '<p class="empty">No runs yet.</p>';
-  return `<div class="rows">${[['October payroll', '12 Nov'], ['September payroll', '3 Nov']].map(([t, d]) =>
-    `<div class="row"><span class="name"><span>${t}</span><span class="desc">Monthly payroll · ${d}</span></span></div>`).join('')}</div>`;
-}
-
-function historyTab() {
-  const list = versions();
-  return `<div class="rows">${list.map(([v, label, day, change], i) =>
-    `<div class="row"><span class="name"><span>Version ${v} · ${label}</span>${change ? `<span class="desc">${change}</span>` : ''}</span>
-      <div class="val"><span class="when">${day}</span>${i === 0 ? '<span class="pill ok">Current</span>' : '<button class="btn quiet small">Restore</button>'}</div></div>`).join('')}</div>`;
+function clientHtml() {
+  return `<div class="col">
+    <div class="head"><h1>Northwind Trading</h1><button class="btn quiet">Rename</button></div>
+    <div class="tabs"><button class="on">Notes</button><button>Runs</button><button>History</button></div>
+    <textarea aria-label="Notes for Northwind Trading" placeholder="Rules every run for this client should follow">${state.notes}</textarea>
+    <div class="row-end">${state.saved ? `<span class="note">${state.saved}</span>` : ''}<button class="btn primary" disabled>Save</button></div></div>`;
 }
 
 function draw() {
-  const tabs = [['notes', 'Notes'], ['runs', 'Runs'], ['history', 'History']]
-    .map(([id, label]) => `<button class="${state.tab === id ? 'on' : ''}" data-tab="${id}">${label}</button>`).join('');
-  const body = { notes: notesTab, runs: runsTab, history: historyTab }[state.tab]();
-  $('#page').innerHTML = `<div class="page-head"><button class="icon-btn" aria-label="Back to clients">${BACK}</button>
-    <h1>${NAME}</h1><button class="btn text">Rename</button></div><div class="filter">${tabs}</div>${body}`;
-  const box = $('#notes');
-  if (box) box.value = state.text;
+  document.getElementById('main').innerHTML = state.view === 'run' ? runHtml() : clientHtml();
+  document.querySelectorAll('.item').forEach((b) => b.classList.toggle('on', b.dataset.go === state.view));
 }
 
-document.addEventListener('input', (e) => {
-  if (e.target.id !== 'notes') return;
-  state.text = e.target.value;
-  $('[data-act="save"]').disabled = state.text === state.saved; // typing never redraws the page
-});
 document.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-tab], [data-act]');
-  if (!el) return;
-  if (el.dataset.tab) state.tab = el.dataset.tab;
-  else if (el.dataset.act === 'save') Object.assign(state, { saved: state.text, justSaved: state.kind === 'new' });
-  else if (el.dataset.act === 'restore') Object.assign(state, { kind: 'notes', text: NOTES, saved: NOTES });
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  const go = e.target.closest('[data-go]')?.dataset.go;
+  if (act === 'toggle') state.offer = state.offer === 'open' ? 'folded' : 'open';
+  else if (act === 'save') Object.assign(state, { offer: 'saved', notes: NOTES, saved: 'Version 2 · From the October 2026 payroll run' });
+  else if (act === 'undo') Object.assign(state, { offer: 'open', notes: '', saved: '' });
+  else if (act === 'notnow' || act === 'hide') state.offer = 'gone';
+  else if (go) state.view = go;
+  else return;
   draw();
 });
 
 const STATES = [
-  ['Brand-new client', {}],
-  ['New client, typing', { text: 'Their financial year ends on 31 March.' }],
-  ['First notes saved', { text: 'Their financial year ends on 31 March.', saved: 'Their financial year ends on 31 March.', justSaved: true }],
-  ['New client, runs', { tab: 'runs' }],
-  ['New client, history', { tab: 'history' }],
-  ['Client with notes', { kind: 'notes', text: NOTES, saved: NOTES }],
-  ['Notes kept from a comment', { kind: 'notes', text: NOTES, saved: NOTES, added: true }],
-  ['All notes removed', { kind: 'cleared' }],
-  ['Removed, history', { kind: 'cleared', tab: 'history' }],
+  ['Run finished, offer folded', {}],
+  ['Offer open', { offer: 'open' }],
+  ['Saved', { offer: 'saved', notes: NOTES, saved: 'Version 2 · From the October 2026 payroll run' }],
+  ['Not now', { offer: 'gone' }],
+  ['New client, empty notes', { view: 'client' }],
+  ['Notes after saving', { view: 'client', offer: 'saved', notes: NOTES, saved: 'Version 2 · From the October 2026 payroll run' }],
 ];
-const bar = $('#switcher');
+const bar = document.getElementById('switcher');
 STATES.forEach(([name, s], n) => {
   const b = document.createElement('button');
   b.textContent = name;
