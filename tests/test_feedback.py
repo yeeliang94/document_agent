@@ -889,3 +889,115 @@ def test_word_and_long_text_outputs_compare_quickly_and_fully(tmp_path):
     found = feedback.changes_since(store, job['id'], 'outputs/log.md')
     assert time.monotonic() - started < 2
     assert found['lines'] == {str(i + 1): long[i] for i in range(0, len(long), 50)} and found['removed'] == []
+
+
+def test_the_agent_answers_each_comment_and_the_save_names_any_left_unanswered(tmp_path):
+    store, job = job_with_outputs(tmp_path)
+    feedback.create_round(store, job['id'], ROUND, [CELL, LINE, PAGE])
+    assert 'pass answers' in feedback.rounds(store, job['id'])[0]['message']  # the round asks for them
+    control = service.AppControl(store, job['id'])
+    control.new_messages()
+    assert control.after_save()['comment_changes']['unanswered'] == ['1.1', '1.2', '1.3']
+
+    kept = control.answer([
+        {'comment': '1.1', 'answer': 'Changed  Employees!C2 to 1,960.00:\n14 of 30 days.'},
+        {'comment': '1.3', 'answer': 'Left as is; the PDF total is right.'},
+        {'comment': '1.9', 'answer': 'No such comment.'},
+        {'comment': '2.1', 'answer': 'No such round.'},
+        {'comment': 'first', 'answer': 'Not a number.'},
+        {'comment': '1.2', 'answer': '   '},
+    ])
+    assert kept['kept'] == ['1.1', '1.3']
+    assert kept['not_kept'] == [
+        'first: name a comment by its number, e.g. "2.1"',
+        '1.2: the answer is empty',
+        '1.9: round 1 has 3 comments',
+        '2.1: no round 2 is open in this run',
+    ]
+    assert control.after_save()['comment_changes']['unanswered'] == ['1.2']
+    control.answer([{'comment': '1.1', 'answer': 'Changed it again.'}])  # a later answer replaces the earlier one
+    (entry,) = feedback.rounds(store, job['id'])
+    assert entry['answers'] == {'1': 'Changed it again.', '3': 'Left as is; the PDF total is right.'}
+
+    # Once the round is done, nothing more can be answered on it, and the answers stay with it.
+    feedback.close_rounds(store, job['id'])
+    assert control.answer([{'comment': '1.2', 'answer': 'Late.'}])['not_kept'] == ['1.2: no round 1 is open in this run']
+    assert feedback.rounds(store, job['id'])[0]['answers']['1'] == 'Changed it again.'
+
+
+def test_save_outputs_passes_the_answers_on_and_says_which_were_not_kept(tmp_path):
+    seen = []
+
+    class Answering(engine.Control):
+        def answer(self, answers):
+            seen.append(answers)
+            return {'kept': ['1.1'], 'not_kept': ['1.4: round 1 has 3 comments']}
+
+    spec = SimpleNamespace(deliverables=(), rules=(), skills=())
+    run = SimpleNamespace(main=FakeBox(), store=RunStore(tmp_path / 'runs'), spec=spec, files=[], proof='none',
+                          saved=False, control=Answering(), **ENGINE_DEFAULTS)  # fmt: skip
+    arguments = json.dumps({'answers': [{'comment': '1.1', 'answer': 'Done.'}, {'comment': '1.4', 'answer': 'Done.'}]})
+    context = ToolContext(run, tool_name='save_outputs', tool_call_id='1', tool_arguments=arguments)
+    reply = json.loads(asyncio.run(engine.save_outputs.on_invoke_tool(context, arguments)))
+    assert seen == [[{'comment': '1.1', 'answer': 'Done.'}, {'comment': '1.4', 'answer': 'Done.'}]]
+    assert reply['answers_not_kept'] == ['1.4: round 1 has 3 comments'] and 'saved_to_run_folder' in reply
+    context = ToolContext(run, tool_name='save_outputs', tool_call_id='2', tool_arguments='{}')
+    assert 'answers_not_kept' not in json.loads(asyncio.run(engine.save_outputs.on_invoke_tool(context, '{}')))
+    assert len(seen) == 1  # no answers, no call
+
+
+def test_a_reply_points_where_its_comment_did_and_carries_the_earlier_exchange(tmp_path):
+    store, job = job_with_outputs(tmp_path)
+    feedback.create_round(store, job['id'], ROUND, [CELL, LINE])
+    control = service.AppControl(store, job['id'])
+    control.new_messages()
+    control.answer([{'comment': '1.1', 'answer': 'Left as is: the contract says 30 days.'}])
+    feedback.resolve(store, job['id'], '1.1', True)
+    feedback.resolve(store, job['id'], '1.2', True)
+    assert feedback.rounds(store, job['id'])[0]['resolved'] == [1, 2]
+    feedback.close_rounds(store, job['id'])
+
+    # The browser's spot is ignored for a reply: it goes where comment 1.1 was.
+    reply = {'path': 'outputs/notes.md', 'line': 3, 'text': 'He joined on 17 Nov, see the HR letter.', 'reply_to': '1.1'}
+    made = feedback.create_round(store, job['id'], 'round-0002-abcd', [reply])
+    first, second = feedback.rounds(store, job['id'])
+    (entry,) = second['comments']
+    assert (entry['path'], entry['sheet'], entry['cell'], entry['reply_to']) == ('outputs/upload.xlsx', 'Employees', 'C2', '1.1')
+    assert 'line' not in entry
+    assert 'a reply to comment 1.1: "He joined on 17 Nov. Pay 14 of 30 days.", which you answered: "Left as is: the contract says 30 days."' in second['message']
+    assert first['resolved'] == [2]  # replying opened comment 1.1 again
+    assert store.events(job['id'])[-1]['comments'][0]['reply_to'] == '1.1'
+    assert made['number'] == 2
+
+    with pytest.raises(ValueError, match='does not have'):
+        feedback.create_round(store, job['id'], 'round-0003-abcd', [{**reply, 'reply_to': '1.7'}])
+    with pytest.raises(ValueError, match='no such comment'):
+        feedback.resolve(store, job['id'], '4.1', True)
+
+
+def test_resolving_through_the_api_tells_the_agent_nothing(tmp_path, monkeypatch):
+    async def behaviour(outputs, **_):
+        write_outputs(outputs)
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        store = client.app.state.store
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        wait_for_runner_idle(client)
+        job_id = job['id']
+        feedback.create_round(store, job_id, ROUND, [COMMENT])
+        before = store.get(job_id)['pending_messages']
+        url = f'/api/jobs/{job_id}/comments/resolve'
+        rounds = client.post(url, json={'comment': '1.1'}).json()
+        assert rounds[0]['resolved'] == [1] and store.get(job_id)['pending_messages'] == before
+        assert client.post(url, json={'comment': '1.1', 'resolved': False}).json()[0]['resolved'] == []
+        assert client.post(url, json={'comment': '9.1'}).status_code == 404
+        assert client.post(url, json={'comment': 'x'}).status_code == 422
+        found = client.post(f'/api/jobs/{job_id}/links', json={'texts': ['Fixed Employees!C2.', 'Nothing here.']}).json()
+        assert found['links'][0] == [{'start': 6, 'end': 18, 'path': 'outputs/template_output.xlsx', 'sheet': 'Employees', 'cell': 'C2'}]
+        assert found['links'][1] == []
+        # The chat's card of a sent round carries each comment's spot, so it can open the file there.
+        sent = next(e for e in store.events(job_id) if e['name'] == 'feedback.sent')
+        assert (sent['comments'][0]['sheet'], sent['comments'][0]['cell']) == ('Employees', 'C2')

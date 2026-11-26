@@ -112,10 +112,11 @@ class Store:
     def summaries(self):
         """Run-history rows without file manifests, prompts or summaries. The hidden jobs that replay a past
         correction (app/replay.py) are not runs the user started, and are left out."""
-        fields = ('id', 'module', 'period', 'status', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'module', 'period', 'status', 'created_at', 'updated_at')
         columns = [f"json_extract(data,'$.{f}')" for f in fields] + [
             "json_extract(data,'$.playbook.name')",
             "json_extract(data,'$.client.name')",
+            "json_extract(data,'$.client.id')",
             "substr(json_extract(data,'$.instructions'),1,80)",  # what tells apart runs that have no month
         ]
         with self.connect() as c:
@@ -123,7 +124,7 @@ class Store:
                 'SELECT ' + ','.join(columns) + " FROM jobs WHERE json_extract(data,'$.replay') IS NULL "
                 "ORDER BY json_extract(data,'$.created_at') DESC"
             ).fetchall()
-        return [dict(zip((*fields, 'playbook', 'client', 'title'), r, strict=True)) for r in rows]
+        return [dict(zip((*fields, 'playbook', 'client', 'client_id', 'title'), r, strict=True)) for r in rows]
 
     def delete(self, job_id):
         with self.connect() as c:

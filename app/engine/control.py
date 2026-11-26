@@ -44,6 +44,11 @@ class Control:
         agent, "client": {"name", "notes"} of the client attached, or None}."""
         return {'reply': 'No client can be followed in this run.', 'client': None}
 
+    def answer(self, answers: list[dict]) -> dict:
+        """Keep the agent's answers to the user's comments ([{"comment": "2.1", "answer": ...}]). Returns
+        {"kept": [...], "not_kept": [...]}."""
+        return {'kept': [], 'not_kept': [f'{a.get("comment")}: there are no comments in this run' for a in answers]}
+
     def after_save(self) -> dict:
         """Extra facts for the agent about the files it just saved, added to what save_outputs returns."""
         return {}

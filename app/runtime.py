@@ -7,7 +7,6 @@ import asyncio
 
 from . import cases, curator, feedback, jobstatus, plain_errors, replay, tidy
 from .config import Settings
-from .engine.agent import MAX_QUESTIONS
 from .engine.service import SandboxEngine
 from .store import Store, clean
 
@@ -158,6 +157,11 @@ class Runner:
     async def work(self):
         while True:
             job_id = await self.queue.get()
+            try:
+                self.store.get(job_id)
+            except (KeyError, ValueError):  # deleted while it waited in the queue: nothing to run or clean up
+                self.queue.task_done()
+                continue
             self.active = job_id
             try:
                 # A job paused or cancelled while it waited in the queue is skipped.
@@ -211,7 +215,7 @@ class Runner:
         options = self.store.settings()
         minutes = options['time_limit_minutes']
         # Time spent waiting for answers does not count against the engine's limit, so the backstop allows for it.
-        waits = options['question_wait_minutes'] * MAX_QUESTIONS
+        waits = options['question_wait_minutes'] * options['max_questions']
         deadline = asyncio.timeout((minutes + waits) * 60 + 300)
         try:
             async with deadline:

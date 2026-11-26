@@ -37,6 +37,10 @@ def test_settings_page_values_are_stored_and_checked(tmp_path):
         bad = client.put('/api/settings', json={'values': {'max_scouts': 99}})
         assert bad.status_code == 400 and 'from 0 to 8' in bad.json()['detail']
         assert client.put('/api/settings', json={'values': {'colour': 'red'}}).status_code == 400
+        # The page shows the sentence beside the field it names, so the sentence does not repeat the label.
+        steps = client.put('/api/settings', json={'values': {'max_scouts': 1, 'max_turns': 99999}}).json()
+        assert steps == {'detail': 'Choose a whole number from 10 to 200.', 'field': 'max_turns'}
+        assert client.get('/api/settings').json()['values']['max_scouts'] == 2  # nothing of a refused save is kept
     with client_for(tmp_path) as client:  # survives a restart
         assert client.get('/api/settings').json()['values']['max_scouts'] == 2
 
@@ -101,7 +105,7 @@ def test_a_sandbox_job_runs_on_the_engine_and_settles(tmp_path, monkeypatch):
         assert call.spec.context == 'Synthetic test company'
         assert zipfile.ZipFile(call.spec.zip).namelist() == ['HR/Reports/employees.txt']
         messages = [e['message'] for e in client.get(f'/api/jobs/{job["id"]}/events').json()]
-        assert 'Saved outputs; checks passed' in messages and not any('001-main' in m for m in messages)
+        assert 'Saved the work; the checks passed' in messages and not any('001-main' in m for m in messages)
 
 
 def test_the_feed_shows_what_a_script_was_for(tmp_path, monkeypatch):
@@ -196,11 +200,11 @@ def test_the_feed_shows_each_script_live_and_once(tmp_path, monkeypatch):
         events = [e for e in client.get(f'/api/jobs/{job["id"]}/events').json() if e['name'].startswith('engine.code')]
         shown = [(e['name'], e['message'], e['level'], e.get('files')) for e in events]
         assert shown == [
-            ('engine.code.started', 'Running code in the sandbox', 'INFO', None),
+            ('engine.code.started', 'Working on the files', 'INFO', None),
             ('engine.code.writing', 'Check the bank file', 'INFO', None),
             ('engine.code.running', 'Reading', 'INFO', ['Bank.csv']),
             ('engine.code.finished', 'Check the bank file', 'INFO', ['Bank.csv']),
-            ('engine.code.finished', 'Ran code in the sandbox', 'INFO', []),
+            ('engine.code.finished', 'Worked on the files', 'INFO', []),
         ]  # the end-of-reply copy of a script already shown is not repeated
 
 
@@ -954,6 +958,39 @@ def test_a_file_sent_as_a_run_restarts_is_in_its_packet(tmp_path, monkeypatch):
         assert 'HR/Added/late.csv' in zipfile.ZipFile(fake.calls[1].spec.zip).namelist()
 
 
+def test_the_questions_limit_is_a_setting_the_run_keeps_to(tmp_path, monkeypatch):
+    from app.engine.agent import ask
+
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        return finished()
+
+    fake = FakeRun(behaviour)
+    monkeypatch.setattr(service, 'run_job', fake)
+    with client_for(tmp_path) as client:
+        assert client.get('/api/settings').json()['values']['max_questions'] == 3
+        assert client.put('/api/settings', json={'values': {'max_questions': 11}}).json()['field'] == 'max_questions'
+        assert client.put('/api/settings', json={'values': {'max_questions': 1}}).status_code == 200
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        assert fake.calls[0].options['max_questions'] == 1
+
+    asked = []
+
+    class Answerer:
+        log = [{'question': 'Which salary?', 'answer': '4,500'}]  # one asked already, in an earlier run
+
+        async def answer(self, question, details):
+            asked.append(question)
+            return 'Yes'
+
+    events = SimpleNamespace(event=lambda *a, **k: None)
+    job = SimpleNamespace(store=events, answerer=Answerer(), waits=0, clock=None, held=(), max_questions=1)
+    assert 'limit for this job is used up' in asyncio.run(ask(job, 'And the start date?'))
+    job.max_questions = 2
+    assert asyncio.run(ask(job, 'And the start date?')) == 'Yes' and asked == ['And the start date?']
+
+
 def test_more_steps_go_to_a_run_that_is_going_or_paused_and_are_taken_once(tmp_path):
     store = Store(tmp_path)
     job = store.create('payroll', '2026-10', 'x', 'y')
@@ -969,6 +1006,35 @@ def test_more_steps_go_to_a_run_that_is_going_or_paused_and_are_taken_once(tmp_p
         control = AppControl(client.app.state.store, job['id'])
         assert control.more_turns() == 50 and control.more_turns() == 0  # given to the run once
         assert any(e['name'] == 'user.more_steps' for e in client.get(f'/api/jobs/{job["id"]}/events').json())
+        assert client.get('/api/config').json()['more_steps'] == 30  # the run screen's button names the amount
+
+
+def test_the_near_limit_line_keeps_which_limit_so_the_screen_offers_steps_only_for_steps(tmp_path, monkeypatch):
+    async def behaviour(outputs, on_event, **_):
+        on_event('limit.near', {'what': 'turns', 'said': '8 steps left'})
+        on_event('limit.near', {'what': 'time', 'said': 'About 3 minutes left'})
+        write_output(outputs)
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        events = [e for e in client.get(f'/api/jobs/{job["id"]}/events').json() if e['name'] == 'engine.limit.near']
+        assert [(e['what'], e['said'], e['level']) for e in events] == [
+            ('turns', '8 steps left', 'WARN'),
+            ('time', 'About 3 minutes left', 'WARN'),
+        ]
+        assert events[0]['message'] == '8 steps left. The agent is saving its work and writing down what is still open'
+
+
+def test_the_feed_counts_in_plain_words():
+    say = service.MESSAGES
+    assert say['run.started']({'files': 1}) == 'Started on 1 file'
+    assert say['outputs.saved']({'passed': False, 'issues': ['a', 'b']}) == 'Saved the work; 2 problems to fix'
+    assert say['outputs.saved']({'passed': False, 'issues': ['a']}) == 'Saved the work; 1 problem to fix'
+    assert say['review.finished']({'verdict': 'pass', 'doubts': 1}) == 'The reviewer finished: pass, 1 doubt'
+    assert 'sandbox' not in say['sandbox.ready']({}) + say['code.started']({}) + say['code.finished']({})
 
 
 def test_condensing_is_asked_for_at_the_settings_size_and_noted_when_it_happens(tmp_path):

@@ -80,15 +80,18 @@ def where(store, job: dict, scope: str):
     return (store.playbooks, playbook_id) if playbook_id else None
 
 
-NO = re.compile(r'^\W*(no|not|nope|neither|wrong)\b', re.IGNORECASE)
+NEGATED = re.compile(r"\b(no|not|never|neither|nope|wrong)\b|n't\b", re.IGNORECASE)
 YES = re.compile(r'^\W*(yes|yeah|yep|correct|right|confirmed|it is|that is)\b', re.IGNORECASE)
 
 
 def confirmed(name: str, answer: str) -> bool:
-    """True when the user's answer says yes to this client: it starts with a yes, or names the client and does not
-    start with a no. Anything else (a no, another client, a question back) is not a yes."""
-    answer = answer or ''
-    return not NO.match(answer) and bool(YES.match(answer) or mentions(name, answer))
+    """True only for a clear yes to this client: an answer that starts with a yes, or that is the client's name (a
+    choice picked), with no "not", "no" or question in it. Anything else is not a yes; the run then carries on
+    without client notes, which is the safe side."""
+    answer = ' '.join((answer or '').split())
+    if not answer or '?' in answer or NEGATED.search(answer):
+        return False
+    return bool(YES.match(answer)) or words(answer) == words(name) or _key(answer) == _key(name)
 
 
 def follow(store, job_id: str, name: str) -> dict:

@@ -3,6 +3,7 @@
 import {
   attr, btn, bytes, currentPlaybook, esc, fmtTime, isWarning, playbooks, state,
 } from './core.js'; // prettier-ignore
+import { clientRow } from './clients.js';
 
 const page = (width, body) => `<div class="page"><div class="${width}">${body}</div></div>`;
 const row = (label, control) => `<div class="row"><span>${esc(label)}</span>${control}</div>`;
@@ -48,6 +49,7 @@ export function setupPage() {
     <div class="rows">
       ${row('Source files', `<div class="val">${picked}${btn('folder', state.files.length ? 'Change folder' : 'Choose folder', 'quiet', false, 'clip')}${btn('files', 'Choose files or ZIP', 'text')}</div>`)}
       ${row('Playbook', playbookSelect())}
+      ${clientRow(row)}
     </div>
     ${
       more
@@ -65,48 +67,121 @@ export function setupPage() {
   );
 }
 
+// --- Settings ----------------------------------------------------------------
+
+// Numbers typed on the Settings page: the unit shown beside each, and how many stored units make one shown unit
+// (token limits are kept in thousands and shown in millions).
+const UNITS = {
+  max_turns: ['steps'],
+  more_steps: ['steps'],
+  time_limit_minutes: ['minutes'],
+  token_limit_thousands: ['million tokens', 1000],
+  question_wait_minutes: ['minutes'],
+  condense_at_thousands: ['thousand tokens'],
+  versions_kept: ['versions'],
+  daily_token_limit_thousands: ['million tokens', 1000],
+};
+const scaleOf = (name) => UNITS[name]?.[1] || 1;
+const shownNumber = (n) => n.toLocaleString('en', { maximumFractionDigits: 3 });
+
+// A typed number, in the units the server keeps; NaN when it is not a number.
+function storedValue(name, value) {
+  if (!UNITS[name] || typeof value !== 'string') return value;
+  const text = value.replace(/,/g, '').trim();
+  const n = text === '' ? NaN : Number(text);
+  return Number.isFinite(n) ? Math.round(n * scaleOf(name) * 1e6) / 1e6 : NaN;
+}
+
+// What is wrong with a typed number, as a sentence for beside the field, or ''.
+export function settingProblem(name, value) {
+  const option = state.settings?.options?.[name];
+  if (!option || !UNITS[name] || typeof value !== 'string') return '';
+  const scale = scaleOf(name);
+  const range = `from ${shownNumber(option.low / scale)} to ${shownNumber(option.high / scale)}`;
+  const n = storedValue(name, value);
+  if (Number.isNaN(n)) return `Enter a number ${range}.`;
+  if (!Number.isInteger(n)) return scale === 1 ? `Choose a whole number ${range}.` : `Use at most ${Math.log10(scale)} decimal places.`;
+  if (n < option.low || n > option.high) return `Choose a number ${range}.`;
+  return '';
+}
+
+// The draft as the server takes it.
+export const settingsValues = () =>
+  Object.fromEntries(Object.entries(state.settingsDraft || {}).map(([name, value]) => [name, storedValue(name, value)]));
+export const settingsChanged = () =>
+  Object.entries(settingsValues()).some(([name, value]) => !Object.is(value, state.settings.values[name]));
+
 export function settingsPage() {
-  const head = `<div class="page-head"><h1>Settings</h1>${btn('save-settings', 'Save', 'primary', state.busy || !state.settingsDraft)}</div>`;
+  const changed = !!state.settingsDraft && settingsChanged();
+  const head = `<div class="page-head"><h1>Settings</h1>${btn('save-settings', 'Save', 'primary', state.busy || !changed)}</div>`;
   if (state.settingsError) return page('narrow', `${head}<p class="problem">${esc(state.settingsError)}</p>`);
   if (!state.settingsDraft) return page('narrow', `${head}<p class="empty">Loading</p>`);
   const v = state.settingsDraft;
   const options = state.settings.options;
-  const select = (name, labels) =>
-    `<select id="setting-${name}" data-setting="${name}" aria-label="${esc(options[name].label)}">${options[name].choices
-      .map((c) => `<option value="${esc(c)}" ${attr('selected', v[name] === c)}>${esc(labels?.[c] ?? c)}</option>`)
-      .join('')}</select>`;
-  const number = (name) =>
-    `<input id="setting-${name}" type="number" data-setting="${name}" min="${options[name].low}" max="${options[name].high}" value="${esc(v[name])}" aria-label="${esc(options[name].label)}">`;
+  const errors = state.settingsErrors || {};
+  // A row whose value was refused shows why, beside the field.
+  const field = (name, label, control) => {
+    const error = errors[name];
+    return `<div class="row ${error ? 'err' : ''}"><span>${esc(label)}</span>${control}${error ? `<p class="problem" id="setting-${name}-error">${esc(error)}</p>` : ''}</div>`;
+  };
+  const invalid = (name) => (errors[name] ? `aria-invalid="true" aria-describedby="setting-${name}-error"` : '');
+  const number = (name, label) => {
+    const [unit] = UNITS[name];
+    const value = typeof v[name] === 'string' ? v[name] : shownNumber(v[name] / scaleOf(name)).replace(/,/g, '');
+    return field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" inputmode="decimal" autocomplete="off" value="${esc(value)}" aria-label="${esc(label)}" ${invalid(name)}><span>${esc(unit)}</span></label>`);
+  };
+  const choice = (name, label, labels) =>
+    field(name, label, `<div class="seg" role="group" aria-label="${esc(label)}">${options[name].choices.map((c) => segment(name, c, labels[c] ?? c, v[name] === c)).join('')}</div>`);
+  const steps = (name, label) => field(name, label, stepper(name, label, v[name], options[name].low, options[name].high));
+  // A two-way choice reads as on or off: its first choice is on.
+  const onOff = (name, label) => {
+    const choices = options[name].choices;
+    return field(name, label, toggle(name, label, choices.length ? v[name] === choices[0] : v[name]));
+  };
   const panel = (title, rows) => `<section class="rows"><h2>${esc(title)}</h2>${rows}</section>`;
+  const millions = (thousands) => shownNumber(Math.round(thousands / 100) / 10);
+  const daily = state.settings.values.daily_token_limit_thousands;
+  const today = millions((state.settings.tokens_today || 0) / 1000);
   const connection = state.settings.connection;
-  const agent =
-    row('Parallel scouts', stepper('max_scouts', 'Parallel scouts', v.max_scouts, options.max_scouts.low, options.max_scouts.high)) +
-    row('Independent reviewer', toggle('reviewer', 'Independent reviewer', v.reviewer)) +
-    row('Show the agent its files before it finishes', toggle('look_before_finish', 'Show the agent its files before it finishes', v.look_before_finish)) +
-    row('Proof level', select('proof', { row: 'Sources for every row', none: 'None' })) +
-    row('Reasoning effort', select('effort', { low: 'Low', medium: 'Medium', high: 'High' })) +
-    row('Re-check past corrections', select('replay_tests', { never: 'Never', large: 'After a rewrite or tidy', every: 'After every change' }));
-  const limits = panel(
-    'Limits',
-    row('Turn limit per run', number('max_turns')) +
-      row('Steps added by "More steps"', number('more_steps')) +
-      row('Time limit per run (minutes)', number('time_limit_minutes')) +
-      row('Token limit per run (thousands)', number('token_limit_thousands')) +
-      row('Token limit per day, all runs (thousands, 0 for none)', number('daily_token_limit_thousands')) +
-      row('Used today (thousands)', `<span class="value">${Math.round((state.settings.tokens_today || 0) / 1000).toLocaleString()}</span>`) +
-      row('Hold sandbox for an answer (minutes)', number('question_wait_minutes')) +
-      row('Condense history at (thousands of tokens, 0 for never)', number('condense_at_thousands')) +
-      row('Versions kept per run', number('versions_kept')) +
-      row('Sandbox memory', select('sandbox_memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' })),
+  return page(
+    'narrow',
+    head +
+      panel(
+        'Agent',
+        steps('max_scouts', 'Helper agents for large folders') +
+          onOff('reviewer', 'Second agent reviews the result') +
+          onOff('proof', 'Record a source for every row') +
+          onOff('look_before_finish', 'Show the agent its files before it finishes') +
+          choice('effort', 'Thinking depth', { low: 'Low', medium: 'Medium', high: 'High' }) +
+          steps('max_questions', 'Questions it may ask per job') +
+          choice('replay_tests', 'Re-check past corrections', { never: 'Never', large: 'Big changes', every: 'Every change' }),
+      ) +
+      panel(
+        'Limits per run',
+        number('max_turns', 'Steps') +
+          number('more_steps', '"More steps" adds') +
+          number('time_limit_minutes', 'Time') +
+          number('token_limit_thousands', 'AI usage') +
+          number('question_wait_minutes', 'Wait for your answer') +
+          number('condense_at_thousands', 'Condense history at (0 for never)') +
+          number('versions_kept', 'Versions kept') +
+          choice('sandbox_memory', 'Workspace memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' }),
+      ) +
+      panel(
+        'Limits per day',
+        number('daily_token_limit_thousands', 'AI usage (0 for no limit)') +
+          field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
+      ) +
+      panel(
+        'Connection',
+        field('', 'Model', `<span class="value">${esc(connection.model)}</span>`) +
+          field('', 'Service address', `<span class="value">${esc(connection.base_url)}</span>`) +
+          field('litellm_provider', 'LiteLLM provider header', `<label class="unit ${errors.litellm_provider ? 'bad' : ''}"><input id="setting-litellm_provider" data-setting="litellm_provider" value="${esc(v.litellm_provider)}" placeholder="None" autocomplete="off" aria-label="LiteLLM provider header" ${invalid('litellm_provider')}></label>`) +
+          onOff('model_on_create', 'Name the model when creating a workspace') +
+          field('', 'Connection', btn('connection', 'Test', 'quiet small', state.busy)) +
+          (connection.warning ? `<p class="problem row">${esc(connection.warning)}</p>` : ''),
+      ),
   );
-  const link =
-    row('Endpoint', `<span class="value">${esc(connection.base_url)}</span>`) +
-    row('Model', `<span class="value">${esc(connection.model)}</span>`) +
-    row('LiteLLM provider header', `<input id="setting-litellm_provider" data-setting="litellm_provider" value="${esc(v.litellm_provider)}" placeholder="None" aria-label="LiteLLM provider header">`) +
-    row('Name the model when creating a sandbox', toggle('model_on_create', 'Name the model when creating a sandbox', v.model_on_create)) +
-    row('Check the connection', btn('connection', 'Test', 'quiet', state.busy)) +
-    (connection.warning ? `<p class="problem row">${esc(connection.warning)}</p>` : '');
-  return page('narrow', head + panel('Agent', agent) + limits + panel('Connection', link));
 }
 
 const FILTERS = [

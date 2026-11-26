@@ -28,6 +28,7 @@ def test_a_run_ends_with_all_four_parts_of_the_report(tmp_path, monkeypatch):
         job = start_sandbox_job(client)
         done = wait_for_job(client, job['id'])
         assert done['report'] == {k: v for k, v in ANSWER.items() if k not in ('status', 'open_questions')}
+        assert done['stopped_because'] is None
         assert done['summary'] == ANSWER['headline'] + " Check before sending: Alex Example's start date: the file gives 1 October."  # fmt: skip
         text = client.get(f'/api/jobs/{job["id"]}/artifacts/processing_summary.txt').text
         assert text == (
@@ -52,6 +53,7 @@ def test_a_stopped_run_adds_why_it_stopped_after_the_headline(tmp_path, monkeypa
         assert done['status'] == 'partial'
         assert done['summary'].startswith(ANSWER['headline']) and '\nThe run used all its steps.' in done['summary']
         assert 'Still to fix: provenance.json' in done['summary']
+        assert done['stopped_because'] == 'The run used all its steps. Give it more steps, or continue the run.'
         text = client.get(f'/api/jobs/{job["id"]}/artifacts/processing_summary.txt').text
         assert text.startswith(ANSWER['headline'] + '\n\nThe run used all its steps.') and 'Decisions made:' in text
 

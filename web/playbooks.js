@@ -13,7 +13,7 @@ const TABS = [
 ];
 const url = (rest = '') => `/api/playbooks/${encodeURIComponent(state.book.id)}${rest}`;
 const page = (body) => `<div class="page"><div class="narrow">${body}</div></div>`;
-const day = (t) => new Date(t).toLocaleDateString('en', { day: 'numeric', month: 'short' });
+export const day = (t) => new Date(t).toLocaleDateString('en', { day: 'numeric', month: 'short' });
 const json = (body) => ({ method: 'POST', body: JSON.stringify(body) });
 
 // --- The list ---------------------------------------------------------------
@@ -48,10 +48,10 @@ async function loadPlaybook(book = state.book) {
 
 const text = () => state.book.draft ?? state.book.data.text;
 // Typed and not saved. While it is, the agent is not asked and no version is restored: both would replace it.
-const unsaved = (book = state.book) => book.draft !== null && book.draft !== book.data.text;
+export const unsaved = (book = state.book) => book.draft !== null && book.draft !== book.data.text;
 // The version a save starts from. A draft keeps the version it was typed over, however often the page reloads the
 // playbook, so a change saved meanwhile is reported and not silently replaced.
-const base = (book) => (book.draft !== null && book.base ? book.base : book.data.version);
+export const base = (book) => (book.draft !== null && book.base ? book.base : book.data.version);
 export const startDraft = (book, value) => {
   if (book.draft === null) book.base = book.data.version;
   book.draft = value;
@@ -135,7 +135,7 @@ function skillsTab(book) {
 }
 
 // What a version was, in a few words, from how it came to be.
-function versionLabel(v) {
+export function versionLabel(v) {
   if (v.source === 'restored') return v.change;
   if (v.source === 'remembered') {
     const job = state.jobs.find((j) => j.id === v.detail?.job_id);
@@ -149,18 +149,21 @@ function versionLabel(v) {
   return { edited: 'Edited by you', tuned: 'Tuned with the agent', tidied: 'Tidied by the agent' }[v.source] || v.source;
 }
 
-function historyTab(book) {
+// Every version, newest first, with Restore on each earlier one. Shared with a client's notes (clients.js), whose
+// buttons carry their own data name so each page handles its own.
+export function historyHtml(book, restore = 'restore') {
   const latest = book.data.version;
   const rows = book.versions
     .map(
       (v) => `<div class="row"><span class="name"><span>Version ${v.version} · ${esc(versionLabel(v))}</span>
           ${v.source !== 'restored' && v.change ? `<span class="desc wrap">${esc(v.change)}</span>` : ''}</span>
         <div class="val"><span class="when">${day(v.created_at)}</span>
-          ${v.version === latest ? pill('ok', 'Current') : `<button class="btn quiet small" data-restore="${v.version}" ${attr('disabled', state.busy || unsaved(book))}>Restore</button>`}</div></div>`,
+          ${v.version === latest ? pill('ok', 'Current') : `<button class="btn quiet small" data-${restore}="${v.version}" ${attr('disabled', state.busy || unsaved(book))}>Restore</button>`}</div></div>`,
     )
     .join('');
   return `<div class="rows">${rows}</div>`;
 }
+const historyTab = (book) => historyHtml(book);
 
 // The past corrections kept as tests. The agent keeps the list; the person reads the score.
 function testsTab(book) {
@@ -248,14 +251,14 @@ export function syncPlaybook() {
 
 // --- Small dialogs ----------------------------------------------------------
 
-function dialog(title, body, action, label) {
+export function dialog(title, body, action, label) {
   $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
     <form class="dialog-body" id="book-form" data-does="${action}">${body}
       <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn primary">${esc(label)}</button></div></form>`;
   $('#details').showModal();
 }
 
-const nameField = (value = '') => `<label>Name<input class="field" name="name" value="${esc(value)}" maxlength="80" required autocomplete="off"></label>`;
+export const nameField = (value = '') => `<label>Name<input class="field" name="name" value="${esc(value)}" maxlength="80" required autocomplete="off"></label>`;
 
 export const playbookDialogs = {
   'new-playbook': () =>

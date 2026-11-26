@@ -171,6 +171,7 @@ class Job:
     looked_before_finish: bool = False
     versions: Path | None = None  # where a version of the outputs is kept at every save; None keeps none
     versions_kept: int = 20  # per run
+    max_questions: int = MAX_QUESTIONS  # over the whole job, earlier runs' questions included (Settings page)
     calls: int = 0  # model calls in the current stream; with turns_used, the step the run is on
     stage: str = 'reading'  # reading, filling, checking: how far the work has got, for the screen
 
@@ -202,7 +203,7 @@ How to work:
 - Check the outcome, not just that a script ran. Before finishing, re-open what you saved and check it against the sources: rows per group, totals, duplicates, and anything that should have been excluded. Then look at each finished sheet as the person receiving it would, with look_at_output, which draws it as Excel shows it: every record inside the table it belongs to, totals covering them, nothing stranded below the template's notes, instructions and labels intact, headers, column widths (#### means a number does not fit), number and date formats.
 - Call save_outputs to copy your outputs to the user's run folder. It checks them on the user's machine and lists any problems. Fix them and call it again. You are done when save_outputs passes. It also lists template_changes: template content that moved or is no longer there as it was. Moves caused by rows you inserted are expected. Explain every other change in notes.md, or undo it if it was not deliberate. It also lists empty_rows: rows left empty among your records, with what each one holds. Fill each one, or say in notes.md why the template means it to stay empty; rows you have explained stay on the list. It also lists totals: each total formula with the value it comes to, worked out on the user's machine; check them against your own sums. A formula that shows an error, or a total whose range leaves out a row of numbers next to it, is a problem to fix. It also lists looks: what will look wrong in Excel in the cells you wrote (#### where a number does not fit, numbers or dates stored as text, numbers with no number format, hidden rows of data). Fix each, or say in notes.md why it stays.
 
-Finish with status "complete" only if save_outputs passed on your final files. Your final answer is the report the user reads first, written for a finance user who will act on it, short and plain, naming files plainly, without sandbox paths or links: a headline (the result, and the answer to anything they asked you), what you did, the decisions you made where the files left room (each with its reason; your assumptions are decisions), and what they should check before sending the work on. The report always covers the whole job, also when you finish again after a later check or review. List anything unresolved in open_questions.
+Finish with status "complete" only if save_outputs passed on your final files. Your final answer is the report the user reads first, written for a finance user who will act on it, short and plain, naming files plainly and cells as Sheet!B4, or 'Sheet name'!B4 when the name has spaces (the screen turns both into links to that spot), without sandbox paths or links: a headline (the result, and the answer to anything they asked you), what you did, the decisions you made where the files left room (each with its reason; your assumptions are decisions), and what they should check before sending the work on. The report always covers the whole job, also when you finish again after a later check or review. List anything unresolved in open_questions.
 
 {card}"""
 
@@ -566,8 +567,8 @@ MAX_CHOICES = 4
 @function_tool(failure_error_function=_tool_error)
 async def ask_user(ctx: RunContextWrapper[Job], question: str, choices: list[Choice], evidence: list[Evidence]) -> str:
     """Ask the user one specific question when the documents cannot settle a material fact. Returns the user's
-    answer: one of your choices, their own words, or a request that you decide. Do the independent work first; at
-    most three questions per job.
+    answer: one of your choices, their own words, or a request that you decide. Do the independent work first; a job
+    may ask only a few questions, and the reply says when none are left.
 
     Args:
         question: One short question in plain words, e.g. "Which start date should I use for Raj Kumar?".
@@ -580,7 +581,7 @@ async def ask_user(ctx: RunContextWrapper[Job], question: str, choices: list[Cho
 
 
 async def ask(job: Job, question: str, choices=(), evidence=()) -> str:
-    if len(job.answerer.log) >= MAX_QUESTIONS:
+    if len(job.answerer.log) >= getattr(job, 'max_questions', MAX_QUESTIONS):
         return (
             'The question limit for this job is used up. Settle the point only if the documents support one answer. '
             'Otherwise do not guess: leave it unresolved, and record it with its options in notes.md and open_questions.'
@@ -650,15 +651,29 @@ def _check(job: Job) -> dict:
         return {'passed': False, 'issues': [problem], 'template_changes': [], 'empty_rows': [], 'summary': {}}
 
 
+class CommentAnswer(BaseModel):
+    comment: str = Field(description='The comment by its number in the round, e.g. "2.1".')
+    answer: str = Field(
+        description='One or two plain sentences the user reads under their comment: what you changed (e.g. '
+        '"Changed Payroll!E3 from 4,200.00 to 4,560.00, adding the overtime in timesheet_march.pdf."), or why you '
+        'left the spot as it was.'
+    )
+
+
 @function_tool(failure_error_function=_tool_error)
-async def save_outputs(ctx: RunContextWrapper[Job]) -> str | list:
+async def save_outputs(ctx: RunContextWrapper[Job], answers: list[CommentAnswer] | None = None) -> str | list:
     """Copy everything under /mnt/data/outputs/ to the user's run folder, replacing the previous copy, and check it on
     the user's machine: each deliverable against its template or format and the job's rules; every packet file
     decided in document_map.json; and, when row proof is on, every written row's sources in provenance.json. Returns
     the saved files, any problems, template_changes: template content that moved or is no longer there as it was,
     which is allowed when deliberate and explained in notes.md, empty_rows: rows left empty among your records,
     to fill or explain, and totals: what each total formula comes to. The first save that passes also shows
-    pictures of the deliverables, to look at before finishing. Call again after fixing the problems."""
+    pictures of the deliverables, to look at before finishing. Call again after fixing the problems.
+
+    Args:
+        answers: When the user has sent comments: your answer to every comment, including those you left as they
+            were. Leave empty otherwise.
+    """
     job = ctx.context
     saved = await sync_outputs(job.main, job.store)
     job.saved = True
@@ -676,6 +691,13 @@ async def save_outputs(ctx: RunContextWrapper[Job]) -> str | list:
             job.store.event('outputs.versioned', number=kept['number'], step=step, description=kept['description'])
         except Exception as error:  # noqa: BLE001 - the save worked; a version that cannot be kept never fails it
             job.store.event('outputs.version_failed', error=f'{type(error).__name__}: {error}')
+    answered = {}
+    if answers:
+        try:
+            answered = await asyncio.to_thread(job.control.answer, [a.model_dump() for a in answers])
+        except Exception as error:  # noqa: BLE001 - the save worked; the agent is told the answers were not kept
+            answered = {'kept': [], 'not_kept': [f'The answers could not be kept ({type(error).__name__}: {error}).']}
+        job.store.event('comments.answered', kept=answered.get('kept', []), not_kept=answered.get('not_kept', []))
     try:
         extra = await asyncio.to_thread(job.control.after_save)
     except Exception as error:  # noqa: BLE001 - the save itself worked; what the caller adds is never a reason to fail it
@@ -683,6 +705,8 @@ async def save_outputs(ctx: RunContextWrapper[Job]) -> str | list:
         extra = {}
     if extra:
         job.store.event('outputs.compared', **extra)
+    if answered.get('not_kept'):
+        extra = {**extra, 'answers_not_kept': answered['not_kept']}
     reply = json.dumps({'saved_to_run_folder': saved, **check, **extra})
     try:
         pictures = await before_finish(job, check)
@@ -1107,6 +1131,7 @@ async def run_job(
     look_before_finish: bool = True,
     versions: Path | None = None,
     versions_kept: int = 20,
+    max_questions: int = MAX_QUESTIONS,
 ) -> RunStore:
     """Run one job. outputs, on_event and control let the app keep outputs in the job folder, show events and steer
     the run. resume, for a run that continues an earlier one in a fresh sandbox, replaces the opening prompt (with
@@ -1138,6 +1163,7 @@ async def run_job(
         max_turns=max_turns,
         condense_at=condense_at,
         look_before_finish=look_before_finish,
+        max_questions=max_questions,
         input_zip=spec.zip.name,
         deliverables=[d.name for d in spec.deliverables],
     )
@@ -1196,6 +1222,7 @@ async def run_job(
                 look_before_finish=look_before_finish,
                 versions=versions,
                 versions_kept=versions_kept,
+                max_questions=max_questions,
                 skills_packed=packed,
                 control=control,
             )

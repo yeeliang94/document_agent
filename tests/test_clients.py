@@ -49,6 +49,20 @@ def test_a_client_keeps_its_notes_as_versions_and_an_earlier_one_can_be_restored
         assert client.get('/api/clients/nobody').status_code == 404
 
 
+def test_undo_from_a_run_brings_back_the_notes_before_and_is_refused_once_they_moved_on(tmp_path):
+    # The run's Undo beside a remembered comment or a lesson is a restore of the version before, based on the
+    # version that added it (web/comments.js forget).
+    with client_for(tmp_path) as client:
+        acme = client.post('/api/clients', json={'name': 'Acme', 'notes': 'Amounts in MYR.'}).json()['id']
+        client.post(f'/api/clients/{acme}/versions', json={'text': 'Amounts in MYR.\n\nTotals in bold.', 'based_on': 1})
+        undone = client.post(f'/api/clients/{acme}/restore', json={'version': 1, 'based_on': 2})
+        assert undone.status_code == 200 and undone.json()['text'] == 'Amounts in MYR.'
+        client.post(f'/api/clients/{acme}/versions', json={'text': 'Later work.', 'based_on': 3})
+        late = client.post(f'/api/clients/{acme}/restore', json={'version': 1, 'based_on': 2})
+        assert late.status_code == 409 and late.json()['detail']['version'] == 4
+        assert client.get(f'/api/clients/{acme}').json()['text'] == 'Later work.'
+
+
 def new_run(client, client_id=''):
     data = {'playbook_id': 'payroll', 'instructions': 'Fill the sheet.', 'client_id': client_id}
     made = client.post('/api/jobs', data=data, files=[TEMPLATE, SOURCE])
@@ -223,7 +237,7 @@ def test_a_no_or_another_client_in_the_answer_attaches_nothing(tmp_path):
         assert followed['client'] is None and 'does not say this run is for Acme' in followed['reply'], answer
         assert store.get(job['id']).get('client') is None
     assert clients.confirmed('Acme', 'Yes') and clients.confirmed('Acme', 'It is Acme.')
-    assert clients.confirmed('华联', '是的, 华联') and clients.mentions('华联 Sdn Bhd', '华联/十月.xlsx')  # any script
+    assert clients.confirmed('华联', '华联') and clients.mentions('华联 Sdn Bhd', '华联/十月.xlsx')  # any script
 
 
 def test_following_a_client_mid_run_drops_other_clients_earlier_runs_and_updates_the_run(tmp_path):
@@ -269,3 +283,11 @@ def test_a_round_that_cannot_be_kept_in_one_place_changes_neither(tmp_path):
     except ValueError as error:
         assert 'would pass 30,000 characters' in str(error)
     assert store.playbooks.get('payroll')['version'] == 1 and store.clients.get(acme)['version'] == 1
+
+
+def test_only_a_clear_yes_confirms_a_client():
+    for answer in ('Yes', 'Yes, it is Acme.', 'Acme', 'ACME Sdn Bhd', 'Correct'):
+        assert clients.confirmed('Acme', answer), answer
+    for answer in ('This is not Acme', "I don't think this is Acme.", 'Is Acme the company on the invoice?',
+                   'Acme or Beta, not sure', 'No', ''):  # fmt: skip
+        assert not clients.confirmed('Acme', answer), answer

@@ -32,7 +32,7 @@ def test_each_save_is_kept_as_a_version_newest_first_and_each_run_keeps_only_its
     assert kept[0]['files'] == ['notes.md', 'out.xlsx'] and kept[0]['run'] == 'run-01' and kept[0]['at']
     # A kept version is a copy: a file changed in place in the outputs (saved from Excel) leaves it as it was.
     save(outputs, 'later')
-    assert (folder / 'v0002' / 'out.xlsx').read_text(encoding='utf-8') == 'step 7'
+    assert (folder / 'v0002' / 'files' / 'out.xlsx').read_text(encoding='utf-8') == 'step 7'
     # Another run's versions are counted on their own.
     versions.keep(outputs, folder, 'run-02', 1, 'Step 1', False, cap=2)
     assert [v['run'] for v in versions.listed(folder)] == ['run-02', 'run-01', 'run-01']
@@ -219,3 +219,83 @@ def test_a_second_click_on_continue_is_refused_while_the_first_is_restoring(tmp_
 def test_a_sentence_the_app_wrote_for_people_is_shown_as_it_is():
     raw = 'ValueError: big.pdf is over 45 MB even compressed; it cannot be uploaded to the sandbox. Split or remove it.'
     assert sentence(raw) == raw.removeprefix('ValueError: ')
+
+
+def test_an_output_named_like_the_versions_own_record_is_kept_as_it_was(tmp_path):
+    outputs, folder = tmp_path / 'outputs', tmp_path / 'versions'
+    outputs.mkdir()
+    (outputs / 'version.json').write_text('{"the": "deliverable"}', encoding='utf-8')
+    versions.keep(outputs, folder, 'run-01', 1, 'Step 1', True, cap=5)
+    (outputs / 'version.json').write_text('changed', encoding='utf-8')
+    versions.restore(folder, 1, outputs)
+    assert (outputs / 'version.json').read_text(encoding='utf-8') == '{"the": "deliverable"}'
+
+
+def test_starting_over_empties_the_outputs_keeps_the_versions_and_tells_the_agent_to_begin_again(tmp_path, monkeypatch):
+    async def stops(outputs, **_):
+        save(outputs, 'v1')
+        versions.keep(outputs, outputs.parent / 'versions', 'run-01', 1, 'Step 1', True, 20)
+        return {**finished(status='stopped', passed=False, error='Reached the 60-turn limit.'), 'cut_short': 'turns'}
+
+    seen = {}
+
+    async def again(outputs, **_):
+        seen['outputs'] = sorted(p.name for p in outputs.iterdir())
+        return finished()
+
+    run = FakeRun(stops)
+    monkeypatch.setattr(service, 'run_job', run)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        wait_for_runner_idle(client)
+        client.app.state.store.update(job['id'], resume_from={'number': 1, 'step': 1, 'run': 'run-01', 'description': 'x'})
+        run.behaviour = again
+        assert client.post(f'/api/jobs/{job["id"]}/start-over').status_code == 200
+        done = wait_for_job(client, job['id'], statuses=('completed',))
+        assert seen['outputs'] == []  # nothing of the earlier work went into the new run
+        card = run.calls[-1].resume
+        assert card.startswith('You are starting this job over') and 'notes at v1' not in card and 'version 1' not in card
+        # The files set aside are kept as a version first, so starting over loses nothing.
+        kept = client.get(f'/api/jobs/{job["id"]}/versions').json()['versions']
+        assert [(v['number'], v['description']) for v in kept] == [(2, 'Before starting over'), (1, 'Step 1')]
+        assert 'start_over' not in done and 'resume_from' not in done
+
+
+def test_a_version_kept_before_files_had_their_own_folder_can_be_restored(tmp_path):
+    outputs, folder = tmp_path / 'outputs', tmp_path / 'versions'
+    outputs.mkdir()
+    old = folder / 'v0001'
+    old.mkdir(parents=True)
+    (old / 'upload.csv').write_text('old', encoding='utf-8')
+    (old / 'version.json').write_text('{"number": 1, "files": ["upload.csv"]}', encoding='utf-8')
+    versions.restore(folder, 1, outputs)
+    assert (outputs / 'upload.csv').read_text(encoding='utf-8') == 'old'
+
+
+def test_a_run_deleted_while_it_waited_in_the_queue_does_not_stop_the_worker(tmp_path, monkeypatch):
+    async def done(outputs, **_):
+        save(outputs, 'v1')
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(done))
+    with client_for(tmp_path) as client:
+        client.portal.call(client.app.state.runner.queue.put, 'a-run-that-was-deleted')
+        job = start_sandbox_job(client)
+        assert wait_for_job(client, job['id'])['status'] == 'completed'
+
+
+def test_starting_over_waits_until_the_run_has_stopped(tmp_path, monkeypatch):
+    async def slow(outputs, control, **_):
+        while not control.stop_requested():
+            await asyncio.sleep(0.02)
+        return finished(status='paused')
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(slow))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'], statuses=('running',))
+        refused = client.post(f'/api/jobs/{job["id"]}/start-over')
+        assert refused.status_code == 409 and refused.json()['detail'] == 'Stop the run before starting over.'
+        client.post(f'/api/jobs/{job["id"]}/pause')
+        wait_for_job(client, job['id'], statuses=('paused',))

@@ -33,29 +33,35 @@ POLL_SECONDS = 1.0
 SECONDS_PER_MINUTE = 60  # tests shorten the question wait through this
 NOTES_LIMIT = 6000
 
+
+def count(n, word: str) -> str:
+    """'1 file', '3 files': the feed says a number the way a person would."""
+    return f'{n} {word}' + ('' if n == 1 else 's')
+
+
 # What the activity feed says for each engine event; events not listed are kept in the run record only.
 MESSAGES = {
-    'run.started': lambda d: f'Started on {d.get("files")} files',
-    'sandbox.ready': lambda d: 'Sandbox ready; inputs uploaded',
-    'code.started': lambda d: 'Running code in the sandbox',
+    'run.started': lambda d: f'Started on {count(d.get("files"), "file")}',
+    'sandbox.ready': lambda d: 'Set up the workspace and copied in the files',
+    'code.started': lambda d: 'Working on the files',
     'tool.called': lambda d: f'Using {d.get("tool")}',
     'tool.failed': lambda d: tool_failure(d.get('error')),
-    'scout.started': lambda d: f'Scouting {d.get("folder")} ({d.get("files")} files)',
-    'scout.finished': lambda d: f'Scout finished {d.get("folder")}',
-    'scout.failed': lambda d: f'Scout stopped on {d.get("folder")}',
+    'scout.started': lambda d: f'A helper is reading {d.get("folder")} ({count(d.get("files"), "file")})',
+    'scout.finished': lambda d: f'The helper finished reading {d.get("folder")}',
+    'scout.failed': lambda d: f'The helper stopped part way through {d.get("folder")}',
     'outputs.saved': lambda d: (
-        'Saved outputs; checks passed'
+        'Saved the work; the checks passed'
         if d.get('passed')
-        else f'Saved outputs; {len(d.get("issues") or [])} problem(s) to fix'
+        else f'Saved the work; {count(len(d.get("issues") or []), "problem")} to fix'
     ),
     'question.asked': lambda d: f'Question for you: {d.get("question")}',
     'question.answered': lambda d: 'Answer received',
     'review.started': lambda d: 'An independent reviewer is checking the result',
     'review.skipped': lambda d: f'No review: {d.get("reason")}',
-    'review.finished': lambda d: f'Review finished: {d.get("verdict")}, {d.get("doubts")} doubt(s)',
+    'review.finished': lambda d: f'The reviewer finished: {d.get("verdict")}, {count(d.get("doubts"), "doubt")}',
     'skill.read': lambda d: f'Reading skill {d.get("skill")}' if d.get('first') else None,  # once per skill
     'skill.run': lambda d: f'Running {d.get("program")} from skill {d.get("skill")}',
-    'rules.held': lambda d: 'Checks passed; holding the result against your house rules',
+    'rules.held': lambda d: 'The checks passed; now checking the result against your house rules',
     'past_run.opened': lambda d: f'Looking at an earlier run: {d.get("title")}',
     'instructions.delivered': lambda d: (
         'Stopped the current step to read your message' if d.get('interrupted') else 'Your message reached the agent'
@@ -65,12 +71,12 @@ MESSAGES = {
     # A script, as it streams in: what it is for once its opening comment is written, then the files it names.
     'code.writing': lambda d: d.get('summary'),
     'code.running': lambda d: d.get('summary') or ('Reading' if d.get('files') else None),
-    'code.finished': lambda d: d.get('summary') or 'Ran code in the sandbox',
+    'code.finished': lambda d: d.get('summary') or 'Worked on the files',
     # At the end of a model reply. Shown only when the stream did not already show it, and the script opened with a
     # comment saying what it is for.
     'code.ran': lambda d: None if d.get('shown') else d.get('summary'),
     'limit.near': lambda d: f'{d.get("said")}. The agent is saving its work and writing down what is still open',
-    'limit.extended': lambda d: f'{d.get("added")} more steps given; the limit is now {d.get("max_turns")}',
+    'limit.extended': lambda d: f'Gave the agent {d.get("added")} more steps; it can now use {d.get("max_turns")}',
     'limit.after_pass': lambda d: 'A limit was reached after the work passed its checks; the checked result stands',
     # No size: one reply can grow past the limit by itself, so the size it started at says little.
     'history.condensed': lambda d: 'Condensed the older conversation to keep it small',
@@ -82,7 +88,7 @@ MESSAGES = {
     'outputs.versioned': lambda d: f'Kept version {d.get("number")}: {d.get("description")}',
     'output.looked': lambda d: f'Looking at {d.get("file")} as Excel shows it',
     'outputs.pictured': lambda d: (
-        f'Showed the agent {d.get("pictures")} picture(s) of its files before it finishes '
+        f'Showed the agent {count(d.get("pictures"), "picture")} of its files before it finishes '
         f'(about {d.get("tokens") or 0:,} tokens)'
     ),
 }
@@ -224,6 +230,9 @@ class AppControl(Control):
     def follow_client(self, name: str) -> dict:
         return clients.follow(self.store, self.job_id, name)
 
+    def answer(self, answers: list[dict]) -> dict:
+        return feedback.answer(self.store, self.job_id, answers)
+
     def after_save(self) -> dict:
         """After comments, tell the agent what its save changed where they asked and what else changed."""
         try:
@@ -352,6 +361,12 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
     if not runs:
         return None
     last = json.loads(runs[-1].read_text(encoding='utf-8'))
+    if job.get('start_over'):  # the user set the earlier work aside: what still holds is what they said and answered
+        parts = [
+            'You are starting this job over in a fresh sandbox. The user chose to set the earlier work aside: the '
+            'outputs folder is empty and notes.md is gone. Do the job from the beginning, as on a first run.'
+        ]
+        return '\n\n'.join(parts + _still_holds(job, new, fresh=True))
     parts = [
         'You are resuming this job in a fresh sandbox; the earlier sandbox is gone. Continue from where the work '
         f'stands rather than starting over. The previous run ended as "{last.get("status")}".'
@@ -369,6 +384,12 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
     notes = root / 'outputs' / 'notes.md'
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
+    return '\n\n'.join(parts + _still_holds(job, new))
+
+
+def _still_holds(job: dict, new, fresh: bool = False) -> list[str]:
+    """What the user said and answered in earlier runs, and what they sent since, for the card of a fresh sandbox."""
+    parts = []
     told = job.get('engine_instructions') or []
     if told:
         parts.append(
@@ -378,12 +399,14 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
     asked = job.get('engine_questions') or []
     if asked:
         parts.append("Questions you asked and the user's answers:\n" + '\n'.join(_asked(q) for q in asked))
-    if new:
+    if new and fresh:
+        parts.append('New from the user since that run ended. Take it into account as you do the job:\n' + '\n'.join(new))
+    elif new:
         parts.append(
             'New from the user since that run ended. This is what to act on now: decide what it changes, redo only '
             'the affected work, and save again:\n' + '\n'.join(new)
         )
-    return '\n\n'.join(parts)
+    return parts
 
 
 def shown_issues(issues: list[str], limit: int = 10) -> list[str]:
@@ -465,6 +488,9 @@ class SandboxEngine:
             if text:
                 level = 'WARN' if name in WARNINGS else 'INFO'
                 extra = {'files': data['files']} if isinstance(data.get('files'), list) else {}
+                if name == 'limit.near':
+                    # Which limit (only steps can be added from the screen) and its short wording, for the card.
+                    extra.update(what=data.get('what'), said=data.get('said'))
                 if data.get('interrupted'):
                     extra['interrupted'] = True  # the thread says the step was stopped only once it was
                 store.event(job_id, 'engine.' + name, text, type='engine', level=level, run=attempt, **extra)
@@ -567,6 +593,7 @@ class SandboxEngine:
                 look_before_finish=options['look_before_finish'],
                 versions=root / 'versions',
                 versions_kept=options['versions_kept'],
+                max_questions=options['max_questions'],
                 timeout_seconds=options['time_limit_minutes'] * 60,
                 echo=lambda _: None,
             )
@@ -628,6 +655,8 @@ class SandboxEngine:
             if check
             else None,
             'error': error if status in ('failed', 'paused') else None,
+            # Why a partly done run stopped, in a sentence, for its report on the run screen.
+            'stopped_because': error if status == 'partial' else None,
             'error_detail': raw,
             'cut_short': record.get('cut_short'),  # turns, tokens, day, time or service: the agent did not finish
             'artifacts': self.artifacts(job_id, status == 'completed'),
@@ -656,8 +685,9 @@ class SandboxEngine:
             # A cancel the run did not see in time still wins; nothing the run reports overrides it.
             final['status'] = 'cancelled' if job['status'] == 'cancelled' else status
             job.update(updates, status=final['status'])
-            if record['status'] != 'failed':  # the version a run started from is said once, by a run that got going
+            if record['status'] != 'failed':  # where a run started from is said once, by a run that got going
                 job.pop('resume_from', None)
+                job.pop('start_over', None)
             if final['status'] != 'waiting':
                 job['question'] = None
             # Steps given too late for this run to take go no further; a paused or waiting run takes them on restart.

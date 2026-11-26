@@ -425,7 +425,7 @@ def test_once_the_checks_pass_the_agent_holds_its_work_against_the_house_rules_o
     bare = JobSpec(**{**spec_with_skills(tmp_path / 'plain', skills=()).__dict__, 'context': '  '})
     store, prompts = run(bare, tmp_path / 'plain')
     assert len(prompts) == 1 and 'rules.held' not in [e['event'] for e in events(store)]
-    assert service.MESSAGES['rules.held']({}) == 'Checks passed; holding the result against your house rules'
+    assert service.MESSAGES['rules.held']({}) == 'The checks passed; now checking the result against your house rules'
 
 
 def test_the_briefing_names_scouts_only_when_the_run_has_them(tmp_path, monkeypatch):

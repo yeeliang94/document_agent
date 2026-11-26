@@ -44,6 +44,26 @@ def job_file(root: Path, relative: str) -> Path:
     return path
 
 
+def version_file(root: Path, number: int, relative: str) -> Path:
+    """An output as a kept version holds it (app/engine/versions.py): <job>/versions/v0001/files/, or the version's
+    own folder for versions kept before the files had a folder of their own. Only outputs are kept."""
+    folder, _, name = relative.partition('/')
+    base = root / 'versions' / f'v{number:04d}'
+    holder = base / 'files' if (base / 'files').is_dir() else base
+    if folder != 'outputs' or not name or number < 1:
+        raise FileNotFoundError(relative)
+    path = within(holder, name)
+    record = holder == base and path == base / 'version.json'  # the old layout keeps the record among the files
+    if record or not path.is_file() or path.name.endswith('.pending'):
+        raise FileNotFoundError(relative)
+    return path
+
+
+def any_file(root: Path, relative: str, version: int | None = None) -> Path:
+    """A job file as it is now, or an output as a version kept it."""
+    return job_file(root, relative) if version is None else version_file(root, version, relative)
+
+
 def _cell(value):
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -203,8 +223,8 @@ def row_sources(outputs: Path, name: str, sheet: str | None, paths: list[str]) -
     return found
 
 
-def preview(root: Path, relative: str, sheet: str | None = None, paths: list[str] | None = None) -> dict:
-    path = job_file(root, relative)
+def preview(root: Path, relative: str, sheet: str | None = None, paths: list[str] | None = None, version: int | None = None) -> dict:
+    path = any_file(root, relative, version)
     kind = path.suffix.lower()
     try:
         if kind in SHEETS:
@@ -230,11 +250,11 @@ def preview(root: Path, relative: str, sheet: str | None = None, paths: list[str
     return {'path': relative, 'name': path.name, 'size': path.stat().st_size, **body}
 
 
-def page_png(root: Path, relative: str, page: int) -> bytes:
+def page_png(root: Path, relative: str, page: int, version: int | None = None) -> bytes:
     """One PDF page as a PNG, sized for reading on screen."""
     import pypdfium2 as pdfium
 
-    path = job_file(root, relative)
+    path = any_file(root, relative, version)
     with PDF_LOCK, pdfium.PdfDocument(path) as document:
         if page < 1 or page > len(document):
             raise ValueError('Invalid page')
@@ -358,27 +378,90 @@ def _forms(value: str) -> list[str]:
 
 
 MAX_FORMS = 120  # ways of writing a row's values looked for in one source
+MAX_SEARCH_ROWS = 5000  # rows of each sheet, or lines of a text file, searched for a row's values
+
+
+def _where_values(path: Path, groups: list[tuple[str, ...]]) -> dict[int, str]:
+    """Where each group of forms is first found in a workbook, CSV or text file, as the page names the place. A
+    number is matched as a number, so 4500 in a cell is found for 4,500.00; text is matched as a whole word or
+    number, as the page outlines it (2,500.85 is in "Total 2,500.85" but not in "12,500.85")."""
+    kind = path.suffix.lower()
+    if kind not in SHEETS | TEXT | {'.csv', '.docx'}:
+        return {}
+    wanted = {g: set(group) for g, group in enumerate(groups) if group}
+    patterns = {
+        g: re.compile(
+            r'(?<![\w.,])(?:' + '|'.join(re.escape(f) for f in group) + r')(?![\w]|[.,]\d)', re.IGNORECASE
+        )
+        for g, group in wanted.items()
+    }
+    places: dict[int, str] = {}
+
+    def look(value, place: str) -> None:
+        if value is None or value == '' or isinstance(value, bool):
+            return
+        numbers = set(_forms(str(value))) if isinstance(value, (int, float)) else set()
+        text = str(_cell(value))
+        for g in [g for g in wanted if g not in places]:
+            if (numbers and numbers & wanted[g]) or (not numbers and patterns[g].search(text)):
+                places[g] = place
+
+    if kind in SHEETS:
+        book = load_workbook(path, read_only=True, data_only=True)
+        try:
+            for ws in book.worksheets:
+                for r, cells in enumerate(ws.iter_rows(max_row=MAX_SEARCH_ROWS, values_only=True), 1):
+                    for value in cells:
+                        look(value, f'{ws.title}, row {r}')
+                    if len(places) == len(wanted):
+                        return places
+        finally:
+            book.close()
+    elif kind == '.csv':
+        for r, cells in enumerate(csv.reader(io.StringIO(_text(path)[:MAX_CHARS])), 1):
+            if r > MAX_SEARCH_ROWS:
+                break
+            for value in cells:
+                look(value, f'row {r}')
+    else:
+        for n, line in enumerate(text_of(path)[:MAX_CHARS].split('\n')[:MAX_SEARCH_ROWS], 1):
+            look(line, f'line {n}')
+    return places
 
 
 def locate_values(root: Path, relative: str, values: list[str]) -> dict:
     """Where a row's values show up in one of its sources. `wanted` is every way of writing them that is looked
-    for, so the page can outline them in a sheet or text file too. For a PDF, also the page where most of them
-    appear and the boxes around them there; `page` is None when none is found, or for another kind of file."""
+    for, so the page can outline them in a sheet or text file too. `values` says where in the file each value given
+    was first found ("page 2", "Employees, row 4", "line 7"), so the page can say which value came from which file.
+    For a PDF, also the page where most of them appear and the boxes around them there; `page` is None when none is
+    found, or for another kind of file. A picture is not searched."""
     forms: dict[str, set[int]] = {}  # each way of writing a value, and which values it stands for
     groups = list(dict.fromkeys(tuple(_forms(v)) for v in dict.fromkeys(values)))
     for g, group in enumerate(groups):
         for form in group:
             forms.setdefault(form, set()).add(g)
     needles = list(forms)[:MAX_FORMS]
-    found = {'page': None, 'boxes': [], 'wanted': needles}
-    if not needles or job_file(root, relative).suffix.lower() != '.pdf':
+    found = {'page': None, 'boxes': [], 'wanted': needles, 'values': {}}
+    if not needles:
         return found
+    path = job_file(root, relative)
+    kind = path.suffix.lower()
+
+    def named(places: dict[int, str]) -> dict[str, str]:
+        return {v: places[g] for v in dict.fromkeys(values) if (g := groups.index(tuple(_forms(v)))) in places}
+
+    if kind != '.pdf':
+        return {**found, 'values': named(_where_values(path, groups))}
     hits, _, _ = find_in_pdf(root, relative, needles, whole_words=True)
     pages: dict[int, set[int]] = {}
-    for hit in hits:
-        pages.setdefault(hit['page'], set()).update(forms[needles[hit['needle']]])
+    first: dict[int, str] = {}  # the first page each value is on
+    for hit in sorted(hits, key=lambda h: h['page']):
+        for g in forms[needles[hit['needle']]]:
+            pages.setdefault(hit['page'], set()).add(g)
+            first.setdefault(g, f'page {hit["page"]}')
     if not pages:
         return found
+    found['values'] = named(first)
     page = max(pages, key=lambda p: (len(pages[p]), -p))
     boxes = list(
         {tuple(round(h[k], 5) for k in 'xywh'): {k: h[k] for k in 'xywh'} for h in hits if h['page'] == page}.values()

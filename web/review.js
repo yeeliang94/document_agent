@@ -11,6 +11,7 @@ import {
   state,
   storedPath,
 } from "./core.js";
+import { versionsOf } from "./versions.js";
 
 // --- Find in the file --------------------------------------------------------
 // state.find is null while the bar is closed, else { query, at, total, jump }. `at` is the match in focus; `total`
@@ -159,6 +160,16 @@ export function revealMarks(root) {
     )
       state.find.jump = false;
   }
+  // A spot opened from a comment or a link, or the change Previous and Next moved to.
+  const ringed = view?.ring?.jump || state.changes.jump;
+  if (ringed) {
+    const el = root.querySelector(".ring");
+    if (el) el.scrollIntoView({ block: "center", inline: "nearest" });
+    if (el || (view?.data && (view.data.kind !== "pages" || view.image) && !view.changes?.loading)) {
+      if (view?.ring) view.ring.jump = false;
+      state.changes.jump = false;
+    }
+  }
   if (view?.found?.jump) {
     const el = root.querySelector(".found");
     if (el) {
@@ -185,29 +196,58 @@ export function pageMarksHtml(view) {
   return out;
 }
 
-// --- What changed since the last round ----------------------------------------
-// state.changes holds the two switches, kept as the person moves between outputs. What changed in the file on show
-// is loaded from the server when the switch is on, and kept on the view (view.changes).
+// --- What changed since the last round, or since a version ---------------------
+// state.changes holds the switches, kept as the person moves between outputs, and what to compare with: the files as
+// they were at the last round of comments (since: null, on the latest only) or any version older than the one on
+// show. What changed in the file on show is loaded from the server when the switch is on, and kept on the view
+// (view.changes), with the change in focus for Previous and Next.
+
+// The version on show: the one picked in the Version menu, else the newest.
+const shownNumber = (view) => view?.version ?? state.versions?.[0]?.number ?? null;
+
+// What the file on show can be compared with.
+export function sinceChoices(view) {
+  const choices = [];
+  if (!view?.version && state.rounds.length) choices.push({ id: null, name: "Your last comments" });
+  const shown = shownNumber(view);
+  for (const v of versionsOf(view?.path)) {
+    if (shown != null && v.number < shown)
+      choices.push({ id: v.number, name: `Version ${v.number}`, at: v.at });
+  }
+  return choices;
+}
+
+// The choice in use: the one picked, or the first there is when that one does not apply here.
+export const sinceOf = (view) => {
+  const choices = sinceChoices(view);
+  return choices.find((c) => c.id === state.changes.since) || choices[0];
+};
 
 export const canCompare = (view) =>
   String(view?.path).startsWith("outputs/") &&
-  state.rounds.length > 0 &&
-  ["sheet", "text"].includes(view?.data?.kind);
+  ["sheet", "text"].includes(view?.data?.kind) &&
+  sinceChoices(view).length > 0;
+
+const changesKey = (view) =>
+  `${view.path}|${view.data?.sheet || ""}|${view.version ?? ""}|${sinceOf(view)?.id ?? ""}`;
 
 export async function loadChanges(view, draw) {
   if (!state.changes.on || !canCompare(view)) return;
-  const sheet = view.data.sheet
-    ? `&sheet=${encodeURIComponent(view.data.sheet)}`
-    : "";
-  const key = `${view.path}|${view.data.sheet || ""}`;
+  const key = changesKey(view);
   if (view.changes?.key === key) return;
+  const since = sinceOf(view).id;
+  const more = [
+    view.data.sheet ? `&sheet=${encodeURIComponent(view.data.sheet)}` : "",
+    view.version ? `&version=${view.version}` : "",
+    since != null ? `&since=${since}` : "",
+  ].join("");
   view.changes = { key, loading: true };
   draw();
   try {
-    const found = await api(fileUrl("changes", view.path, sheet));
-    if (state.preview === view) view.changes = { key, ...found };
+    const found = await api(fileUrl("changes", view.path, more));
+    if (state.preview === view && view.changes.key === key) view.changes = { key, ...found };
   } catch (error) {
-    if (state.preview === view) view.changes = { key, error: error.message };
+    if (state.preview === view && view.changes.key === key) view.changes = { key, error: error.message };
   }
   if (state.preview === view) draw();
 }
@@ -216,11 +256,32 @@ export async function loadChanges(view, draw) {
 // null with the switch off or nothing to show.
 export function changesOn(view) {
   const c = state.changes.on && canCompare(view) ? view.changes : null;
-  return c && (c.cells || c.lines) ? c : null;
+  return c && c.key === changesKey(view) && (c.cells || c.lines) ? c : null;
 }
 
 const changeCount = (c) =>
   Object.keys(c.cells || c.lines || {}).length + (c.removed?.length || 0);
+
+// The changed cells or lines in the order Previous and Next step through them: down the file.
+export function changedList(view) {
+  const c = changesOn(view);
+  if (!c) return [];
+  if (c.cells) return Object.keys(c.cells);
+  return Object.keys(c.lines).sort((a, b) => Number(a) - Number(b));
+}
+
+// The cell ("B3") or line ("4") in focus, ringed in the file.
+export function changeInFocus(view) {
+  const list = changedList(view);
+  if (!list.length) return null;
+  state.changes.step = Math.min(Math.max(state.changes.step, 0), list.length - 1);
+  return list[state.changes.step];
+}
+
+export function stepChange(delta) {
+  state.changes.step += delta;
+  state.changes.jump = true;
+}
 
 // "Changed rows only" applies while there is a change to show; otherwise the whole file stays in view.
 export const changedOnly = (view) => {
@@ -231,28 +292,53 @@ export const changedOnly = (view) => {
 const toggle = (name, on, label) =>
   `<button type="button" class="switch-label" data-changes="${name}" role="switch" aria-checked="${on}"><span class="switch ${on ? "on" : ""}"></span>${esc(label)}</button>`;
 
+const at = (iso) =>
+  iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+
+// The Since dropdown: what the Changes switch compares with.
+function sinceHtml(view) {
+  const since = sinceOf(view);
+  const open = state.menu === "since";
+  const label = since.id == null ? "Since your last comments" : `Since version ${since.id}`;
+  const items = sinceChoices(view)
+    .map(
+      (c) => `<button role="menuitemradio" aria-checked="${c.id === since.id}" data-compare="${c.id ?? ""}"><span class="v">${esc(c.name)}</span>${c.at ? `<span class="when">${esc(at(c.at))}</span>` : ""}</button>`,
+    )
+    .join("");
+  return `<span class="menu-wrap"><button type="button" class="picker" data-menu="since" aria-haspopup="menu" aria-expanded="${open}">${esc(label)}${icon("down1")}</button>
+    ${open ? `<div class="drop" role="menu" aria-label="Compare with">${items}</div>` : ""}</span>`;
+}
+
 export function changesBarHtml(view) {
   if (!canCompare(view)) return "";
-  const c = view.changes;
+  const on = state.changes.on;
+  const c = view.changes?.key === changesKey(view) ? view.changes : null;
   const lines = view.data.kind === "text";
-  let note = "";
-  if (state.changes.on && c) {
-    if (c.loading) note = "<span>Comparing</span>";
-    else if (c.error) note = `<span class="problem">${esc(c.error)}</span>`;
-    else if (c.round == null)
-      note = "<span>No round of comments has been sent yet</span>";
+  let detail = "";
+  if (on) {
+    const since = sinceOf(view);
+    detail = sinceHtml(view);
+    if (!c || c.loading) detail += '<span class="count">Comparing</span>';
+    else if (c.error) detail += `<span class="count problem">${esc(c.error)}</span>`;
+    else if (since.id == null && c.round == null)
+      detail += '<span class="count">No round of comments has been sent yet</span>';
     else if (c.new)
-      note = `<span class="pill ok">New since round ${c.round}</span>`;
+      detail += `<span class="count">New since ${since.id == null ? "your last comments" : `version ${since.id}`}</span>`;
     else if (!c.cells && !c.lines)
-      note = "<span>This file cannot be compared</span>";
+      detail += '<span class="count">This file cannot be compared</span>';
     else {
       const n = changeCount(c);
-      note = n
-        ? `<span class="pill ok">${plural(n, lines ? "line" : "cell")} changed since round ${c.round}</span>${toggle("only", state.changes.only, lines ? "Changed lines only" : "Changed rows only")}`
-        : `<span>Nothing changed since round ${c.round}</span>`;
+      const list = changedList(view);
+      const step = changeInFocus(view) == null ? 0 : state.changes.step;
+      detail += n
+        ? `<span class="count">${plural(n, "change")}
+            <button class="icon-btn" data-change-step="-1" aria-label="Previous change" ${step <= 0 ? "disabled" : ""}>${icon("up1")}</button>
+            <button class="icon-btn" data-change-step="1" aria-label="Next change" ${step >= list.length - 1 ? "disabled" : ""}>${icon("down1")}</button></span>
+          ${toggle("only", state.changes.only, lines ? "Changed lines only" : "Changed rows only")}`
+        : '<span class="count">Nothing changed</span>';
     }
   }
-  return `<div class="changes">${note}${toggle("on", state.changes.on, "Changes")}</div>`;
+  return `<div class="changes">${toggle("on", on, "Changes")}${detail}</div>`;
 }
 
 // --- Where a row came from ------------------------------------------------------
@@ -377,4 +463,114 @@ export function isFound(view, text) {
     );
   }
   return found.pattern.test(String(text));
+}
+
+// --- Which value came from which file ---------------------------------------------
+// The server says where in each source it found each of the row's values (place.values). A row's cells are grouped
+// by where they came from, the way a person would read them: "Employee ID, name · employee_report.xlsx, Employees,
+// row 2". A worked-out cell says what it was worked out from.
+
+// A heading as it reads inside a list: "name" after "Employee ID", but "ID" stays as it is.
+const lower = (label) =>
+  /^[A-Z][a-z]/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
+
+// The row's filled cells: the heading over each (row 1 of the sheet), what it shows, and its formula if any.
+export function rowFields(data, row) {
+  const cells = data?.rows?.[row - 1] || [];
+  const heads = row > 1 ? data.rows[0] || [] : [];
+  const fields = [];
+  cells.forEach((value, c) => {
+    if (value === null || value === undefined || value === "") return;
+    const at = `${data.columns[c]}${row}`;
+    const look = data.formats?.[at] || {};
+    const head = heads[c];
+    fields.push({
+      label:
+        typeof head === "string" && head.trim()
+          ? head.trim()
+          : `Column ${data.columns[c]}`,
+      shown:
+        typeof look.text === "string"
+          ? look.text
+          : typeof value === "number"
+            ? value.toLocaleString("en", { maximumFractionDigits: 6 })
+            : String(value),
+      number: typeof value === "number",
+      formula: typeof look.formula === "string" ? look.formula : "",
+      keys: [look.text, value]
+        .filter((v) => v !== null && v !== undefined && v !== "")
+        .map((v) => String(v).slice(0, 200)),
+    });
+  });
+  return fields;
+}
+
+// A formula in the row's own words: =C2*12 reads "salary × 12".
+function workedOut(formula, data, row) {
+  const heads = data.rows[0] || [];
+  return formula
+    .replace(/^=/, "")
+    .replace(/\$?([A-Z]{1,3})\$?(\d+)/g, (ref, col, r) => {
+      const head = heads[data.columns.indexOf(col)];
+      return Number(r) === row && typeof head === "string" && head.trim()
+        ? lower(head.trim())
+        : ref;
+    })
+    .replace(/\*/g, " × ")
+    .replace(/\//g, " ÷ ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// The rows of the "came from" table: each group of cells with the source it was found in, or why there is none.
+// `files` are the row's stored source paths, in the order the agent gave them. `left` are the sources no value was
+// found in, so they can still be opened (a picture, a scan).
+export function rowProof(data, row, files) {
+  const places = files.slice(0, MAX_SOURCES).map((path) => [path, placeOf(path)]);
+  const looking = places.some(([, p]) => !p || p.loading);
+  const used = new Set();
+  const groups = [];
+  for (const field of rowFields(data, row)) {
+    let from = null;
+    if (!field.formula) {
+      for (const [path, place] of places) {
+        const key = field.keys.find((k) => place?.values?.[k]);
+        if (key) {
+          from = { path, where: place.values[key] };
+          break;
+        }
+      }
+    }
+    if (from) used.add(from.path);
+    const status = field.formula
+      ? `Worked out: ${workedOut(field.formula, data, row)}`
+      : from
+        ? ""
+        : looking
+          ? "Looking"
+          : "Not found in its sources";
+    const last = groups[groups.length - 1];
+    // Cells next to each other from the same place read as one line; a number keeps a line of its own.
+    const same =
+      last &&
+      !field.number &&
+      !last.number &&
+      (from
+        ? last.from?.path === from.path && last.from?.where === from.where
+        : !last.from && last.status === status);
+    if (same) {
+      last.labels.push(field.label);
+      continue;
+    }
+    groups.push({
+      labels: [field.label],
+      number: field.number,
+      shown: field.number ? field.shown : "",
+      from,
+      status,
+    });
+  }
+  for (const g of groups)
+    g.label = g.labels.map((l, i) => (i ? lower(l) : l)).join(", ");
+  return { groups, left: files.filter((p) => !used.has(p)) };
 }

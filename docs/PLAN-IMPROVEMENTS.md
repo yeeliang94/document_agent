@@ -1,13 +1,13 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `71%` (24 of 34 steps) (Phases 1-8 done, not yet on screen: what they show comes with the Phase 9 screens)
+**Overall Progress:** `95%` (37 of 39 steps) (Phases 1-10 done; Phase 11 left)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
-**Design reference:** `prototype/improvements/index.html`, six batches (there is no PRD)
+**Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7 (there is no PRD)
 **Last Updated:** 2026-11-26
 
 ## Summary
 
-Three things change. The agent learns its limits, keeps its context small, sees what its formulas add up to, and sees its files as the person receiving them will. The person sees how far a run has got, gets a plain message and a way back when a run stops, and gets a proper report when it finishes. Each client gets its own notes, which a run can follow on top of its playbook.
+Three things change. The agent learns its limits, keeps its context small, sees what its formulas add up to, and sees its files as the person receiving them will. The person sees how far a run has got, gets a plain message and a way back when a run stops, and gets a proper report when it finishes. Each client gets its own notes, which a run can follow on top of its playbook. And, taken from a study of Claude's document panel (26 Nov): the agent answers each comment, a cell or file it names opens at that spot, and any two versions of an output can be compared.
 
 As in the earlier plans, the engine and backend are built and tested first. The screens follow, one prototype batch at a time, each after that batch is approved.
 
@@ -26,6 +26,9 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 | Instructions belong to a playbook only | A client has notes too; where they disagree with the playbook, the client wins |
 | Earlier runs offered as examples can be another client's | The same client's earlier runs are offered first |
 | Panels have fixed widths | Both dividers drag; the run list can be hidden |
+| A comment gets a verdict worked out by code: changed or not | It also gets the agent's own answer, and can be replied to or resolved |
+| Cells and files named in the chat are plain text; a sent comment opens its file at the top | They open at that spot, as does a sent comment |
+| The Changes switch compares with the last round of comments | It can also compare with any saved version, and an older version can be opened |
 
 ## Key Decisions
 
@@ -40,6 +43,10 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 - **Remembering gets a scope.** PLAN-NEXT moved "what to remember" from a tick box to the agent's own judgement. That stays. What is new: a lesson is saved to the client or to the playbook, the agent proposes which, and the person can set it on a comment. This partly brings back a choice PLAN-NEXT removed, because you asked to save things to a client on purpose.
 - **The agent's pictures are drawn on this machine by the app's own code, not by Excel or LibreOffice.** Why: nothing extra to install on Windows or Mac, and the agent sees what the file preview shows you. The cost: close to Excel, not identical; what it cannot draw is named, not guessed. *(Proposed 2026-11-26.)*
 - **The look is checked by warnings, not by a second reviewer.** Clear faults (####, numbers stored as text) are caught by code; taste is left to the agent's own look. *(Proposed 2026-11-26.)*
+- **The agent writes each answer; code still says whether the spot changed.** Why: the screen already trusts only the file comparison for "changed". The answer explains; where the two disagree, the screen shows the code's verdict. *(Confirmed 2026-11-26.)*
+- **A reply is a new comment on the same spot, sent as a round like any other,** carrying the earlier exchange. Resolve and Reopen are for the screen only and never reach the agent. Why: one way of talking to the agent, not two. *(Confirmed 2026-11-26.)*
+- **Links are checked, not trusted.** The agent names cells as `Sheet!B4` and files by name; the server turns into links only those that exist. Why: a link to nowhere is worse than plain text. *(Confirmed 2026-11-26.)*
+- **Comparing versions extends the existing Changes switch,** with its green cells and grey old values, rather than adding a second compare tool. *(Confirmed 2026-11-26.)*
 - **No setting or limit without a control.** A test fails when a Settings option has no control on the Settings page, and the project instructions say so.
 
 ## Pre-Implementation Checklist
@@ -48,6 +55,7 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 - [x] 🟩 The three client decisions confirmed: main form, optional, text only
 - [x] 🟩 How client folders are named: no fixed pattern, so the suggestion looks for a known client's name anywhere in folder and file names
 - [x] 🟩 An OpenAI key is set on this machine, and live steps may use it; each live run is announced with its rough cost first
+- [x] 🟩 Prototype for batch 7 approved: comments that answer back, links to the spot, versions to compare (`prototype/comment-answers/index.html`, 2026-11-26)
 - [x] 🟩 No conflicting in-progress work: chat-and-zoom is committed (PR yeeliang94/document_agent#1), and this plan builds on that branch
 
 ## Tasks
@@ -175,7 +183,7 @@ Today the agent can only draw a rough chart of cell values, and in the live runs
   - [x] 🟩 The agent's remember tool takes the scope; a comment can set it
   - [x] 🟩 Undo works for both
   - **Verify:** tests save one lesson to each, and each lands in the right notes and can be undone.
-  - **Result:** a comment's `remember_to` (client or playbook) wins over the agent's choice. Undo is a restore, on either. A client lesson gets no replay test (tests replay playbooks). Until the Clients screens (Step 32), the run shows a client lesson as a plain line with no Undo button.
+  - **Result:** a comment's `remember_to` (client or playbook) wins over the agent's choice. Undo is a restore, on either. A client lesson gets no replay test (tests replay playbooks). Until the Clients screens (Step 37), the run shows a client lesson as a plain line with no Undo button.
 
 - [x] 🟩 **Step 22: Earlier runs of the same client first** — as examples of layout.
   - **Verify:** a test with runs for two clients offers only the same client's.
@@ -203,38 +211,77 @@ Today the agent can only draw a rough chart of cell values, and in the live runs
 
     Accuracy held. The cost rose because the agent now looks at its sheets with look_at_output, one sheet per step (up to six), and each step re-sends the conversation; the pictures themselves were 3–5k tokens a run. In these runs the looks found nothing to fix. Through the app: a run for a client finished with every cell right and followed its notes (notes.md opened with the line they asked for). A run with no client was paused after its sixth step and continued from version 1 (step 5); it finished with every cell right. Both reports' headlines described only the last check, not the whole job; the briefing now says the report covers the whole job (not yet tried live). Files: the scratchpad's `live/` folder, and `prototype/sandbox_agent/app_resume_client.py` reruns the app part.
 
-### Phase 9: Screens (each batch after its prototype is approved)
+### Phase 9: Comments that answer back (backend)
 
-- [ ] 🟥 **Step 25: Waiting** (batch 1) — step and time counter, three named stages, plain step wording, the near-limit card with "Give it 20 more steps", "Clock paused" on a question.
+From the study of Claude's document panel (26 Nov). A comment gets an answer, what the agent names can be opened, and any two versions of an output can be compared. Built and tested before its screen, as in the other phases.
+
+- [x] 🟩 **Step 25: The agent answers each comment** — one or two sentences per comment: what it changed, or why it left the spot as it was.
+  - [x] 🟩 Given with the save, beside comment_changes (no new tool), and kept with the round's report
+  - [x] 🟩 The round message asks for an answer to every comment; a save that leaves one unanswered says which
+  - [x] 🟩 The code's changed / not changed verdict is kept as it is and shown beside the answer
+  - **Verify:** a test round of three comments ends with three answers stored; a save missing one names it.
+  - **Result:** `save_outputs(answers=[{comment, answer}])`; kept on the round's job entry as `answers`, a later answer replacing an earlier one. An answer naming no open comment is returned as `answers_not_kept` with its reason. `comment_changes.unanswered` lists the rest. The round message asks for answers and for cells as Sheet!B4.
+
+- [x] 🟩 **Step 26: Reply and resolve** — a reply goes to the agent as a new round on the same spot, carrying the comment and the answer it replies to; resolve and reopen are stored on the run for the screen only.
+  - **Verify:** a test replies to a comment and the agent's message shows the earlier exchange; a resolved comment stays resolved after a reload and sends nothing.
+  - **Result:** a comment with `reply_to` ("1.2") takes that comment's spot, whatever the browser sent, and its line in the round message quotes the earlier comment and answer. A reply opens a resolved comment again. `POST /api/jobs/{id}/comments/resolve` with `{comment, resolved}`; rounds carry `resolved`.
+
+- [x] 🟩 **Step 27: Links to the spot** — one briefing line: name cells as `Sheet!B4` and files by name in the report, answers and messages. The server marks the ones that exist (a sheet and cell of an output, a file of this run) and returns them with the text.
+  - [x] 🟩 A sent comment carries its spot, so View opens the file there, not at the top
+  - **Verify:** a test text with one real cell, one missing sheet and one file name returns two links and leaves the wrong one as text.
+  - **Result:** `app/links.py`; `POST /api/jobs/{id}/links` with `{texts}` returns each text's links with their positions. A sheet found in two workbooks, a cell past the sheet's used area, or a file name two files share stays plain text. The report briefing names cells as Sheet!B4. The `feedback.sent` event carries each comment's spot.
+
+- [x] 🟩 **Step 28: Compare with any version, and open an older one** — the changes API takes a version as well as the last round; the preview can read a file from a version.
+  - [x] 🟩 Comments on an older version are refused; they go on the latest
+  - **Verify:** tests compare the outputs with version 1 and list each changed cell with its old value; the preview of version 1 matches its copy; a comment on version 1 is refused.
+  - **Result:** `/changes`, `/preview`, `/page` and `/file` take `version` (the file as that version kept it); `/changes` takes `since` (a version to compare with). Versions kept before files had their own folder still read. Comments have no version field, so they always point at the latest files; the screen offers no Comment mode on an older version.
+
+### Phase 10: Screens (each batch after its prototype is approved)
+
+- [x] 🟩 **Step 29: Waiting** (batch 1) — step and time counter, three named stages, plain step wording, the near-limit card with "Give it 20 more steps", "Clock paused" on a question.
   - **Verify:** start a run and watch each state appear; I check every state in a browser.
+  - **Result:** stage line (Reading files › Filling in › Checking) and "Step 14 of 60 · 6 of 30 min" counter, "Clock paused" while a question waits; the near-limit card with "Give it 20 more steps" and "Let it wrap up"; plain feed wording. `/api/config` carries `more_steps`. The counter moves only when the agent takes a step.
 
-- [ ] 🟥 **Step 26: When a run stops** (batch 2) — plain message, Continue from the last version, the list of versions, Start over, raw error folded away.
+- [x] 🟩 **Step 30: When a run stops** (batch 2) — plain message, Continue from the last version, the list of versions (the same list as the file panel's Version menu, Step 33), Start over, raw error folded away.
   - **Verify:** stop a run midway and continue from an earlier version on screen.
+  - **Result:** a card for failed, paused and cancelled runs: plain sentence, next step, "Your work is saved up to step N", Continue, Earlier versions, Start over, raw error under "Technical detail". New `POST /api/jobs/{id}/start-over` empties the outputs, keeps every version and tells the agent it starts over. The version list is `web/versions.js`.
 
-- [ ] 🟥 **Step 27: Finished** (batch 3) — the report, the deliverable first with one Download, "Still to fix" shown once, "Totals add up" in the checks, the message box stays open as "Ask for a change".
+- [x] 🟩 **Step 31: Finished** (batch 3) — the report, the deliverable first with one Download, "Still to fix" shown once, "Totals add up" in the checks, the message box stays open as "Ask for a change".
   - **Verify:** finish a run; type a change request after it ends and the agent acts on it.
+  - **Result:** the report card (headline, what I did, decisions, still to fix once, check before you send), deliverables with one Download, "Totals add up" in Checks, "Ask for a change" in the message box. A partly done run keeps `stopped_because`. "How it was done" left out: the Technical log already covers it.
 
-- [ ] 🟥 **Step 28: Reviewing** (batch 4) — which value came from which file, notes shown formatted, Send to agent only when there are comments, the remember scope on a comment.
+- [x] 🟩 **Step 32: Reviewing** (batch 4) — which value came from which file, notes shown formatted, Send to agent only when there are comments, the remember scope on a comment.
   - **Verify:** click a row and read its sources; add a comment and choose where it is remembered.
+  - **Result:** "Row N came from" lists each value with its file and place (page, row, line), and a formula cell as "Worked out"; `.md` files are shown formatted by a small safe renderer (`web/markdown.js`) with line comments kept; the comment box has the remember scope; Send to agent shows only while comments wait.
 
-- [ ] 🟥 **Step 29: Panels that resize** — both dividers drag, double-click hides the run list, widths are remembered.
+- [x] 🟩 **Step 33: Comments that answer back** (batch 7) — the answer under each comment with Reply and Resolve; the verdict's colour on the pins and on the sent-comments card; cell and file links in the chat and answers that open the spot; the Version menu in the file header; "Since" on the Changes switch, with Previous and Next; an older version with Continue from here (Step 30) and Back to latest.
+  - **Verify:** send three comments, read the answers, reply to one and resolve one; click a cell link in the chat; compare with version 1 and step through the changes. I check every state in a browser.
+  - **Result:** answers, Reply and Resolve under each comment, verdict colours on pins and the sent card, checked links in the report, answers and messages (`web/links.js`), the Version menu, "Since" with Previous and Next on Changes, an older version with Continue from here and Back to latest. A thread counts as resolved when its latest message is.
+
+- [x] 🟩 **Step 34: Panels that resize** — both dividers drag, double-click hides the run list, widths are remembered.
   - **Verify:** drag both, reload, and the widths hold; a small laptop width still shows everything.
+  - **Result:** `web/panels.js`: both dividers drag and take arrow keys; double-click or Enter hides the run list, with Show runs to bring it back; widths kept in localStorage and narrowed to fit. The file header stays on one line; zoom, find, full screen and download fold into More when the panel is narrow.
 
-- [ ] 🟥 **Step 30: Run list** (batch 5) — each run's own name and status, rename and delete.
+- [x] 🟩 **Step 35: Run list** (batch 5) — each run's own name and status, rename and delete.
   - **Verify:** rename a run and delete one; a running run cannot be deleted.
+  - **Result:** `PATCH /api/jobs/{id}` renames (empty goes back to the goal's name); `DELETE /api/jobs/{id}` is refused while a run is going and asks to confirm on screen. `web/runs.js`. Duplicate left out.
 
-- [ ] 🟥 **Step 31: Settings** (batch 5) — plain labels with units, the error beside the field, Save lit only after a change, plus the new values from Steps 5, 7, 12 and 14 and the questions-per-run limit.
+- [x] 🟩 **Step 36: Settings** (batch 5) — plain labels with units, the error beside the field, Save lit only after a change, plus the new values from Steps 5, 7, 12 and 14 and the questions-per-run limit.
   - **Verify:** type a wrong value and read the message beside it; every setting in the app has a control.
+  - **Result:** grouped as in the prototype, plain labels with units, the server's message beside the field it names (`SettingError.field`), Save lit only after a change. New setting "Questions it may ask per run" (0-10, default 3) replaces the fixed three.
 
-- [ ] 🟥 **Step 32: Clients** (batch 6) — the Clients page, one client's notes and history, the client box on New run with its suggestion, "Following the notes for Acme" on the run.
+- [x] 🟩 **Step 37: Clients** (batch 6) — the Clients page, one client's notes and history, the client box on New run with its suggestion, "Following the notes for Acme" on the run.
   - **Verify:** create a client, start a run with it suggested, and see a remembered comment appear in its notes with Undo.
+  - **Result:** `web/clients.js`: the Clients page, one client's Notes, Runs and History, the client row on New run with its suggestion and Use, "Following the notes for X" on the run, Undo for lessons and comments remembered to a client. The "Ask the agent to change these notes" box is left out: there is no backend for it yet.
 
-### Phase 10: Keep it from drifting
+**How Phase 10 was checked (2026-11-27):** each batch was checked in a browser on pretend runs (a scratch data folder with no API key, states written straight into the store), at desktop and phone widths; no live agent run was started, so a continue or start over that really runs, and answers written by the real model, are not yet seen on screen. A review (8 specialists, Codex, an independent checker) kept seven findings, all fixed: a row-0 cell name broke every link; a cancelled run deleted while still queued stopped the job worker; Start over could lose files newer than the last version (it now keeps them as a version first and asks to confirm); a client's runs were matched by name, not id; "Questions it may ask per run" counts the whole job, so it now says "per job"; the save tool and the round message disagreed on which comments to answer; and Continue could not restore a version kept before files had their own folder (that fix touches the other uncommitted work's version layout).
 
-- [ ] 🟥 **Step 33: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
+### Phase 11: Keep it from drifting
+
+- [ ] 🟥 **Step 38: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
   - **Verify:** I add a dummy setting, show the test failing, and remove it.
 
-- [ ] 🟥 **Step 34: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
+- [ ] 🟥 **Step 39: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
   - **Verify:** I report the test and build results, the review verdict, and the git state.
 
 ## Risks
@@ -245,10 +292,12 @@ Today the agent can only draw a rough chart of cell values, and in the live runs
 - **Pictures cost tokens.** A few per run, kept small, and switched off on the Settings page if needed. Step 24 measures the cost.
 - **A picture that differs from Excel** could send the agent to fix something that is fine. Step 10's tests compare against known features, and the picture names what it leaves out.
 - **Versions use disk space.** The cap in Step 14 limits it.
+- **An answer can claim a change that did not happen.** The code's verdict is shown beside it and wins where they differ.
+- **Answers add a little output to every round.** One or two sentences per comment.
 
 ## Rollback Plan
 
-- Every phase is its own set of commits on a feature branch; any phase can be reverted without the others, except that Phase 9 needs the phase behind each screen.
+- Every phase is its own set of commits on a feature branch; any phase can be reverted without the others, except that Phase 10 needs the phase behind each screen.
 - Compaction, versions and more-steps are Settings values, so each can be switched off without a code change.
 - New data (clients, versions) is added beside existing data. Existing runs and playbooks are not altered, so reverting leaves them as they were. Check that older runs still open after each phase.
 

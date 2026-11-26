@@ -1,0 +1,445 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: comments that answer back, links to the spot, and versions to compare. Made-up data. Open this
+     file in a browser; no server needed. The dark bar at the bottom jumps between states; it is not part of the
+     design. Nothing here is wired to the app.
+     Drawn to sit with the app as it is: the sent-comments card is the one the chat already shows, and comparing
+     extends the file panel's existing Changes switch (green cells, the old value in grey before the new one). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comment answers prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f5f6; --sheet: #ffffff; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab;
+    --line: #e7e7ea; --accent: #2f6fdb; --accent-bg: #e8f0fd; --ok-bg: #e6f3e6; --ok-fg: #24592a;
+    --grey-bg: #ececee; --grey-fg: #55555c;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.6 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { border: 0; background: none; cursor: pointer; padding: 0; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3, p, ol { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; font-weight: 500; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
+  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); background: var(--sheet); }
+  .btn.text { padding: 4px 8px; color: var(--muted); font-size: 13px; }
+  .btn.text:hover { color: var(--text); background: var(--grey-bg); }
+  .btn.small { padding: 4px 12px; font-size: 13px; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+  .icon-btn:hover:not(:disabled) { background: var(--grey-bg); color: var(--text); }
+  .icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .pill.live { background: var(--accent-bg); color: var(--accent); }
+  /* A cell or file the agent names: plain text in the accent colour, so a sentence still reads as a sentence. */
+  .ref { color: var(--accent); text-decoration: underline; text-decoration-color: rgba(47,111,219,.3); text-underline-offset: 3px; }
+  .ref:hover { text-decoration-color: var(--accent); }
+
+  /* The app's own switch: grey, accent when on. */
+  .switch-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .switch-label[aria-checked="true"] { color: var(--text); }
+  .switch { width: 36px; height: 20px; border-radius: 999px; background: #cfcfd4; position: relative; flex: none; transition: background .15s; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { transform: translateX(16px); }
+
+  /* Shell */
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100%; }
+  .side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .brand { font-weight: 500; padding: 0 12px; }
+  .item { display: block; padding: 8px 12px; border-radius: 12px; color: var(--muted); text-align: left; width: 100%; }
+  .item.on { background: var(--panel); color: var(--text); }
+  .work { display: grid; grid-template-columns: minmax(340px, 1fr) 16px minmax(480px, 1.2fr); min-width: 0; min-height: 0; padding: 16px 16px 16px 0; }
+  .grip { display: grid; place-items: center; }
+  .grip::after { content: ''; width: 2px; height: 32px; border-radius: 2px; background: var(--line); }
+
+  /* Chat */
+  .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0 32px; }
+  .chat-head { display: flex; align-items: center; gap: 12px; padding: 16px 0 24px; min-height: 60px; }
+  .chat-head h1 { flex: 1; }
+  .scroll { flex: 1; min-height: 0; overflow: auto; padding-bottom: 96px; }
+  .thread { max-width: 600px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px; }
+  .say { max-width: 60ch; }
+  .say p + p { margin-top: 12px; }
+  /* The sent round, as the chat shows it today: numbered comments in a "me" bubble. */
+  .me { align-self: flex-end; width: 88%; background: var(--panel); border-radius: 12px; padding: 8px; }
+  .me ol { list-style: none; padding: 0; display: flex; flex-direction: column; }
+  .me li button { display: flex; gap: 12px; align-items: flex-start; text-align: left; width: 100%; padding: 8px; border-radius: 8px; }
+  .me li button:hover { background: var(--grey-bg); }
+  .me .where { display: block; font-size: 13px; color: var(--muted); }
+  .pin { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: 500; display: inline-grid; place-items: center; margin-top: 1px; }
+  .pin.done { background: var(--ok-fg); }
+  .pin.left { background: var(--grey-fg); }
+  .pin.wait { background: var(--faint); }
+  .steps { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; flex: none; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .composer { max-width: 600px; width: 100%; margin: 0 auto; background: var(--panel); border-radius: 12px; display: flex; align-items: center; padding: 8px 8px 8px 16px; }
+  .composer input { flex: 1; border: 0; background: none; outline: none; }
+  .send { width: 32px; height: 32px; border-radius: 50%; background: var(--text); color: #fff; display: grid; place-items: center; }
+
+  /* Files panel */
+  .files { background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+  .files-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 8px 24px; min-height: 60px; }
+  .files-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .files-body { flex: 1; overflow: auto; padding: 8px 24px 120px; display: flex; flex-direction: column; gap: 32px; }
+  .files-body > * { flex: none; }
+  .bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; min-height: 32px; }
+  .bar .spacer { flex: 1; }
+  .modes { background: var(--grey-bg); border-radius: 999px; padding: 2px; display: flex; }
+  .modes button { padding: 2px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); }
+  .modes button[aria-pressed="true"] { background: var(--sheet); color: var(--text); }
+  .picker { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px 4px 12px; border-radius: 999px; font-size: 13px; color: var(--text); }
+  .picker:hover { background: var(--grey-bg); }
+  .picker svg { width: 14px; height: 14px; color: var(--muted); }
+  .count { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .drop { position: absolute; z-index: 4; background: var(--bg); border-radius: 12px; padding: 4px; box-shadow: 0 8px 32px rgba(0,0,0,.12); min-width: 280px; display: flex; flex-direction: column; }
+  .drop button { display: flex; gap: 16px; align-items: baseline; text-align: left; padding: 8px 12px; border-radius: 8px; }
+  .drop button:hover, .drop button[aria-current="true"] { background: var(--panel); }
+  .drop .v { flex: 1; }
+  .drop .when { font-size: 13px; color: var(--muted); }
+  .note { display: flex; align-items: center; gap: 12px; background: var(--sheet); border-radius: 12px; padding: 8px 8px 8px 16px; color: var(--muted); }
+  .note span { flex: 1; }
+
+  .sheet { background: var(--sheet); border-radius: 12px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .grid td, .grid th { padding: 10px 12px; text-align: left; box-shadow: inset 0 -1px 0 var(--line); white-space: nowrap; position: relative; }
+  .grid th { color: var(--faint); font-weight: 400; }
+  .grid th.rn { width: 32px; text-align: right; padding-right: 8px; }
+  .grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .grid tr.head td { background: #253b5b; color: #fff; font-weight: 500; }
+  .grid tr.total td { font-weight: 500; }
+  /* As the app marks a changed cell today: green, with what it showed before in grey. */
+  .grid td.changed { background: var(--ok-bg); color: var(--ok-fg); }
+  .grid td .was { color: var(--faint); margin-right: 8px; }
+  .grid tr.gone td { color: var(--faint); text-decoration: line-through; }
+  .grid td.ring { box-shadow: inset 0 0 0 2px var(--accent); animation: flash 1.2s 2; }
+  @keyframes flash { 50% { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-bg); } }
+  .grid td .pin { position: absolute; top: 50%; left: 6px; transform: translateY(-50%); width: 16px; height: 16px; font-size: 10px; margin: 0; }
+  .grid td.pinned { padding-left: 28px; }
+  .tabs { display: flex; gap: 4px; padding: 8px; font-size: 13px; }
+  .tabs span { padding: 2px 12px; border-radius: 999px; color: var(--muted); }
+  .tabs span.on { background: var(--panel); color: var(--text); }
+
+  .page { background: var(--sheet); border-radius: 12px; padding: 40px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+  .page .line { padding: 4px 8px; border-radius: 6px; }
+  .page .line.ring { box-shadow: inset 0 0 0 2px var(--accent); animation: flash 1.2s 2; }
+
+  /* Comments with their answers */
+  .comments { display: flex; flex-direction: column; gap: 8px; }
+  .comments-head { display: flex; align-items: center; gap: 12px; min-height: 32px; }
+  .comments-head h2 { flex: 1; }
+  .c { display: flex; flex-direction: column; gap: 12px; padding: 20px 16px; margin: 0 -16px; border-radius: 12px; }
+  .c.on { background: var(--sheet); }
+  .c-top { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+  .c-top .where { text-align: left; }
+  .c-top .where:hover { color: var(--text); }
+  .c-top .verdict { flex: 1; }
+  .c-top .verdict.ok { color: var(--ok-fg); }
+  .c > p { padding-left: 32px; }
+  .answer { margin-left: 32px; padding-left: 16px; box-shadow: inset 2px 0 0 var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .answer .who { font-size: 13px; color: var(--muted); }
+  .answer.pending p { color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .reply { margin-left: 32px; display: flex; flex-direction: column; gap: 8px; }
+  .reply textarea { border: 0; background: var(--sheet); border-radius: 12px; padding: 12px; min-height: 72px; resize: none; outline: none; }
+  .c.on .reply textarea { background: var(--panel); }
+  .reply .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .c-act { margin-left: 24px; display: flex; gap: 4px; }
+  .resolved { display: flex; align-items: center; gap: 12px; padding: 8px 0; color: var(--muted); font-size: 13px; }
+  .resolved span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { padding: 24px 0; color: var(--muted); }
+
+  .proto { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 9; background: #18181b; color: #fff; border-radius: 999px; padding: 6px 8px; display: flex; gap: 4px; align-items: center; font-size: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.3); white-space: nowrap; max-width: calc(100% - 32px); overflow-x: auto; }
+  .proto button { padding: 4px 10px; border-radius: 999px; color: #c9c9cf; }
+  .proto button[aria-pressed="true"] { background: #fff; color: #18181b; }
+  .proto .sep { width: 1px; height: 16px; background: #444; margin: 0 4px; flex: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">Document Intelligence</div>
+    <div>
+      <button class="item on">March payroll, Acme</button>
+      <button class="item">February payroll, Acme</button>
+      <button class="item">Supplier invoices Q1</button>
+    </div>
+  </nav>
+  <div class="work">
+    <section class="chat" id="chat"></section>
+    <div class="grip"></div>
+    <section class="files" id="files"></section>
+  </div>
+</div>
+<div class="proto" id="proto"></div>
+
+<script>
+// --- Made-up data --------------------------------------------------------------
+
+const ICON = {
+  down: '<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg>',
+  up: '<svg viewBox="0 0 16 16"><path d="M4 10l4-4 4 4"/></svg>',
+  back: '<svg viewBox="0 0 16 16"><path d="M10 4L6 8l4 4"/></svg>',
+  send: '<svg viewBox="0 0 16 16"><path d="M8 13V3M4 7l4-4 4 4"/></svg>',
+  dl: '<svg viewBox="0 0 16 16"><path d="M8 3v8M4 7l4 4 4-4M3 13h10"/></svg>',
+};
+
+const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+const HEAD = ['Employee', 'ID', 'Hours', 'Rate', 'Gross', 'Tax', 'Net'];
+const ONG = ['Ong Boon', 'E105', 120, '20.00', '2,400.00', '360.00', '2,040.00'];
+const BASE = [['Lim Wei', 'E101', 160, '22.00', '3,520.00', '528.00', '2,992.00'],
+  ['Tan Mei', 'E102', 168, '25.00', '4,200.00', '630.00', '3,570.00'],
+  ['Raj Kumar', 'E103', 152, '24.00', '3,648.00', '547.20', '3,100.80'],
+  ['Siti Aminah', 'E104', 160, '27.50', '4,400.00', '660.00', '3,740.00'], ONG];
+const TAN3 = ['Tan Mei', 'E102', 180, '25.00', '4,560.00', '684.00', '3,876.00'];
+// Each version's rows from row 2, and its totals row. Version 3 is the latest, saved after the comments.
+const V = {
+  1: { rows: [...BASE, ONG], total: ['Total', '', 880, '', '22,568.00', '3,385.20', '19,182.80'] },
+  2: { rows: BASE, total: ['Total', '', 760, '', '20,168.00', '3,025.20', '17,142.80'] },
+  3: { rows: [BASE[0], TAN3, ...BASE.slice(2)], total: ['Total', '', 772, '', '20,528.00', '3,079.20', '17,448.80'] },
+};
+const VERSIONS = [
+  { n: 3, name: 'After your comments', when: '14:32' },
+  { n: 2, name: 'Checks passed', when: '14:05' },
+  { n: 1, name: 'First draft', when: '13:51' },
+];
+// "Your last comments" is what the Changes switch compares with today. The comments were made on version 2.
+const SINCE = [{ id: 'round', name: 'Your last comments', base: 2 }, { id: 'v2', name: 'Version 2', base: 2 }, { id: 'v1', name: 'Version 1', base: 1 }];
+
+const COMMENTS = [
+  { n: 1, cell: 'E3', you: 'Gross for Tan Mei looks low. She did overtime in March.', changed: true,
+    agent: ['Changed 4,200.00 to 4,560.00. I added the 12 overtime hours in ', ['file', 'timesheet_march.pdf'], '. Tax and net in ', ['cell', 'F3'], ' and ', ['cell', 'G3'], ' follow.'] },
+  { n: 2, cell: 'D5', you: "Siti's rate should be 25.00, not 27.50.", changed: false,
+    agent: ['Left as is. ', ['file', 'contract_siti.pdf'], ' sets 27.50 from 1 March. The 25.00 rate ended in February.'] },
+  { n: 3, cell: 'A6', you: 'Is Ong Boon still on the payroll? He resigned.', changed: false,
+    agent: ['Kept the row. ', ['file', 'resignation_ong.pdf'], ' gives 31 March as his last day, so March is his final month. I noted this in notes.md.'] },
+];
+const PAGES = {
+  'timesheet_march.pdf': { lines: ['Timesheet · March 2026 · Tan Mei (E102)', 'Week 1 · 42 hours', 'Week 2 · 42 hours', 'Week 3 · 42 hours', 'Week 4 · 42 hours', 'Overtime approved · 12 hours · signed R. Lee'], hit: 5 },
+  'contract_siti.pdf': { lines: ['Employment contract · Siti Aminah (E104)', 'Section 4 · Pay', 'Hourly rate 27.50 from 1 March 2026'], hit: 2 },
+  'resignation_ong.pdf': { lines: ['Resignation letter · Ong Boon (E105)', 'My last working day will be 31 March 2026.'], hit: 1 },
+  'bonus_letter.docx': { lines: ['Bonus letter', 'Dated 2 April 2026', 'Applies to the April pay run'], hit: 2 },
+};
+
+// --- State -----------------------------------------------------------------------
+
+const SCENES = [
+  { group: 'Answers', name: 'Answers in', set: {} },
+  { group: 'Answers', name: 'Working on it', set: { waiting: true } },
+  { group: 'Answers', name: 'Replying', set: { replying: 2, active: 2 } },
+  { group: 'Answers', name: 'One resolved', set: { resolved: [1] } },
+  { group: 'Answers', name: 'All resolved', set: { resolved: [1, 2, 3] } },
+  { group: 'Links', name: 'Cell opened', set: { focus: { cell: 'F3' } } },
+  { group: 'Links', name: 'File opened', set: { file: 'timesheet_march.pdf' } },
+  { group: 'Versions', name: 'Version menu', set: { menu: 'version' } },
+  { group: 'Versions', name: 'Changes since comments', set: { changes: true } },
+  { group: 'Versions', name: 'Since which', set: { changes: true, menu: 'since' } },
+  { group: 'Versions', name: 'Since version 1', set: { changes: true, since: 'v1' } },
+  { group: 'Versions', name: 'Changed rows only', set: { changes: true, since: 'v1', only: true } },
+  { group: 'Versions', name: 'Older version', set: { version: 1 } },
+  { group: 'Versions', name: 'Nothing changed', set: { changes: true, same: true } },
+];
+const FRESH = () => ({ waiting: false, replying: null, draft: '', resolved: [], showResolved: false, focus: null, file: null,
+  menu: null, version: 3, changes: false, same: false, since: 'round', only: false, step: 0, active: null });
+let scene = 0;
+let S = { ...FRESH(), ...SCENES[scene].set };
+
+// --- Helpers ---------------------------------------------------------------------
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const ref = (cell) => `<button class="ref" data-cell="${cell}">Payroll ${cell}</button>`;
+const words = (parts) => parts.map((p) => typeof p === 'string' ? esc(p)
+  : p[0] === 'cell' ? ref(p[1]) : `<button class="ref" data-file="${p[1]}">${p[1]}</button>`).join('');
+const verdict = (c) => S.waiting ? 'wait' : c.changed ? 'done' : 'left';
+const latest = () => S.version === 3;
+const baseOf = () => SINCE.find((x) => x.id === S.since).base;
+// What the Changes switch can compare with: your last comments (on the latest only) or any earlier version.
+const sinceChoices = () => SINCE.filter((x) => (x.id === 'round' ? latest() : x.base < S.version));
+
+// Cells that differ from the version compared with, with what they showed before, plus rows no longer there.
+function diffs() {
+  if (!S.changes || S.same) return { cells: {}, gone: [] }; // `same`: the prototype's stand-in for a round that changed nothing
+  const now = V[S.version], was = V[baseOf()];
+  const cells = {}, gone = [];
+  was.rows.forEach((row, i) => {
+    if (!now.rows[i]) return gone.push(row);
+    row.forEach((v, c) => { if (String(v) !== String(now.rows[i][c])) cells[COLS[c] + (i + 2)] = v; });
+  });
+  was.total.forEach((v, c) => { if (String(v) !== String(now.total[c])) cells[COLS[c] + (now.rows.length + 2)] = v; });
+  return { cells, gone };
+}
+
+// --- Chat --------------------------------------------------------------------------
+
+function chat() {
+  const sent = `<div class="me"><ol>${COMMENTS.map((c) => `<li><button data-open="${c.n}">
+      <span class="pin ${verdict(c)}">${c.n}</span>
+      <span><span class="where">payroll_march.xlsx · Payroll ${c.cell}</span>${esc(c.you)}</span></button></li>`).join('')}</ol></div>`;
+  const answer = S.waiting
+    ? `<div class="steps"><span class="live-dot"></span>Working on your comments</div>`
+    : `<div class="say"><p>I worked through your 3 comments and changed one. ${ref('E3')} now includes overtime, and ${ref('F3')} and ${ref('G3')} follow. Each comment has my answer.</p>
+       <p>Checks pass. Total net pay is now ${ref('G7')}.</p></div>`;
+  return `<div class="chat-head"><h1>March payroll, Acme</h1><span class="pill ${S.waiting ? 'live' : 'ok'}">${S.waiting ? 'Working' : 'Finished'}</span></div>
+    <div class="scroll"><div class="thread">
+      <div class="say"><p>Done. The workbook has 5 employees and the checks pass. <button class="ref" data-file="bonus_letter.docx">bonus_letter.docx</button> is for April, so I left it out.</p></div>
+      ${sent}
+      ${answer}
+    </div></div>
+    <div class="composer"><input placeholder="Ask for a change" aria-label="Message"><button class="send" aria-label="Send">${ICON.send}</button></div>`;
+}
+
+// --- Files panel ---------------------------------------------------------------------
+
+function sheet() {
+  const v = V[S.version];
+  const { cells, gone } = diffs();
+  const changedRefs = Object.keys(cells);
+  const pins = latest() && !S.changes ? Object.fromEntries(COMMENTS.filter((c) => !S.resolved.includes(c.n)).map((c) => [c.cell, c])) : {};
+  const ring = S.focus?.cell || (S.active && COMMENTS.find((c) => c.n === S.active).cell) || (S.changes && changedRefs[S.step]);
+  const td = (ref, val, num) => {
+    const was = ref in cells ? `<span class="was">${esc(cells[ref])}</span>` : '';
+    const pin = pins[ref] ? `<span class="pin ${verdict(pins[ref])}">${pins[ref].n}</span>` : '';
+    const cls = [num && 'num', was && 'changed', pin && 'pinned', ref === ring && 'ring'].filter(Boolean).join(' ');
+    return `<td class="${cls}">${pin}${was}${esc(val)}</td>`;
+  };
+  const rowHtml = (row, r) => `<tr><th class="rn">${r}</th>${row.map((val, c) => td(COLS[c] + r, val, c >= 2)).join('')}</tr>`;
+  const rows = v.rows.map((row, i) => ({ html: rowHtml(row, i + 2), changed: row.some((_, c) => COLS[c] + (i + 2) in cells) }));
+  const shown = S.only && changedRefs.length ? rows.filter((r) => r.changed) : rows;
+  const removed = gone.map((row) => `<tr class="gone"><th class="rn"></th>${row.map((val, c) => `<td class="${c >= 2 ? 'num' : ''}">${esc(val)}</td>`).join('')}</tr>`);
+  const totalRow = v.rows.length + 2;
+  return `<div class="sheet"><table class="grid">
+      <tr><th class="rn"></th>${COLS.map((c) => `<th>${c}</th>`).join('')}</tr>
+      <tr class="head"><th class="rn">1</th>${HEAD.map((h) => `<td>${h}</td>`).join('')}</tr>
+      ${shown.map((r) => r.html).join('')}${removed.join('')}
+      <tr class="total"><th class="rn">${totalRow}</th>${v.total.map((val, c) => td(COLS[c] + totalRow, val, c >= 2)).join('')}</tr>
+    </table><div class="tabs"><span class="on">Payroll</span><span>Summary</span></div></div>`;
+}
+
+function changesBar() {
+  const { cells, gone } = diffs();
+  const n = Object.keys(cells).length + gone.length;
+  const since = SINCE.find((x) => x.id === S.since);
+  const sw = (key, on, label) => `<button class="switch-label" role="switch" aria-checked="${on}" data-toggle="${key}"><span class="switch ${on ? 'on' : ''}"></span>${label}</button>`;
+  let detail = '';
+  if (S.changes) {
+    detail = `<button class="picker" data-menu="since" aria-expanded="${S.menu === 'since'}">Since ${since.id === 'round' ? 'your last comments' : since.name.toLowerCase()} ${ICON.down}</button>`;
+    detail += n
+      ? `<span class="count">${n} ${n === 1 ? 'change' : 'changes'}
+          <button class="icon-btn" data-step="-1" aria-label="Previous change" ${S.step === 0 ? 'disabled' : ''}>${ICON.up}</button>
+          <button class="icon-btn" data-step="1" aria-label="Next change" ${S.step >= Object.keys(cells).length - 1 ? 'disabled' : ''}>${ICON.down}</button></span>
+          ${sw('only', S.only, 'Changed rows only')}`
+      : '<span class="count">Nothing changed</span>';
+  }
+  const modes = latest() && !S.changes ? `<div class="modes" role="group" aria-label="Clicks in the preview"><button aria-pressed="true">View</button><button aria-pressed="false">Comment</button></div>` : '';
+  return `<div class="bar">${sinceChoices().length ? sw('changes', S.changes, 'Changes') : ''}${detail}<span class="spacer"></span>${modes}</div>`;
+}
+
+function comments() {
+  if (!latest() || S.changes) return '';
+  const open = COMMENTS.filter((c) => !S.resolved.includes(c.n));
+  const done = COMMENTS.filter((c) => S.resolved.includes(c.n));
+  const item = (c) => `<div class="c ${S.active === c.n ? 'on' : ''}">
+      <div class="c-top"><span class="pin ${verdict(c)}">${c.n}</span>
+        <button class="where" data-open="${c.n}">Payroll ${c.cell}</button>
+        <span class="verdict ${!S.waiting && c.changed ? 'ok' : ''}">${S.waiting ? '' : c.changed ? 'Changed' : 'Not changed'}</span>
+        ${S.waiting || S.replying === c.n ? '' : `<button class="btn text" data-resolve="${c.n}">Resolve</button>`}</div>
+      <p>${esc(c.you)}</p>
+      ${S.waiting
+        ? '<div class="answer pending"><p><span class="live-dot"></span>Working on it</p></div>'
+        : `<div class="answer"><span class="who">Agent</span><p>${words(c.agent)}</p></div>`}
+      ${S.waiting ? '' : S.replying === c.n
+        ? `<div class="reply"><textarea data-draft placeholder="Reply" aria-label="Reply to the agent">${esc(S.draft)}</textarea>
+            <div class="row"><button class="btn text" data-cancel>Cancel</button><button class="btn primary small" data-send-reply ${S.draft.trim() ? '' : 'disabled'}>Send</button></div></div>`
+        : `<div class="c-act"><button class="btn text" data-reply="${c.n}">Reply</button></div>`}
+    </div>`;
+  const doneRow = (c) => `<div class="resolved"><span class="pin ${verdict(c)}">${c.n}</span><span>Payroll ${c.cell} · ${esc(c.you)}</span><button class="btn text" data-reopen="${c.n}">Reopen</button></div>`;
+  const toggle = done.length ? `<button class="switch-label" role="switch" aria-checked="${S.showResolved}" data-toggle="showResolved"><span class="switch ${S.showResolved ? 'on' : ''}"></span>Resolved (${done.length})</button>` : '';
+  return `<section class="comments"><div class="comments-head"><h2>Comments</h2>${toggle}</div>
+      ${open.map(item).join('') || '<p class="empty">No open comments.</p>'}
+      ${S.showResolved ? done.map(doneRow).join('') : ''}</section>`;
+}
+
+function menu() {
+  if (S.menu === 'version') return `<div class="drop" style="right:56px;top:52px">${VERSIONS.map((v) => `<button data-version="${v.n}" aria-current="${v.n === S.version}">
+      <span class="v">Version ${v.n} · ${v.name}</span><span class="when">${v.when}</span></button>`).join('')}</div>`;
+  if (S.menu === 'since') return `<div class="drop" style="left:24px;top:108px">${sinceChoices().map((x) => `<button data-since="${x.id}" aria-current="${x.id === S.since}">
+      <span class="v">${x.name}</span>${x.id === 'round' ? '' : `<span class="when">${VERSIONS.find((v) => v.n === x.base).when}</span>`}</button>`).join('')}</div>`;
+  return '';
+}
+
+function files() {
+  if (S.file) {
+    const p = PAGES[S.file];
+    return `<div class="files-head"><button class="icon-btn" data-back aria-label="Back to payroll_march.xlsx">${ICON.back}</button><h2>${S.file}</h2>
+        <button class="icon-btn" aria-label="Download">${ICON.dl}</button></div>
+      <div class="files-body"><div class="page">${p.lines.map((l, i) => `<div class="line ${i === p.hit ? 'ring' : ''}">${esc(l)}</div>`).join('')}</div></div>`;
+  }
+  const older = latest() ? '' : `<div class="note"><span>An older version. Comments go on the latest.</span>
+      <button class="btn quiet small">Continue from here</button><button class="btn quiet small" data-version="3">Back to latest</button></div>`;
+  return `<div class="files-head"><h2>payroll_march.xlsx</h2>
+      <button class="picker" data-menu="version" aria-expanded="${S.menu === 'version'}">Version ${S.version} ${ICON.down}</button>
+      <button class="icon-btn" aria-label="Download">${ICON.dl}</button></div>
+    <div class="files-body">${older}${changesBar()}${sheet()}${comments()}</div>${menu()}`;
+}
+
+// --- Drawing and events ----------------------------------------------------------------
+
+function draw() {
+  document.getElementById('chat').innerHTML = chat();
+  document.getElementById('files').innerHTML = files();
+  let last = '';
+  document.getElementById('proto').innerHTML = SCENES.map((s, i) => {
+    const sep = s.group !== last ? `${i ? '<span class="sep"></span>' : ''}<span style="color:#888;padding:0 6px">${s.group}</span>` : '';
+    last = s.group;
+    return `${sep}<button data-scene="${i}" aria-pressed="${i === scene}">${s.name}</button>`;
+  }).join('');
+  document.querySelector('td.ring, .line.ring')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const ta = document.querySelector('[data-draft]');
+  if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+}
+
+const clean = { focus: null, file: null, active: null };
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button');
+  if (!t) { if (S.menu) { S.menu = null; draw(); } return; }
+  const d = t.dataset;
+  if (d.scene) { scene = Number(d.scene); S = { ...FRESH(), ...SCENES[scene].set }; return draw(); }
+  const wasMenu = S.menu;
+  S.menu = null;
+  if (d.menu) S.menu = wasMenu === d.menu ? null : d.menu;
+  else if (d.version) S = { ...S, ...clean, version: Number(d.version), changes: false, since: 'round', step: 0 };
+  else if (d.since) S = { ...S, since: d.since, step: 0 };
+  else if (d.toggle) { S[d.toggle] = !S[d.toggle]; S.step = 0; Object.assign(S, d.toggle === 'changes' ? clean : {}); }
+  else if (d.step) S.step += Number(d.step);
+  else if (d.open) { S = { ...S, ...clean, active: Number(d.open), version: 3, changes: false }; if (S.resolved.includes(S.active)) S.resolved = S.resolved.filter((n) => n !== S.active); }
+  else if (d.cell) S = { ...S, ...clean, focus: { cell: d.cell }, version: 3, changes: false };
+  else if (d.file) S = { ...S, ...clean, file: d.file };
+  else if (d.back !== undefined) S.file = null;
+  else if (d.reply) { S.replying = Number(d.reply); S.draft = ''; S.active = S.replying; }
+  else if (d.cancel !== undefined) S.replying = null;
+  else if (d.sendReply !== undefined) { S.replying = null; S.draft = ''; S.waiting = true; }
+  else if (d.resolve) { S.resolved = [...S.resolved, Number(d.resolve)]; if (S.active === Number(d.resolve)) S.active = null; }
+  else if (d.reopen) S.resolved = S.resolved.filter((n) => n !== Number(d.reopen));
+  else if (!wasMenu) return;
+  draw();
+});
+document.addEventListener('input', (e) => {
+  if (!e.target.matches('[data-draft]')) return;
+  S.draft = e.target.value;
+  document.querySelector('[data-send-reply]').disabled = !S.draft.trim();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.menu) { S.menu = null; draw(); } });
+draw();
+</script>
+</body>
+</html>

@@ -23,7 +23,7 @@ from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
-from . import app_settings, cases, feedback, jobstatus, plain_errors, preview, replay, tuning
+from . import app_settings, cases, feedback, jobstatus, links, plain_errors, preview, replay, tuning
 from .config import ROOT, Settings, settings
 from .engine import versions
 from .engine.agent import UPLOAD_LIMIT
@@ -135,6 +135,7 @@ def create_app(settings_override: Settings | None = None):
             'version': VERSION,
             'playbooks': playbook_rows(),
             'statuses': jobstatus.as_json(),
+            'more_steps': store.settings()['more_steps'],  # the run screen names it on its button
         }
 
     class PlaybookInput(BaseModel):
@@ -371,8 +372,9 @@ def create_app(settings_override: Settings | None = None):
     def app_settings_put(body: SettingsInput):
         try:
             return settings_page(store.save_settings(body.values))
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from None
+        except app_settings.SettingError as error:
+            # field says which setting the sentence is about, so the page shows it beside that field.
+            return JSONResponse({'detail': str(error), 'field': error.field}, 400)
 
     @api.get('/api/jobs')
     async def jobs():
@@ -486,6 +488,27 @@ def create_app(settings_override: Settings | None = None):
     @api.get('/api/jobs/{job_id}')
     async def job(job_id):
         return get(job_id)
+
+    class JobInput(BaseModel):
+        name: str = Field(max_length=MAX_NAME * 2)
+
+    @api.patch('/api/jobs/{job_id}')
+    def job_rename(job_id, body: JobInput):
+        """Give a run its own name in the run list. An empty name goes back to the one made from its goal."""
+        get(job_id)
+        name = ' '.join(body.name.split())
+        if len(name) > MAX_NAME:
+            raise HTTPException(400, f'Use a name of at most {MAX_NAME} characters')
+        return store.update(job_id, name=name or None)
+
+    @api.delete('/api/jobs/{job_id}', status_code=204)
+    def job_delete(job_id):
+        """Remove a run for good: its record, its events and its folder. A run that is going is refused."""
+        j = get(job_id)
+        if j['status'] in jobstatus.ACTIVE or runner.active == job_id:
+            raise HTTPException(409, 'This run is still going. Stop it before you delete it.')
+        store.delete(job_id)
+        shutil.rmtree(store.path(job_id), ignore_errors=True)
 
     @api.post('/api/jobs/{job_id}/start')
     @api.post('/api/jobs/{job_id}/resume')
@@ -724,9 +747,53 @@ def create_app(settings_override: Settings | None = None):
             if isinstance(error, KeyError):
                 raise HTTPException(404, 'That version is no longer kept.') from None
             raise HTTPException(409, plain_errors.sentence(error)) from None
-        store.update(job_id, resume_from=version, error=None, artifacts=runner.engine.artifacts(job_id, False))
+        store.update(job_id, resume_from=version, start_over=None, error=None,
+                     artifacts=runner.engine.artifacts(job_id, False))  # fmt: skip
         store.event(job_id, 'user.continue_from', f'Continuing from version {number}: {version["description"]}',
                     type='user', version=number)  # fmt: skip
+        await runner.enqueue(job_id)
+        return get(job_id)
+
+    @api.post('/api/jobs/{job_id}/start-over')
+    async def start_over(job_id):
+        """Empty the outputs and start a run that does the work from the beginning, in a fresh sandbox. The kept
+        versions stay, so the work can still be continued from one of them afterwards."""
+        j = get(job_id)
+        if not conf.api_key:
+            raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
+        if not j['files']:
+            raise HTTPException(400, 'No usable input files')
+        if store.day_used_up():
+            raise HTTPException(409, DAY_USED_UP)
+        before = {}
+
+        def claim(job):  # in one write with the check, so a second click or a Start cannot run alongside
+            if job['status'] not in jobstatus.STARTABLE | {'completed'} or job.get('legacy'):
+                before['refused'] = 'Stop the run before starting over.'
+            elif runner.active == job_id:
+                before['refused'] = 'The previous operation is still finishing'
+            else:
+                before['status'] = job['status']
+                job['status'] = 'queued'
+
+        store.mutate(job_id, claim)
+        if 'refused' in before:
+            raise HTTPException(409, before['refused'])
+        root = store.path(job_id)
+        try:
+            # The outputs can be newer than the last kept version (a run's last save keeps none), so they are kept
+            # as a version of their own first; if that fails, nothing is set aside.
+            if any(p.is_file() for p in (root / 'outputs').rglob('*')):
+                await asyncio.to_thread(
+                    versions.keep, root / 'outputs', root / 'versions', 'start-over', 0, 'Before starting over',
+                    False, store.settings()['versions_kept'],
+                )  # fmt: skip
+            await asyncio.to_thread(versions.set_aside, root / 'outputs')
+        except OSError as error:
+            store.update(job_id, status=before['status'])
+            raise HTTPException(409, plain_errors.sentence(error)) from None
+        store.update(job_id, start_over=True, resume_from=None, error=None, artifacts=[])
+        store.event(job_id, 'user.start_over', 'Starting over from the beginning', type='user')
         await runner.enqueue(job_id)
         return get(job_id)
 
@@ -748,6 +815,7 @@ def create_app(settings_override: Settings | None = None):
         w: float | None = Field(default=None, ge=0, le=1)  # a box drawn on a page or picture: its width and height
         h: float | None = Field(default=None, ge=0, le=1)
         line: int | None = Field(default=None, ge=1, le=10_000_000)
+        reply_to: str | None = Field(default=None, pattern=r'^\d{1,4}\.\d{1,3}$')  # "1.2": a reply to that comment
 
     class RoundInput(BaseModel):
         round_id: str = Field(pattern=r'^[A-Za-z0-9-]{8,64}$')  # made by the browser, so a repeat is one round
@@ -785,6 +853,32 @@ def create_app(settings_override: Settings | None = None):
     @api.get('/api/jobs/{job_id}/comments')
     def comment_rounds(job_id):
         get(job_id)
+        return feedback.rounds(store, job_id)
+
+    class LinksInput(BaseModel):
+        texts: list[str] = Field(max_length=200)
+
+    @api.post('/api/jobs/{job_id}/links')
+    def text_links(job_id, body: LinksInput):
+        """The cells and files named in texts the screen shows (the report, answers, messages), each checked against
+        this run's files, so only real ones become links. One list per text, in the order sent."""
+        j = get(job_id)
+        paths = [f['path'] for f in j['files']] + [a['path'] for a in j.get('artifacts') or [] if a.get('path')]
+        root = store.path(job_id)
+        return {'links': [links.find(root, paths, text) for text in body.texts]}
+
+    class ResolveInput(BaseModel):
+        comment: str = Field(pattern=r'^\d{1,4}\.\d{1,3}$')
+        resolved: bool = True
+
+    @api.post('/api/jobs/{job_id}/comments/resolve')
+    def resolve_comment(job_id, body: ResolveInput):
+        """Resolve a comment, or open it again. Only the screen uses this; nothing reaches the agent."""
+        get(job_id)
+        try:
+            feedback.resolve(store, job_id, body.comment, body.resolved)
+        except ValueError as error:
+            raise HTTPException(404, str(error)) from None
         return feedback.rounds(store, job_id)
 
     @api.get('/api/jobs/{job_id}/document-map')
@@ -883,18 +977,20 @@ def create_app(settings_override: Settings | None = None):
         return HTTPException(400, 'Invalid file path' if 'path' in str(error).lower() else str(error))
 
     @api.get('/api/jobs/{job_id}/preview')
-    def file_preview(job_id, path: str, sheet: str | None = None):
+    def file_preview(job_id, path: str, sheet: str | None = None, version: int | None = None):
         paths = [f['path'] for f in get(job_id)['files']]
         try:
-            return preview.preview(store.path(job_id), path, sheet, paths)
+            return preview.preview(store.path(job_id), path, sheet, paths, version)
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
 
     @api.get('/api/jobs/{job_id}/changes')
-    def file_changes(job_id, path: str, sheet: str | None = None):
+    def file_changes(job_id, path: str, sheet: str | None = None, version: int | None = None, since: int | None = None):
+        """What changed in an output (or in a kept version of it) since the last round of comments, or since an
+        earlier version."""
         get(job_id)
         try:
-            return feedback.changes_since(store, job_id, path, sheet)
+            return feedback.changes_since(store, job_id, path, sheet, version, since)
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
 
@@ -925,10 +1021,10 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(422, clean(f'This file cannot be searched: {error}')) from None
 
     @api.get('/api/jobs/{job_id}/page')
-    def file_page(job_id, path: str, page: int = 1):
+    def file_page(job_id, path: str, page: int = 1, version: int | None = None):
         get(job_id)
         try:
-            image = preview.page_png(store.path(job_id), path, page)
+            image = preview.page_png(store.path(job_id), path, page, version)
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
         except Exception as error:  # noqa: BLE001 - a damaged PDF
@@ -936,10 +1032,10 @@ def create_app(settings_override: Settings | None = None):
         return Response(image, media_type='image/png', headers={'Cache-Control': 'private, max-age=3600'})
 
     @api.get('/api/jobs/{job_id}/file')
-    def file_download(job_id, path: str):
+    def file_download(job_id, path: str, version: int | None = None):
         get(job_id)
         try:
-            found = preview.job_file(store.path(job_id), path)
+            found = preview.any_file(store.path(job_id), path, version)
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
         return FileResponse(found, filename=found.name)
