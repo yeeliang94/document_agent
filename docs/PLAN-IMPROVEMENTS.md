@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `72%` (44 of 61 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15 and 17 to build)
+**Overall Progress:** `69%` (44 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -406,6 +406,17 @@ The tester's first batch (source links, runs told apart, Settings errors in view
   - **Verify:** in a browser: open two past versions, then restore one.
 - [ ] 🟥 **Step 61: Polish** (one prototype for the lot) — names cut short in the chat file card, step chips and the mobile file title; long step text readable in full; the blank-rename message shown inside the dialog and cleared on Cancel; one number format per column in the workbook view; the total time moved off the Notes row; "run" used everywhere instead of "job"; plainer Settings labels; the Playbook dropdown sized like Client; one accent colour; a hint on why Start is greyed out; placeholder text for empty playbook instructions.
   - **Verify:** each item checked in a browser at 375, 642 and 1440 wide.
+
+### Phase 18: How a run shows its work (asked 2026-11-26)
+
+Today a run shows one line per action the agent took (20-40 in a normal run), each cut short, and none can be opened. The person can't tell at a glance what stage the run is in or what is left. Codex and similar tools fold the actions under short headings and show the agent's own checklist. Each step that changes a screen starts with a prototype.
+
+- [ ] 🟥 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
+  - **Verify:** in a browser, a live run and a finished run of the sample packet: fold and unfold each stage, open three actions, at 642 and 1440 wide.
+- [ ] 🟥 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
+  - **Verify:** a live run with each setting; I report the extra cost per run, and the switch reaches the run.
+- [ ] 🟥 **Step 64: The agent keeps a plan** — a tool the agent uses to write its plan as a short checklist and tick steps off as it goes. The plan is kept with the run, survives condensed history and a picked-up run, and is shown at the top of the run (prototype first).
+  - **Verify:** tests for writing, updating and restoring the plan after a stop; a live run of the sample packet with and without the tool: the score, the cost, and whether the plan matched what it did.
 
 ## Risks
 
