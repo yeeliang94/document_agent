@@ -1422,6 +1422,15 @@ button.frow.dim .name {
   width: 32px;
   flex: none;
 }
+div.frow button.name {
+  text-align: left;
+}
+/* A comment waiting to be sent that is a note on a file the agent was given, not a change */
+.frow .kind {
+  flex: none;
+  color: var(--faint);
+  font-size: 13px;
+}
 button.frow .name,
 .files-head h2 {
   display: flex;
@@ -1957,6 +1966,20 @@ button.frow .name,
   box-shadow:
     0 0 0 1px var(--line),
     0 12px 32px rgba(24, 24, 27, 0.16);
+}
+/* Below 560 wide the comment box is a sheet along the bottom, and what it is about scrolls up above it */
+.pop.sheet {
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  top: auto !important;
+  width: auto;
+  max-width: none;
+}
+.pop-sheet #files .sheet,
+.pop-sheet #files .files-body,
+.pop-sheet #files .shot {
+  padding-bottom: var(--pop-height, 0);
 }
 .pop h2 {
   overflow: hidden;
