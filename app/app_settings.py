@@ -46,46 +46,46 @@ class Option:
 
 
 OPTIONS = {
-    'max_scouts': Option(0, 'Parallel scouts', low=0, high=8),  # the experiment found one agent as accurate and faster
-    'reviewer': Option(False, 'Independent reviewer'),
-    'proof': Option('row', 'Proof level', ('row', 'none')),
-    'effort': Option('medium', 'Reasoning effort', ('low', 'medium', 'high')),
+    'max_scouts': Option(0, 'Helper agents for large folders', low=0, high=8),  # the experiment found one agent as accurate and faster
+    'reviewer': Option(False, 'Second agent reviews the result'),
+    'proof': Option('row', 'Show where each row came from', ('row', 'none')),
+    'effort': Option('medium', 'Thinking depth', ('low', 'medium', 'high')),
     # Short summaries of the lead agent's thinking above the work they led to (app/engine/plan.py). Some services do
     # not send them; the run then shows none and carries on.
     'thinking_summaries': Option('short', "Show the agent's thinking", ('off', 'short', 'detailed')),
-    'sandbox_memory': Option('4g', 'Sandbox memory', ('1g', '4g', '16g')),
-    'max_turns': Option(60, 'Turn limit per run', low=10, high=200),
-    'more_steps': Option(20, 'Steps added by "More steps"', low=5, high=100),
-    'time_limit_minutes': Option(30, 'Time limit per run (minutes)', low=5, high=240),
-    'token_limit_thousands': Option(3000, 'Token limit per run (thousands)', low=100, high=20000),
+    'sandbox_memory': Option('4g', "Agent's computer memory", ('1g', '4g', '16g')),
+    'max_turns': Option(60, 'Steps per run', low=10, high=200),
+    'more_steps': Option(20, 'Steps added by More steps', low=5, high=100),
+    'time_limit_minutes': Option(30, 'Time per run (minutes)', low=5, high=240),
+    'token_limit_thousands': Option(3000, 'AI usage per run (thousands of tokens)', low=100, high=20000),
     # Every run, replayed test included, counts towards the day. 0 means no limit.
-    'daily_token_limit_thousands': Option(30000, 'Token limit per day, all runs (thousands)', low=0, high=500000),
+    'daily_token_limit_thousands': Option(30000, 'AI usage per day, all runs (thousands of tokens)', low=0, high=500000),
     # OpenAI condenses the older history once a request reaches this size; tried live at 20 (see PLAN-IMPROVEMENTS).
-    'condense_at_thousands': Option(200, 'Condense history at (thousands of tokens, 0 for never)', low=0, high=1000),
+    'condense_at_thousands': Option(200, "Summarise the agent's earlier work at (thousands of tokens, 0 for never)", low=0, high=1000),
     # The first save that passes also shows the agent pictures of its deliverables (about 1,000-2,000 tokens each).
-    'look_before_finish': Option(True, 'Show the agent its files before it finishes'),
+    'look_before_finish': Option(True, 'Agent checks its files before finishing'),
     # Runs going side by side, replayed tests included; the rest wait in line. Read as each run ends (app/runtime.py).
     'runs_at_once': Option(2, 'Runs at once', low=1, high=6),
-    'versions_kept': Option(20, 'Versions kept per run', low=1, high=100),  # a copy of the outputs at each save
-    # Questions the agent may ask over the whole job; each one waits for your answer.
-    'max_questions': Option(3, 'Questions it may ask per job', low=0, high=10),
-    'question_wait_minutes': Option(10, 'Minutes to hold the sandbox while a question waits', low=1, high=18),
-    'replay_tests': Option('large', 'Check playbook changes against past corrections', ('never', 'large', 'every')),
-    'litellm_provider': Option('', 'LiteLLM provider header', pattern=r'[A-Za-z0-9_.-]{0,64}'),
-    'model_on_create': Option(False, 'Name the model when creating a sandbox (LiteLLM)'),
+    'versions_kept': Option(20, 'Output versions kept per run', low=1, high=100),  # a copy of the outputs at each save
+    # Questions the agent may ask over the whole run; each one waits for your answer.
+    'max_questions': Option(3, 'Questions per run', low=0, high=10),
+    'question_wait_minutes': Option(10, 'Wait for your answer (minutes)', low=1, high=18),
+    'replay_tests': Option('large', 'Test playbook changes on past corrections', ('never', 'large', 'every')),
+    'litellm_provider': Option('', 'Provider name for the gateway', pattern=r'[A-Za-z0-9_.-]{0,64}'),
+    'model_on_create': Option(False, 'Send the model name when a workspace starts'),
     # Speak instead of type: live words while speaking, or the words after the person stops (see app/voice.py).
     # Live words need the service's Realtime transcription, which some gateways (enterprise ones) do not offer.
     # Off: voice always shows the words after the person stops, and the live choices are hidden.
-    'voice_live': Option(False, 'Live transcription'),
+    'voice_live': Option(False, 'Show words while you speak'),
     'voice_mode': Option('live', 'Voice words appear', ('live', 'after')),
     'voice_live_model': Option('gpt-live-transcribe', 'Live voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),
-    'voice_file_model': Option('gpt-transcribe', 'Recording voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),
+    'voice_file_model': Option('gpt-transcribe', 'Voice model for recordings', pattern=r'[A-Za-z0-9_.-]{1,128}'),
     'voice_max_minutes': Option(2, 'Longest recording (minutes)', low=1, high=10),
     # Prices per million tokens, in ten-thousandths of a US dollar (the page shows dollars), for the money figure
     # of each run and playbook (app/costs.py). 0 for input and output means no figure; 0 for cached means cached
     # tokens cost what other input does.
     'price_input_per_million': Option(0, 'Price per million input tokens', low=0, high=10_000_000),
-    'price_cached_per_million': Option(0, 'Price per million cached input tokens', low=0, high=10_000_000),
+    'price_cached_per_million': Option(0, 'Price per million cached input tokens (0: same as input)', low=0, high=10_000_000),
     'price_output_per_million': Option(0, 'Price per million output tokens', low=0, high=10_000_000),
     # A notification and a mark on the browser tab when a run asks, finishes or stops while you look elsewhere.
     'notify': Option(True, 'Tell me when a run asks, finishes or stops'),

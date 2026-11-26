@@ -17,7 +17,7 @@ import {
 import { backFile, closeFile, filesHtml, loadMap, openFile, openSpot, proofHtml, turnPage } from './files.js';
 import { loadLinks } from './links.js';
 import { applyWidths } from './panels.js';
-import { logPage, settingProblem, settingsChanged, settingsPage, settingsValues, setupPage, startBlocked } from './pages.js';
+import { logPage, settingProblem, settingsChanged, settingsPage, settingsValues, setupPage, startBlocked, startWhy } from './pages.js';
 import {
   applyPlace, canFind, closeFind, foundFor, loadChanges, locateRow, openFind, revealMarks, stepChange, stepFind, typed,
 } from './review.js'; // prettier-ignore
@@ -989,6 +989,7 @@ addEventListener('resize', placePop); // the comment box keeps beside its spot, 
 
 document.addEventListener('input', (e) => {
   const { id, value } = e.target;
+  if (e.target.matches?.('#details input[aria-invalid="true"]')) clearDialogProblem(e.target);
   if (id === 'msg') {
     state.drafts[state.job.id] = value;
     syncComposer();
@@ -997,6 +998,8 @@ document.addEventListener('input', (e) => {
     state.instructions[currentPlaybook()?.id] = value;
     const start = $('[data-action="start"]'); // a goal in words is enough to start, so the button follows the typing
     if (start) start.disabled = startBlocked();
+    const why = $('#start-why');
+    if (why) why.textContent = startWhy();
   }
   if (id === 'note' && state.commentDraft) state.commentDraft.text = value;
   if (id === 'reply-text' && state.reply) {
@@ -1070,11 +1073,39 @@ document.addEventListener('change', async (e) => {
   render();
 });
 
+// A problem with what a dialog asks for shows in the dialog, under the name box, not in a toast behind it. Typing
+// in the box clears it, and the dialog is drawn afresh each time it opens, so Cancel leaves nothing behind.
+function dialogProblem(form, message) {
+  const box = form.querySelector('input[name="name"]');
+  form.querySelector('.problem')?.remove();
+  const problem = document.createElement('p');
+  problem.className = 'problem';
+  problem.id = 'dialog-problem';
+  problem.setAttribute('role', 'alert');
+  problem.textContent = message;
+  if (box) {
+    box.closest('label').after(problem);
+    box.classList.add('bad');
+    box.setAttribute('aria-invalid', 'true');
+    box.setAttribute('aria-describedby', problem.id);
+    box.focus();
+  } else form.querySelector('.end').before(problem);
+}
+
+function clearDialogProblem(box) {
+  box.closest('form')?.querySelector('.problem')?.remove();
+  box.classList.remove('bad');
+  box.removeAttribute('aria-invalid');
+  box.removeAttribute('aria-describedby');
+}
+
 document.addEventListener('submit', async (e) => {
   const form = e.target.id;
   if (!['composer', 'comment-form', 'tune-form', 'book-form', 'reply-form', 'run-form'].includes(form)) return;
   e.preventDefault();
   if (form === 'reply-form') return action('send-reply');
+  const needed = e.target.querySelector('[data-need-name]');
+  if (needed && !needed.value.trim()) return dialogProblem(e.target, 'Enter a name.');
   try {
     if (form === 'composer') return await sendText();
     if (form === 'run-form') {
@@ -1100,6 +1131,7 @@ document.addEventListener('submit', async (e) => {
     }
     if (form === 'book-form') await refreshConfig();
   } catch (err) {
+    if (form === 'book-form' && $('#details').open) return dialogProblem(e.target, err.message);
     toast(err.message);
   }
   render();

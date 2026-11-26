@@ -9,8 +9,9 @@ import { clientRow } from './clients.js';
 
 const page = (width, body) => `<div class="page"><div class="${width}">${body}</div></div>`;
 const row = (label, control) => `<div class="row"><span>${esc(label)}</span>${control}</div>`;
+// The full name shows on hover; the box keeps the Client box's width (.pick), cutting a long name at its end.
 const playbookSelect = () =>
-  `<select class="field" aria-label="Playbook" data-playbook>${playbooks()
+  `<select class="field pick" aria-label="Playbook" title="${esc(currentPlaybook()?.name || '')}" data-playbook>${playbooks()
     .map((p) => `<option value="${esc(p.id)}" ${attr('selected', p.id === currentPlaybook()?.id)}>${esc(p.name)}</option>`)
     .join('')}</select>`;
 
@@ -28,8 +29,16 @@ const stepper = (name, label, value, low, high) => `
 
 export function startBlocked() {
   // Source files and a playbook always; then either a goal in words, or a template or format to work to.
+  return state.busy || Boolean(startWhy());
+}
+
+// Why Start run is greyed out, in a line beside it; '' once it can be pressed.
+export function startWhy() {
   const goal = (state.instructions[currentPlaybook()?.id] || '').trim();
-  return state.busy || !state.files.length || !currentPlaybook() || (!goal && !state.template);
+  if (!state.files.length) return 'Choose source files to start.';
+  if (!currentPlaybook()) return 'Make a playbook to start.';
+  if (!goal && !state.template) return 'Say what to produce, or choose a template.';
+  return '';
 }
 
 export function setupPage() {
@@ -61,10 +70,11 @@ export function setupPage() {
     </div>`
         : ''
     }
-    <div class="end">
+    <div class="end start-row">
+      <span class="hint" id="start-why">${esc(startWhy())}</span>
       <button class="btn text" data-action="more-options" aria-expanded="${more}" aria-controls="more-options" ${held ? 'style="display:none"' : ''}>${more ? 'Fewer options' : 'More options'}</button>
       <button class="btn text" data-book="${esc(currentPlaybook()?.id || '')}">Open playbook</button>
-      ${btn('start', state.busy ? 'Please wait' : state.config?.configured === false ? 'Upload files' : 'Start run', 'primary', startBlocked())}
+      <button class="btn primary" data-action="start" aria-describedby="start-why" ${attr('disabled', startBlocked())}>${esc(state.busy ? 'Please wait' : state.config?.configured === false ? 'Upload files' : 'Start run')}</button>
     </div>`,
   );
 }
@@ -129,7 +139,7 @@ export function settingsPage() {
   // A row whose value was refused shows why, beside the field.
   const field = (name, label, control, note = '') => {
     const error = errors[name];
-    return `<div class="row ${error ? 'err' : ''}"><span>${esc(label)}</span>${control}${error ? `<p class="problem" id="setting-${name}-error">${esc(error)}</p>` : ''}${note}</div>`;
+    return `<div class="row keep ${error ? 'err' : ''}"><span>${esc(label)}</span>${control}${error ? `<p class="problem" id="setting-${name}-error">${esc(error)}</p>` : ''}${note}</div>`;
   };
   const invalid = (name) => (errors[name] ? `aria-invalid="true" aria-describedby="setting-${name}-error"` : '');
   const number = (name, label, note = '') => {
@@ -161,25 +171,25 @@ export function settingsPage() {
         'Agent',
         steps('max_scouts', 'Helper agents for large folders') +
           onOff('reviewer', 'Second agent reviews the result') +
-          onOff('proof', 'Record a source for every row') +
-          onOff('look_before_finish', 'Show the agent its files before it finishes') +
+          onOff('proof', 'Show where each row came from') +
+          onOff('look_before_finish', 'Agent checks its files before finishing') +
           choice('effort', 'Thinking depth', { low: 'Low', medium: 'Medium', high: 'High' }) +
           choice('thinking_summaries', "Show the agent's thinking", { off: 'Off', short: 'Short', detailed: 'Detailed' },
             "Short notes on what the agent is weighing up, shown above the work they led to. Some AI services don't send them; then the run shows none.") +
-          steps('max_questions', 'Questions it may ask per job') +
+          steps('max_questions', 'Questions per run') +
           steps('runs_at_once', 'Runs at once') +
-          choice('replay_tests', 'Re-check past corrections', { never: 'Never', large: 'Big changes', every: 'Every change' }),
+          choice('replay_tests', 'Test playbook changes on past corrections', { never: 'Never', large: 'Big changes', every: 'Every change' }),
       ) +
       panel(
         'Limits per run',
         number('max_turns', 'Steps') +
-          number('more_steps', '"More steps" adds') +
+          number('more_steps', 'Steps added by More steps') +
           number('time_limit_minutes', 'Time') +
           number('token_limit_thousands', 'AI usage') +
           number('question_wait_minutes', 'Wait for your answer') +
-          number('condense_at_thousands', 'Condense history at (0 for never)') +
-          number('versions_kept', 'Versions kept') +
-          choice('sandbox_memory', 'Workspace memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' }),
+          number('condense_at_thousands', "Summarise the agent's earlier work at (0 for never)") +
+          number('versions_kept', 'Output versions kept') +
+          choice('sandbox_memory', "Agent's computer memory", { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' }),
       ) +
       panel(
         'Limits per day',
@@ -187,9 +197,9 @@ export function settingsPage() {
           field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
       ) +
       panel(
-        'Cost per million tokens (0 for no cost)',
+        'Price per million tokens (0 hides costs)',
         number('price_input_per_million', 'Input tokens') +
-          number('price_cached_per_million', 'Cached input tokens (0 for the input price)') +
+          number('price_cached_per_million', 'Cached input tokens (0: same as input)') +
           number('price_output_per_million', 'Output tokens'),
       ) +
       panel(
@@ -199,20 +209,20 @@ export function settingsPage() {
       panel(
         'Voice',
         // Live words are hidden unless the service offers Realtime transcription; off, words appear after you stop.
-        onOff('voice_live', 'Live transcription') +
+        onOff('voice_live', 'Show words while you speak') +
           (v.voice_live
-            ? choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) + text('voice_live_model', 'Live model')
+            ? choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) + text('voice_live_model', 'Live voice model')
             : '') +
-          text('voice_file_model', 'Recording model') +
+          text('voice_file_model', 'Voice model for recordings') +
           number('voice_max_minutes', 'Longest recording'),
       ) +
       panel(
         'Connection',
         field('', 'Model', `<span class="value">${esc(connection.model)}</span>`) +
           field('', 'Service address', `<span class="value">${esc(connection.base_url)}</span>`) +
-          text('litellm_provider', 'LiteLLM provider header', 'None') +
-          onOff('model_on_create', 'Name the model when creating a workspace') +
-          field('', 'Connection', btn('connection', 'Test', 'quiet small', state.busy)) +
+          text('litellm_provider', 'Provider name for the gateway', 'None') +
+          onOff('model_on_create', 'Send the model name when a workspace starts') +
+          field('', 'Check the connection', btn('connection', 'Test', 'quiet small', state.busy)) +
           (connection.warning ? `<p class="problem row">${esc(connection.warning)}</p>` : ''),
       ),
   );
@@ -247,10 +257,10 @@ function facts(job) {
   const rows = [
     ['Run', job.id.slice(0, 8)],
     ['Model', state.config?.model],
-    team ? ['Team', `Lead${team.max_scouts ? ` + ${team.max_scouts} scouts` : ''}${team.reviewer ? ' + reviewer' : ''}`] : null,
-    // Every run of this job counts: the first one and each one your comments or answers started.
+    team ? ['Agents', `Main${team.max_scouts ? ` + ${team.max_scouts} ${team.max_scouts === 1 ? 'helper' : 'helpers'}` : ''}${team.reviewer ? ' + reviewer' : ''}`] : null,
+    // Every round of this run counts: the first one and each one your comments or answers started.
     runs.length ? ['Time', duration(total('seconds'))] : null,
-    runs.length > 1 ? ['Runs', runs.length] : null,
+    runs.length > 1 ? ['Rounds', runs.length] : null,
     ['Model calls', runs.length ? total('requests') : (job.request_count ?? usage.requests)],
     ['Input tokens', (runs.length ? total('input_tokens') : usage.input_tokens)?.toLocaleString()],
     ['Output tokens', (runs.length ? total('output_tokens') : usage.output_tokens)?.toLocaleString()],

@@ -93,7 +93,7 @@ def test_live_words_are_off_until_switched_on_and_voice_then_waits_for_the_stop(
         socket = ws.__enter__()
         socket.send_json({'type': 'start', 'token': ''})
         refused = socket.receive_json()
-        assert refused == {'type': 'error', 'message': 'Live transcription is turned off in Settings.', 'action': 'settings'}
+        assert refused == {'type': 'error', 'message': 'Show words while you speak is turned off in Settings.', 'action': 'settings'}
         ws.__exit__(None, None, None)
         client.put('/api/settings', json={'values': {'voice_live': True}})
         assert client.get('/api/voice').json()['mode'] == 'live'

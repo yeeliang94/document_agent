@@ -120,7 +120,7 @@ def create_app(settings_override: Settings | None = None):
         try:
             return store.get(job_id)
         except (KeyError, ValueError):
-            raise HTTPException(404, 'Job not found') from None
+            raise HTTPException(404, 'That run no longer exists.') from None
 
     @api.get('/health/readiness')
     async def readiness():
@@ -592,7 +592,7 @@ def create_app(settings_override: Settings | None = None):
         if not conf.api_key:
             raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
         if j['status'] not in jobstatus.STARTABLE or j.get('legacy'):
-            raise HTTPException(409, 'This job cannot start in its current state')
+            raise HTTPException(409, 'This run cannot start now.')
         if runner.is_running(job_id):
             raise HTTPException(409, 'The previous operation is still finishing')
         if not j['files']:
@@ -606,7 +606,7 @@ def create_app(settings_override: Settings | None = None):
     async def pause(job_id):
         j = get(job_id)
         if j['status'] not in jobstatus.PAUSABLE:
-            raise HTTPException(409, 'Job is not running')
+            raise HTTPException(409, 'This run is not going.')
         store.mutate(job_id, lambda job: job.update(status='pausing' if job['status'] == 'running' else 'paused'))
         store.event(job_id, 'job.pause_requested', 'Pause requested; completing current operation.', type='job')
         return get(job_id)
@@ -615,7 +615,7 @@ def create_app(settings_override: Settings | None = None):
     async def cancel(job_id):
         j = get(job_id)
         if j['status'] in jobstatus.FINISHED:
-            raise HTTPException(409, 'Job has already finished')
+            raise HTTPException(409, 'This run has already finished.')
         store.update(job_id, status='cancelled')
         store.event(job_id, 'job.cancelled', 'Cancelled; existing output retained.', type='job')
         return get(job_id)
@@ -624,7 +624,7 @@ def create_app(settings_override: Settings | None = None):
     async def answer(job_id, body: TextInput):
         j = get(job_id)
         if j['status'] != 'waiting' or not j.get('question'):
-            raise HTTPException(409, 'Job is not awaiting an answer')
+            raise HTTPException(409, 'This run is not waiting for an answer.')
         if not body.answer.strip():
             raise HTTPException(400, 'Enter an answer')
         store.update(job_id, answer=body.answer)
@@ -1171,7 +1171,7 @@ def create_app(settings_override: Settings | None = None):
             return await refuse('Add OPENAI_API_KEY to .env and restart the application.')
         values = store.settings()
         if not values['voice_live']:
-            return await refuse('Live transcription is turned off in Settings.', 'settings')
+            return await refuse('Show words while you speak is turned off in Settings.', 'settings')
         minutes = values['voice_max_minutes']
         opened = False
         try:

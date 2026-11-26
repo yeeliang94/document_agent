@@ -37,7 +37,7 @@ def relative_name(name: str) -> Path:
 def within(root: Path, name: str) -> Path:
     p = root / relative_name(name)
     if not p.resolve().is_relative_to(root.resolve()):
-        raise ValueError('Path is outside job workspace')
+        raise ValueError("That file is outside this run's folder.")
     return p
 
 
@@ -90,7 +90,7 @@ def add_zip(root, name, data, manifest, max_files, remaining_bytes, depth=0):
             else:
                 add_file(root, 'inputs', (prefix / rel).as_posix(), payload, manifest)
             if len(manifest) > max_files or sum(item['size'] for item in manifest) - initial_size > remaining_bytes:
-                raise ValueError('Nested archive exceeds expanded job limits')
+                raise ValueError('A ZIP inside the upload holds more than a run can take.')
 
 
 ADDED = 'Added'  # the packet folder for files the user adds to a run after it was created

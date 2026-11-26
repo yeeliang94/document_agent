@@ -74,7 +74,7 @@ class Store:
 
     def path(self, job_id):
         if not re.fullmatch('[a-f0-9]{32}', job_id):
-            raise ValueError('Invalid job ID')
+            raise ValueError('That run no longer exists.')
         return self.root / 'jobs' / job_id
 
     def save(self, job):

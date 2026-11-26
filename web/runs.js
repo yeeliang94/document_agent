@@ -58,7 +58,7 @@ export function deleteRun(id) {
 
 // Start over sets the current files aside (they are kept as a version first), so it asks before it does.
 export function confirmStartOver(id) {
-  dialog('Start over?', '<p>The agent does the job again from the beginning. The current files are kept as a version.</p>', 'start-over', id, 'Start over');
+  dialog('Start over?', '<p>The agent does the run again from the start. The current files are kept as a version.</p>', 'start-over', id, 'Start over');
 }
 
 // The rename, delete or start over the dialog asked for. Returns the id of a run that was deleted, so the caller can leave it.

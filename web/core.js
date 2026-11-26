@@ -35,10 +35,11 @@ const icons = {
 export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"/></svg>`;
 export const btn = (action, label, kind = 'quiet', disabled = false, glyph = '') =>
   `<button class="btn ${kind}" data-action="${action}" ${attr('disabled', disabled)}>${glyph ? icon(glyph) : ''}${esc(label)}</button>`;
-// A long name is cut in the middle, so its end (the month, the version, the extension) stays readable; CSS shrinks
-// the start only. While a find is on, the whole name shows with the match marked.
-const KEEP = 16;
+// A long name is cut in the middle, so its end (the month, the version, the file type) stays readable; CSS shrinks
+// the start only, and never below a few letters (.cut in styles.css). While a find is on, the match is marked.
+const KEEP = 12;
 export function nameHtml(name, query = '') {
+  name = String(name ?? '');
   const at = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
   // Marks the match within one part of the name; a match across the cut is marked in each part it touches.
   const part = (text, from) => {
@@ -47,9 +48,9 @@ export function nameHtml(name, query = '') {
     const b = Math.min(text.length, at + query.length - from);
     return a >= b ? esc(text) : `${esc(text.slice(0, a))}<mark>${esc(text.slice(a, b))}</mark>${esc(text.slice(b))}`;
   };
-  if (name.length <= KEEP + 6) return `<span class="start">${part(name, 0)}</span>`;
+  if (name.length <= KEEP + 6) return `<span class="cut"><span class="start">${part(name, 0)}</span></span>`;
   const cut = name.length - KEEP;
-  return `<span class="start">${part(name.slice(0, cut), 0)}</span><span class="end">${part(name.slice(cut), cut)}</span>`;
+  return `<span class="cut"><span class="start">${part(name.slice(0, cut), 0)}</span><span class="end">${part(name.slice(cut), cut)}</span></span>`;
 }
 
 // The agent's own records among a run's outputs: its notes and summary, shown apart from what it made for the person,

@@ -241,6 +241,25 @@ const NUMBERS = new Intl.NumberFormat('en', { maximumFractionDigits: 6 });
 const plainText = (value) => (typeof value === 'number' ? NUMBERS.format(value) : String(value ?? ''));
 const shownText = (value, text) => (typeof text === 'string' ? text : plainText(value));
 
+// A column's plain numbers (those the file gives no format) all show the most decimal places any of them has, so
+// 6,940.80 lines up under 3,933.12. One formatter per number of places.
+const PLACES = new Map();
+const placesOf = (value) => (NUMBERS.format(value).split('.')[1] || '').length;
+function columnPlaces(data) {
+  const most = data.columns.map(() => 0);
+  data.rows.forEach((r, i) =>
+    r.forEach((value, c) => {
+      if (typeof value === 'number' && typeof data.formats?.[`${data.columns[c]}${i + 1}`]?.text !== 'string') most[c] = Math.max(most[c], placesOf(value));
+    }),
+  );
+  return most;
+}
+function columnText(value, text, places) {
+  if (typeof text === 'string' || typeof value !== 'number' || !places) return shownText(value, text);
+  if (!PLACES.has(places)) PLACES.set(places, new Intl.NumberFormat('en', { minimumFractionDigits: places, maximumFractionDigits: places }));
+  return PLACES.get(places).format(value);
+}
+
 // One cell. `spot` is its address (B3) when it can take a comment; `mark` is the pin of a comment waiting on it.
 // `look` is how the file formats it: the text Excel shows and any formula behind a worked-out value; `css` is its
 // style, worked out once.
@@ -296,10 +315,11 @@ function sheetHtml(view) {
   };
   const css = (data.styles || []).map(lookStyle);
   const diff = changesOn(view)?.cells || null; // what each changed cell showed before, with Changes on
+  const places = columnPlaces(data);
   const one = (r, i, c) => {
     const at = `${data.columns[c]}${i + 1}`;
     const look = data.formats?.[at] || {};
-    const shown = shownText(r[c], look.text);
+    const shown = columnText(r[c], look.text, places[c]);
     return cell(r[c], {
       shown,
       spot: spots ? at : '',
@@ -309,7 +329,7 @@ function sheetHtml(view) {
       css: css[look.style] || '',
       picked: picked(i + 1, c + 1),
       was: diff?.[at] || null,
-      found: !!view.found && isFound(view, shown),
+      found: !!view.found && (isFound(view, shown) || isFound(view, shownText(r[c], look.text))), // as shown, or as the plain value
       ring: ringed.has(at),
     });
   };

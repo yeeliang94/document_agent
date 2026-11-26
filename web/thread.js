@@ -213,10 +213,10 @@ function fileButton(path) {
     : `<span class="file" title="${esc(path)}">${name}</span>`;
 }
 
-const fileName = (path) => `<span class="file" title="${esc(path)}">${esc(baseName(path))}</span>`;
+const fileName = (path) => `<span class="file" title="${esc(path)}">${nameHtml(baseName(path))}</span>`;
 
-// One action: a line that opens to show it in full. File names on the line are only named; the opened action
-// lists them as buttons that open each file.
+// One action: a line that opens to show it in full. What it did wraps and reads in full; the files it named sit on
+// a line under it, each cut in the middle. The opened action lists them as buttons that open each file.
 function stepHtml(s) {
   const names = stepFiles(s);
   const files = names.slice(0, 2).map(fileName).join('');
@@ -225,8 +225,9 @@ function stepHtml(s) {
   const took = s.secs !== undefined && !(s.times > 1) ? `<time>${duration(s.secs * 1000)}</time>` : '';
   const on = state.act === s.seq;
   const code = s.code ? Object.entries({ run: s.code.run, name: s.code.name, index: s.code.index, of: s.code.of }).map(([k, v]) => `data-script-${k}="${esc(v)}"`).join(' ') : '';
+  const under = files || more ? `<span class="step-files">${files}${more ? `<span class="more">${esc(more)}</span>` : ''}</span>` : '';
   const line = `<button class="step act ${s.flag ? 'flag' : ''} ${s.plain ? 'plain' : ''} ${on ? 'on' : ''} ${fresh(s.seq)}" data-act="${s.seq}" aria-expanded="${on}" ${code}>
-    <span>${esc(s.verb)}</span>${files}${more ? `<span class="more">${esc(more)}</span>` : ''}${took}</button>`;
+    <span class="words">${esc(s.verb)}</span>${took}${under}</button>`;
   return on ? line + detailHtml(s) : line;
 }
 
@@ -236,8 +237,8 @@ export const scriptKey = (jobId, code) => `${jobId}:${code.run}:${code.name || `
 function chip(path) {
   const stored = storedPath(path);
   return stored
-    ? `<button class="chip" data-open="${esc(stored)}" title="${esc(path)}">${esc(baseName(path))}</button>`
-    : `<span class="chip" title="${esc(path)}">${esc(baseName(path))}</span>`;
+    ? `<button class="chip" data-open="${esc(stored)}" title="${esc(path)}">${nameHtml(baseName(path))}</button>`
+    : `<span class="chip" title="${esc(path)}">${nameHtml(baseName(path))}</span>`;
 }
 
 // What came back from an action: what a script printed, or what the checks said of a save.
@@ -518,13 +519,13 @@ const oldSummary = (summary) =>
     .join('\n')
     .trim();
 
-// "14 steps · 4m 10s · $0.42": how far the run went, the time all its runs took, and what they cost (when prices
-// are set in Settings).
+// "Took 4m 10s · cost $0.42": the time all the run's rounds took, and what they cost (when prices are set in
+// Settings). It sits under the report's headline.
 function spent(job) {
-  const steps = job.progress?.steps;
   const seconds = (job.runs || []).reduce((sum, r) => sum + (r.seconds || 0), 0);
   const cost = job.cost ? money(job.cost.usd) : '';
-  return [steps ? plural(steps, 'step') : '', seconds ? duration(seconds * 1000) : '', cost].filter(Boolean).join(' · ');
+  const took = seconds ? `Took ${duration(seconds * 1000)}` : '';
+  return [took, cost ? `${took ? 'cost' : 'Cost'} ${cost}` : ''].filter(Boolean).join(' · ');
 }
 
 // The report first, then the deliverable with its Download, then what the person can do next. A partly done run reads
@@ -534,11 +535,13 @@ function reportCard(job) {
   const report = job.report;
   const left = job.engine_check && !job.engine_check.passed ? job.engine_check.issues || [] : [];
   const why = job.status === 'partial' ? job.stopped_because : '';
+  const took = spent(job);
+  const meta = took ? `<p class="spent">${esc(took)}</p>` : '';
   const top = report
-    ? `${report.headline ? `<h2>${reportText(report.headline)}</h2>` : ''}${why ? `<p class="why">${esc(why)}</p>` : ''}`
+    ? `${report.headline ? `<h2>${reportText(report.headline)}</h2>` : ''}${meta}${why ? `<p class="why">${esc(why)}</p>` : ''}`
     : oldSummary(job.summary)
-      ? `<p class="say">${reportText(oldSummary(job.summary))}</p>`
-      : '';
+      ? `<p class="say">${reportText(oldSummary(job.summary))}</p>${meta}`
+      : meta;
   const parts = [
     reportPart('What I did', report?.done),
     reportPart('Decisions I made', report?.decisions),
@@ -550,18 +553,16 @@ function reportCard(job) {
     .map(
       (a, i) => `<div class="filerow"><span class="tag">${esc(a.name.split('.').pop())}</span>
         <button class="name" data-open="${esc(a.path)}" title="${esc(a.name)}">${nameHtml(a.name)}</button>
-        ${a.status === 'validated' ? pill('ok', 'Checked') : a.status === 'draft' ? pill('warn', 'Draft') : ''}
-        <button class="btn ${!partial && i === 0 ? 'primary' : 'quiet'} small" data-download="${esc(a.path)}">${icon('down')}Download</button></div>`,
+        <span class="file-acts">${a.status === 'validated' ? pill('ok', 'Checked') : a.status === 'draft' ? pill('warn', 'Draft') : ''}
+        <button class="btn ${!partial && i === 0 ? 'primary' : 'quiet'} small" data-download="${esc(a.path)}">${icon('down')}Download</button></span></div>`,
     )
     .join('');
   const notes = (job.artifacts || []).find((a) => a.name === 'notes.md');
-  const took = spent(job);
   const choices = showingVersions()
     ? versionsCard()
     : `<div class="choices">${partial ? btn('resume', 'Continue', 'primary', state.busy) : ''}
       ${partial && (state.versions || []).length > 1 ? btn('show-versions', 'Earlier versions', 'text') : ''}
-      ${notes ? `<button class="btn text" data-open="${esc(notes.path)}">Notes</button>` : ''}
-      ${took ? `<span class="spent">${esc(took)}</span>` : ''}</div>`;
+      ${notes ? `<button class="btn text" data-open="${esc(notes.path)}">Notes</button>` : ''}</div>`;
   return `<div class="report">${top}${parts}</div>${files ? `<div class="card deliver">${files}</div>` : ''}${choices}`;
 }
 

@@ -204,7 +204,7 @@ export function clientRow(row) {
   const suggestion = hint
     ? `<span class="when">Suggested: ${esc(hint.name)}</span><button class="btn quiet small" data-use-client="${esc(hint.id)}">Use</button>`
     : '';
-  return row('Client', `<div class="val wraps">${suggestion}<select class="field" aria-label="Client" data-run-client>${options}</select></div>`);
+  return row('Client', `<div class="val wraps">${suggestion}<select class="field pick" aria-label="Client" data-run-client>${options}</select></div>`);
 }
 
 export function chooseRunClient(id) {

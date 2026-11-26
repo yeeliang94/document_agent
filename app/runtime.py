@@ -53,7 +53,7 @@ class Runner:
             elif job['status'] in jobstatus.ACTIVE:  # No run survives a restart.
                 self.store.update(job['id'], status='paused', error=None, waiting_for_slot=None)
                 self.store.event(
-                    job['id'], 'job.recovered', 'Interrupted job retained. Resume when ready.', type='job', level='WARN'
+                    job['id'], 'job.recovered', 'The app restarted during this run. Continue when ready.', type='job', level='WARN'
                 )
         # A check the last shutdown cut off gets a result for every case, so it does not block the next one.
         for check in replay.reconcile(self.store):

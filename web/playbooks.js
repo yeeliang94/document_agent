@@ -111,7 +111,7 @@ function instructionsTab(book) {
   const saved = book.saved === book.data.version && book.saved > 1
     ? `<div class="saved"><span>Saved as version ${book.saved}</span><button class="btn text small" data-restore="${book.saved - 1}">Undo</button></div>`
     : '';
-  return `<div class="box tall book"><textarea id="playbook-text" aria-label="Instructions the agent follows on every ${esc(book.data.name)} run" ${attr('disabled', waiting)}></textarea>${micButton('playbook-text', waiting, 'the instructions')}</div>${voiceNote('playbook-text')}
+  return `<div class="box tall book"><textarea id="playbook-text" aria-label="Instructions the agent follows on every ${esc(book.data.name)} run" placeholder="What should the agent do on every ${esc(book.data.name)} run?" ${attr('disabled', waiting)}></textarea>${micButton('playbook-text', waiting, 'the instructions')}</div>${voiceNote('playbook-text')}
     ${saved}
     ${waiting ? `<div class="me">${esc(tune.ask)}</div><div class="live"><i></i><b>Rewriting the instructions</b></div>` : ''}
     <form class="ask" id="tune-form"><input id="tune" aria-label="Ask the agent to change the instructions" placeholder="Ask the agent to change the instructions" autocomplete="off" ${attr('disabled', waiting || !state.config?.configured)}>
@@ -388,7 +388,8 @@ export function dialog(title, body, action, label) {
   $('#details').showModal();
 }
 
-export const nameField = (value = '') => `<label>Name<input class="field" name="name" value="${esc(value)}" required autocomplete="off"></label>`;
+// A blank name is caught in the dialog itself (app.js), which says so under the box.
+export const nameField = (value = '') => `<label>Name<input class="field" name="name" value="${esc(value)}" data-need-name autocomplete="off"></label>`;
 
 export const playbookDialogs = {
   'new-playbook': () =>
