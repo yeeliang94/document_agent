@@ -1,7 +1,7 @@
 // The Files panel: the run's outputs, checks and source files, and a viewer to look inside any of them.
 
 import {
-  api, attr, baseName, blobUrl, esc, extension, fileUrl, icon, inGroup, isActive, jobUrl, pill, plural, sources,
+  api, attr, baseName, HIDDEN_OUTPUTS, isDeliverable, isNote, nameHtml, blobUrl, esc, extension, fileUrl, icon, inGroup, isActive, jobUrl, pill, plural, sources,
   state, storedPath,
 } from './core.js'; // prettier-ignore
 import {
@@ -21,7 +21,6 @@ const DECISIONS = {
   not_relevant: ['', 'Not relevant'],
   unclear: ['warn', 'Unclear'],
 };
-const HIDDEN_OUTPUTS = ['document_map.json', 'provenance.json'];
 
 // --- What the agent decided about each source file -------------------------
 
@@ -73,39 +72,71 @@ function sourcePill(path, seen) {
 
 // --- The list --------------------------------------------------------------
 
-const row = (path, name, right = '') =>
-  `<button class="frow" data-open="${esc(path)}" title="${esc(path)}"><span class="tag">${esc(extension(name))}</span><span class="name">${esc(name)}</span>${right}</button>`;
-const fact = (label, value) => `<div class="frow"><span class="name">${esc(label)}</span>${value}</div>`;
+// One file in the list. `current` marks the file on show (in the list beside a file at full screen).
+const row = (path, name, right = '', { dim = false, query = '' } = {}) =>
+  `<button class="frow ${dim ? 'dim' : ''}" data-open="${esc(path)}" title="${esc(path)}" aria-current="${state.open === path}"><span class="tag">${esc(extension(name))}</span><span class="name">${nameHtml(name, query)}</span>${right}</button>`;
 
+// The checks, folded into one line that says how they went; unfolded, one line each.
 function checksHtml(job) {
   const check = job.engine_check;
-  if (check) {
-    const s = check.summary || {};
-    const ok = (good, text) => pill(good ? 'ok' : 'warn', text);
-    const rows = [
-      fact('Template rules', s.deliverable_problems === undefined ? pill('', 'Not checked') : ok(!s.deliverable_problems, s.deliverable_problems ? plural(s.deliverable_problems, 'problem') : 'Passed')),
-      fact('Totals add up', s.totals === undefined ? pill('', 'Not checked') : !s.totals && !s.totals_problems ? pill('', 'No totals') : ok(!s.totals_problems, s.totals_problems ? plural(s.totals_problems, 'problem') : 'Passed')),
-      fact('Files decided', s.files === undefined ? pill('', 'Not checked') : ok(s.files_decided === s.files, `${s.files_decided} of ${s.files}`)),
-    ];
-    if (s.rows_written != null) rows.push(fact('Rows with a source', ok(s.rows_sourced === s.rows_written && s.rows_written > 0, `${s.rows_sourced} of ${s.rows_written}`)));
-    rows.push(fact('Reviewer', check.reviews ? ok(true, check.doubts ? `${plural(check.doubts, 'doubt')} checked` : 'No doubts') : pill('', 'Not run')));
-    // A finished run lists what is still to fix in its report, so the list is shown once, there.
-    const issues = !check.passed && check.issues?.length && !inGroup('finished', job.status) ? `<ul class="fix">${check.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
-    return `<div class="list"><h3>Checks</h3>${rows.join('')}${issues}</div>`;
-  }
-  return '';
+  if (!check) return '';
+  const s = check.summary || {};
+  // Each check as [label, tone, text]: tone 'ok', 'warn' or '' (not checked).
+  const ok = (good, text) => [good ? 'ok' : 'warn', text];
+  const facts = [
+    ['Template rules', ...(s.deliverable_problems === undefined ? ['', 'Not checked'] : ok(!s.deliverable_problems, s.deliverable_problems ? plural(s.deliverable_problems, 'problem') : 'Passed'))],
+    ['Totals add up', ...(s.totals === undefined ? ['', 'Not checked'] : !s.totals && !s.totals_problems ? ['', 'No totals'] : ok(!s.totals_problems, s.totals_problems ? plural(s.totals_problems, 'problem') : 'Passed'))],
+    ['Files decided', ...(s.files === undefined ? ['', 'Not checked'] : ok(s.files_decided === s.files, `${s.files_decided} of ${s.files}`))],
+  ];
+  if (s.rows_written != null) facts.push(['Rows with a source', ...ok(s.rows_sourced === s.rows_written && s.rows_written > 0, `${s.rows_sourced} of ${s.rows_written}`)]);
+  facts.push(['Reviewer', ...(check.reviews ? ok(true, check.doubts ? `${plural(check.doubts, 'doubt')} checked` : 'No doubts') : ['', 'Not run'])]);
+  const warned = facts.filter(([, tone]) => tone === 'warn').length;
+  const verdict = check.passed ? pill('ok', 'All passed') : warned ? pill('warn', `${warned} to look at`) : pill('warn', 'Not passed');
+  // A finished run lists what is still to fix in its report, so the list is shown once, there. Otherwise it stays
+  // in view, folded or not: it is what the person most needs from the checks.
+  const issues = !check.passed && check.issues?.length && !inGroup('finished', job.status) ? `<ul class="fix">${check.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+  const open = state.checksOpen;
+  const rows = facts.map(([label, tone, text]) => `<div><span>${esc(label)}</span>${pill(tone, text)}</div>`).join('');
+  return `<div class="list"><button class="fold checks" data-action="toggle-checks" aria-expanded="${open}">${icon('chev')}<span class="name">Checks</span>${verdict}</button>
+    ${open ? `<div class="check-list">${rows}</div>` : ''}${issues}</div>`;
 }
 
-function listHtml(job) {
-  const outputs = (job.artifacts || []).filter((a) => !HIDDEN_OUTPUTS.includes(a.name));
-  const outputRows = outputs.length
-    ? outputs.map((a) => row(a.path, a.name, a.status === 'validated' ? pill('ok', 'Checked') : a.status === 'draft' ? pill('warn', 'Draft') : '')).join('')
-    : '<div class="empty">Nothing yet</div>';
-  const template = (job.files || []).find((f) => f.role === 'template');
-  const seen = touched();
-  const all = sources();
+// Short names for folders, keeping the parts that tell them apart. Folders that start alike and are as deep are
+// compared: a part they all share (payroll / 2026 / Q4) folds into "…", keeping the first and last part. A folder
+// with nothing to compare against keeps its first two parts and its last; two that would still read the same show
+// their whole paths. The full path is in the tooltip.
+function folderLabels(dirs) {
+  const labels = {};
+  const kin = {};
+  for (const dir of new Set(dirs)) {
+    const parts = dir.split('/');
+    (kin[`${parts[0]}|${parts.length}`] ||= []).push(parts);
+  }
+  for (const group of Object.values(kin)) {
+    for (const parts of group) {
+      let shown = parts;
+      if (parts.length > 3) {
+        const differs = parts.map((p, i) => i === 0 || i === parts.length - 1 || group.some((o) => o[i] !== p));
+        if (group.length === 1) shown = [parts[0], parts[1], '…', parts.at(-1)];
+        else shown = parts.reduce((out, p, i) => (differs[i] ? [...out, p] : out.at(-1) === '…' ? out : [...out, '…']), []);
+      }
+      labels[parts.join('/')] = shown.join(' / ');
+    }
+  }
+  const count = {};
+  for (const label of Object.values(labels)) count[label] = (count[label] || 0) + 1;
+  for (const dir of Object.keys(labels)) if (count[labels[dir]] > 1) labels[dir] = dir.split('/').join(' / ');
+  return labels;
+}
 
-  // With decisions in hand, offer them as a filter: this replaces the separate document map page.
+const MANY = 40; // past this many sources, folders start folded
+
+// The source files: a find box, a filter by the agent's decision, and folders, folded when there are many.
+function sourcesHtml({ pills }) {
+  const all = sources();
+  const seen = pills ? touched() : null;
+  const query = state.fileQuery.trim();
+  const q = query.toLowerCase();
   const counts = {};
   for (const f of all) {
     const decision = state.map?.[f.path]?.decision;
@@ -113,12 +144,13 @@ function listHtml(job) {
   }
   const choices = Object.keys(DECISIONS).filter((d) => counts[d]);
   if (state.mapFilter !== 'all' && !counts[state.mapFilter]) state.mapFilter = 'all';
-  const filter = choices.length > 1
-    ? `<div class="filter">${[['all', 'All'], ...choices.map((d) => [d, `${DECISIONS[d][1]} ${counts[d]}`])]
-        .map(([id, label]) => `<button class="${state.mapFilter === id ? 'on' : ''}" data-map-filter="${id}">${esc(label)}</button>`)
-        .join('')}</div>`
+  const chip = (id, label) => `<button data-map-filter="${id}" aria-pressed="${state.mapFilter === id}">${esc(label)}</button>`;
+  const chips = choices.length > 1 ? `<div class="chips" role="group" aria-label="Show">${chip('all', `All ${all.length}`)}${choices.map((d) => chip(d, `${DECISIONS[d][1]} ${counts[d]}`)).join('')}</div>` : '';
+  const find = all.length > 8
+    ? `<label class="source-find">${icon('find')}<input id="files-q" type="search" value="${esc(state.fileQuery)}" placeholder="Find a source" aria-label="Find a source" autocomplete="off"></label>`
     : '';
-  const shown = all.filter((f) => state.mapFilter === 'all' || state.map?.[f.path]?.decision === state.mapFilter);
+  const shown = all.filter((f) => (state.mapFilter === 'all' || state.map?.[f.path]?.decision === state.mapFilter) && (!q || f.path.toLowerCase().includes(q)));
+
   // Folder headings drop the part every file shares (the upload folder and the zip's own name).
   const dirs = all.map((f) => f.path.split('/').slice(0, -1));
   let shared = dirs[0] || [];
@@ -127,27 +159,57 @@ function listHtml(job) {
     while (same < shared.length && d[same] === shared[same]) same += 1;
     shared = shared.slice(0, same);
   }
-  // A folder heading only where it groups two or more files; a lone file keeps its folder in the tooltip.
   const dirOf = (f) => f.path.split('/').slice(shared.length, -1).join('/');
+  const many = all.length > MANY;
   const size = {};
-  for (const f of shown) size[dirOf(f)] = (size[dirOf(f)] || 0) + 1;
-  let folder = null;
-  const sourceRows = shown
-    .map((f) => {
-      const dir = size[dirOf(f)] > 1 ? dirOf(f) : '';
-      const head = dir !== folder && dir ? `<div class="folder">${esc(dir)}</div>` : '';
-      folder = dir;
-      return head + row(f.path, baseName(f.path), sourcePill(f.path, seen));
-    })
-    .join('');
+  for (const f of all) size[dirOf(f)] = (size[dirOf(f)] || 0) + 1;
+  // A few files: a heading only where a folder groups two or more, and a lone file keeps its folder in the tooltip.
+  // Many files: every folder is a line that folds, and a find opens the folders it matches in.
+  const groups = [];
+  for (const f of shown) {
+    const dir = many || size[dirOf(f)] > 1 ? dirOf(f) : '';
+    if (groups.at(-1)?.dir !== dir) groups.push({ dir, files: [] });
+    groups.at(-1).files.push(f);
+  }
+  const fileRows = (files) => files.map((f) => {
+    const decision = state.map?.[f.path]?.decision;
+    return row(f.path, baseName(f.path), pills ? sourcePill(f.path, seen) : '', { dim: decision === 'not_relevant', query });
+  }).join('');
+  const short = folderLabels(all.map(dirOf).filter(Boolean)); // from every folder, so a filter does not change them
+  const body = groups.map(({ dir, files }) => {
+    if (!dir) return fileRows(files);
+    if (!many) return `<div class="folder" title="${esc(dir)}">${esc(short[dir])}</div>${fileRows(files)}`;
+    const open = !!q || state.openFolders.has(dir);
+    return `<button class="fold" data-fold="${esc(dir)}" aria-expanded="${open}" title="${esc(dir)}">${icon('chev')}<span class="name">${esc(short[dir])}</span><span class="count">${files.length}</span></button>
+      ${open ? `<div class="inside">${fileRows(files)}</div>` : ''}`;
+  }).join('');
+  const count = shown.length === all.length ? `${all.length}` : `${shown.length} of ${all.length}`;
+  return `<div class="list sources"><h3><span>Sources</span><span class="count">${count}</span></h3>
+    ${find || chips ? `<div class="sift">${find}${chips}</div>` : ''}
+    ${body || `<div class="empty">${all.length ? 'No source matches.' : 'None'}</div>`}</div>`;
+}
+
+// Every file of the run, by kind. `rail` is the list beside an open file at full screen: no checks, no pills.
+function groupsHtml(job, { rail = false } = {}) {
+  const outputs = (job.artifacts || []).filter((a) => !HIDDEN_OUTPUTS.includes(a.name));
+  const made = outputs.filter((a) => isDeliverable(a.name));
+  const notes = outputs.filter((a) => isNote(a.name));
+  const status = (a) => (rail ? '' : a.status === 'validated' ? pill('ok', 'Checked') : a.status === 'draft' ? pill('warn', 'Draft') : '');
+  const template = (job.files || []).find((f) => f.role === 'template');
   return `
-    <div class="files-head"><h2>Files</h2><button class="icon-btn only-narrow" data-action="toggle-files" aria-label="Close">${icon('x')}</button></div>
+    <div class="list"><h3>Outputs</h3>${made.length ? made.map((a) => row(a.path, a.name, status(a))).join('') : '<div class="empty">Nothing yet</div>'}</div>
+    ${notes.length ? `<div class="list"><h3>Agent's notes</h3>${notes.map((a) => row(a.path, a.name)).join('')}</div>` : ''}
+    ${rail ? '' : checksHtml(job)}
+    ${template ? `<div class="list"><h3>${/\.json$/i.test(template.path) ? 'Format' : 'Template'}</h3>${row(template.path, baseName(template.path))}</div>` : ''}
+    ${sourcesHtml({ pills: state.full && !rail })}`;
+}
+
+function listHtml(job) {
+  return `
+    <div class="files-head"><h2>Files</h2>${fullHtml()}<button class="icon-btn only-narrow" data-action="toggle-files" aria-label="Close">${icon('x')}</button></div>
     <div class="files-body">
       ${pendingHtml()}
-      <div class="list"><h3>Output</h3>${outputRows}</div>
-      ${checksHtml(job)}
-      ${template ? `<div class="list"><h3>${/\.json$/i.test(template.path) ? 'Format' : 'Template'}</h3>${row(template.path, baseName(template.path))}</div>` : ''}
-      <div class="list"><h3><span>Sources</span><span>${all.length}</span></h3>${filter}${sourceRows}</div>
+      ${groupsHtml(job)}
     </div>${barHtml()}`;
 }
 
@@ -254,9 +316,6 @@ function sheetHtml(view) {
   // With "Changed rows only", the first row stays as the heading.
   const only = changedOnly(view);
   const kept = (i) => !only || i === 0 || data.columns.some((c) => diff[`${c}${i + 1}`]);
-  const tabs = data.sheets.length > 1
-    ? `<div class="filter">${data.sheets.map((s) => `<button class="${s.name === data.sheet ? 'on' : ''}" data-sheet="${esc(s.name)}">${esc(s.name)}</button>`).join('')}</div>`
-    : '';
   const hidden = data.sheets.find((s) => s.name === data.sheet)?.hidden;
   const meta = [hidden ? 'Hidden sheet' : '', data.more ? 'Showing the first 500 rows' : '']
     .filter(Boolean)
@@ -267,7 +326,7 @@ function sheetHtml(view) {
         ${data.rows.map((r, i) => (kept(i) ? `<tr ${picks ? `data-row="${i + 1}" tabindex="0"` : ''} class="${picks && state.row === i + 1 ? 'sel' : ''}"><td>${i + 1}</td>${data.columns.map((_, c) => one(r, i, c)).join('')}</tr>` : '')).join('')}
       </tbody></table></div>`
     : '<p class="empty">This sheet is empty.</p>';
-  return `${tabs || meta ? `<div class="meta">${meta}${tabs}</div>` : ''}${grid}<div class="proof list" id="proof">${picks ? proofHtml() : ''}</div>`;
+  return `${meta ? `<div class="meta">${meta}</div>` : ''}${grid}<div class="proof list" id="proof">${picks ? proofHtml() : ''}</div>`;
 }
 
 // The uploaded files behind the selected row of an output sheet: which of its values came from which file, and
@@ -373,51 +432,75 @@ function hasSpots(view) {
   return data.kind === 'text' || (['pages', 'image'].includes(data.kind) && !!view.image);
 }
 
+// The sheets of a workbook, as tabs that scroll sideways when there are many.
+function tabsHtml(view) {
+  const data = view.data;
+  if (data?.kind !== 'sheet' || data.sheets.length < 2) return '';
+  return `<div class="tabs" role="group" aria-label="Sheets">${data.sheets.map((s) => `<button class="${s.name === data.sheet ? 'on' : ''}" data-sheet="${esc(s.name)}" aria-pressed="${s.name === data.sheet}">${esc(s.name)}</button>`).join('')}</div>`;
+}
+
 function viewerHtml(view) {
   const entry = state.map?.[view.path];
   const artifact = (state.job.artifacts || []).find((a) => a.path === view.path);
-  let about = '';
+  // What the agent made of this file: a pill beside the sheet tabs, and for a source the reason in a line below.
+  let status = '';
+  let reason = '';
   if (entry) {
     const [tone, label] = DECISIONS[entry.decision] || ['warn', entry.decision || 'Undecided'];
-    about = `<div class="meta">${pill(tone, label)}<span>${esc(entry.reason)}</span></div>`;
-  } else if (artifact?.status) about = `<div class="meta">${artifact.status === 'validated' ? pill('ok', 'Checked') : pill('warn', 'Draft')}</div>`;
+    status = pill(tone, label);
+    reason = entry.reason ? `<p class="reason">${esc(entry.reason)}</p>` : '';
+  } else if (artifact?.status) status = artifact.status === 'validated' ? pill('ok', 'Checked') : pill('warn', 'Draft');
   // The body is drawn first: the find bar counts the matches it marked.
   startMarks();
   const body = bodyHtml(view);
+  const full = state.full;
   const back = view.back ? (view.back.row ? `Back to row ${view.back.row}` : `Back to ${baseName(view.back.path)}`) : 'Back to files';
+  // At full screen the list beside the file takes the place of Back, except Back to the row a source was opened from.
+  const backBtn = !full || view.back ? `<button class="icon-btn" data-action="back-file" aria-label="${esc(back)}" title="${esc(back)}">${icon('back')}</button>` : '';
+  const railBtn = full
+    ? `<button class="icon-btn" data-action="toggle-rail" aria-pressed="${state.rail}" aria-label="${state.rail ? 'Hide' : 'Show'} the file list" title="${state.rail ? 'Hide' : 'Show'} the file list">${icon('side')}</button>`
+    : '';
   const find = canFind(view) ? `<button class="icon-btn" data-find aria-label="Find in file" title="Find in file" aria-pressed="${!!state.find}">${icon('find')}</button>` : '';
-  // An older version is for looking only: no Comment mode, and a way to carry on from it or go back to the latest.
+  // An older version is for looking only: no comments, and a way to carry on from it or go back to the latest.
   const older = view.version
     ? `<div class="older"><span>An older version. Comments go on the latest.</span>
         <button class="btn quiet small" data-continue="${view.version}" ${attr('disabled', state.busy || isActive())}>Continue from here</button>
         <button class="btn quiet small" data-pick-version="latest">Back to latest</button></div>`
     : '';
+  const loaded = view.data && !view.error;
+  // Under the file's name: the sheet tabs, what the agent made of the file, and the Changes switch.
+  const tabs = loaded ? tabsHtml(view) : '';
+  const changes = loaded ? changesBarHtml(view) : '';
+  const bar = tabs || status || changes ? `<div class="file-bar">${tabs}${status}${changes}</div>` : '';
   // The comments sent on this file, with their answers, on the latest and with Changes off.
-  const sent = !view.version && !changesOn(view) && view.data && !view.error ? sentHtml(view.path) : '';
-  return `
-    <div class="files-head"><button class="icon-btn" data-action="back-file" aria-label="${esc(back)}" title="${esc(back)}">${icon('back')}</button>
-      <h2 title="${esc(view.path)}">${esc(baseName(view.path))}</h2>
+  const sent = !view.version && !changesOn(view) && loaded ? sentHtml(view.path) : '';
+  const close = full ? '' : `<button class="icon-btn" data-action="close-file" aria-label="Close" title="Close">${icon('x')}</button>`;
+  const head = `
+    <div class="files-head">${railBtn}${backBtn}
+      <h2 title="${esc(view.path)}">${nameHtml(baseName(view.path))}</h2>
       ${versionMenuHtml(view.path, view.version)}
-      ${canComment() && hasSpots(view) && !view.version ? modesHtml() : ''}${toolsHtml(view, find)}
-      <button class="icon-btn" data-action="close-file" aria-label="Close">${icon('x')}</button></div>
-    ${findBarHtml(view)}
-    <div class="files-body">${older}${about}${view.data && !view.error ? changesBarHtml(view) : ''}${body}${sent}</div>${barHtml()}`;
+      ${canComment() && hasSpots(view) && !view.version ? commentHtml() : ''}${toolsHtml(view, find)}${fullHtml()}${close}</div>`;
+  const content = `${findBarHtml(view)}<div class="files-body">${older}${bar}${reason}${body}${sent}</div>`;
+  if (full && state.rail) {
+    return `${head}<div class="split"><nav class="rail" aria-label="Files in this run">${groupsHtml(state.job, { rail: true })}</nav><div class="pane">${content}</div></div>${barHtml()}`;
+  }
+  return `${head}${content}${barHtml()}`;
 }
 
-// Zoom, find, full screen and download sit in the header while the panel is wide enough; in a narrow panel they
-// move into a More menu (styles.css decides which, by the panel's width).
+// Zoom, find and download sit in the header while the panel is wide enough; in a narrow panel they move into a More
+// menu (styles.css decides which, by the panel's width).
 function toolsHtml(view, find) {
   const open = state.menu === 'more';
   const download = `<button class="icon-btn" data-download="${esc(view.path)}" ${view.version ? `data-file-version="${view.version}"` : ''} aria-label="Download" title="Download">${icon('down')}</button>`;
   return `<span class="menu-wrap more-wrap">
       <button type="button" class="icon-btn more" data-menu="more" aria-haspopup="true" aria-expanded="${open}" aria-label="More" title="More">${icon('more')}</button>
-      <span class="tools ${open ? 'open' : ''}" role="group" aria-label="File tools">${zoomHtml()}${find}${fullHtml()}${download}</span></span>`;
+      <span class="tools ${open ? 'open' : ''}" role="group" aria-label="File tools">${zoomHtml()}${find}${download}</span></span>`;
 }
 
-// View or Comment: what a click in the preview does. The C key flips it.
-function modesHtml() {
-  const mode = (name, label) => `<button data-mode="${name}" aria-pressed="${state.previewMode === name}">${label}</button>`;
-  return `<div class="modes" role="group" aria-label="Clicks in the preview">${mode('view', 'View')}${mode('comment', 'Comment')}</div>`;
+// One button for comment mode, lit while it is on: what a click in the preview does. The C key flips it.
+function commentHtml() {
+  const on = state.previewMode === 'comment';
+  return `<button class="icon-btn comment-btn" data-mode="${on ? 'view' : 'comment'}" aria-pressed="${on}" aria-label="Comment on this file" title="${on ? 'Stop commenting (C)' : 'Comment: click a cell, line or spot (C)'}">${icon('comment')}</button>`;
 }
 
 export function filesHtml() {

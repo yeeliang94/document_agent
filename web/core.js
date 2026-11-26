@@ -26,6 +26,7 @@ const icons = {
   down1: 'M6 9l6 6 6-6',
   more: 'M7 12a1 1 0 11-2 0 1 1 0 012 0zM13 12a1 1 0 11-2 0 1 1 0 012 0zM19 12a1 1 0 11-2 0 1 1 0 012 0z',
   side: 'M4 5h16v14H4zM9 5v14',
+  comment: 'M4 5h16v11h-9l-5 4v-4H4z',
   mic: 'M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4',
   stop: 'M8 8h8v8H8z',
   spin: 'M12 4a8 8 0 108 8',
@@ -33,6 +34,29 @@ const icons = {
 export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"/></svg>`;
 export const btn = (action, label, kind = 'quiet', disabled = false, glyph = '') =>
   `<button class="btn ${kind}" data-action="${action}" ${attr('disabled', disabled)}>${glyph ? icon(glyph) : ''}${esc(label)}</button>`;
+// A long name is cut in the middle, so its end (the month, the version, the extension) stays readable; CSS shrinks
+// the start only. While a find is on, the whole name shows with the match marked.
+const KEEP = 16;
+export function nameHtml(name, query = '') {
+  const at = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
+  // Marks the match within one part of the name; a match across the cut is marked in each part it touches.
+  const part = (text, from) => {
+    if (at < 0) return esc(text);
+    const a = Math.max(0, at - from);
+    const b = Math.min(text.length, at + query.length - from);
+    return a >= b ? esc(text) : `${esc(text.slice(0, a))}<mark>${esc(text.slice(a, b))}</mark>${esc(text.slice(b))}`;
+  };
+  if (name.length <= KEEP + 6) return `<span class="start">${part(name, 0)}</span>`;
+  const cut = name.length - KEEP;
+  return `<span class="start">${part(name.slice(0, cut), 0)}</span><span class="end">${part(name.slice(cut), cut)}</span>`;
+}
+
+// The agent's own records among a run's outputs: its notes and summary, shown apart from what it made for the person,
+// and the two files the app reads for itself, not listed at all.
+export const HIDDEN_OUTPUTS = ['document_map.json', 'provenance.json'];
+export const isNote = (name) => name === 'notes.md' || /(^|_)processing_summary\.txt$/i.test(name);
+export const isDeliverable = (name) => !HIDDEN_OUTPUTS.includes(name) && !isNote(name);
+
 export const pill = (tone, label) => `<span class="pill ${tone}">${esc(label)}</span>`;
 
 const monthParts = new Intl.DateTimeFormat('en', { year: 'numeric', month: '2-digit' }).formatToParts(new Date());
@@ -93,6 +117,10 @@ export const state = {
   map: null, // the agent's decision for each file, by stored path
   mapKey: '',
   mapFilter: 'all',
+  fileQuery: '', // the find box over the source files
+  openFolders: new Set(), // folders unfolded in a long list of sources
+  checksOpen: false, // the checks, folded into one line, unfolded
+  rail: true, // at full screen with a file open, the list of files beside it
   showFiles: false,
   filter: 'all',
   search: '',

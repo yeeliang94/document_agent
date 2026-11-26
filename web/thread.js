@@ -2,7 +2,7 @@
 // Built from the job's events on every change, so a reloaded or resumed run reads the same as a live one.
 
 import {
-  attr, baseName, btn, duration, esc, fmtTime, icon, inGroup, isActive, isWarning, jobStatus, jobTitle, pill, playbooks,
+  attr, baseName, btn, isDeliverable, nameHtml, duration, esc, fmtTime, icon, inGroup, isActive, isWarning, jobStatus, jobTitle, pill, playbooks,
   plural, state, STATUS, storedPath,
 } from './core.js'; // prettier-ignore
 import { micButton, voiceNote } from './voice.js';
@@ -281,8 +281,7 @@ function stoppedCard(job) {
 // --- The report a finished run ends with -------------------------------------
 
 // The files that are not the agent's own records: what the person came for.
-const RECORDS = ['document_map.json', 'provenance.json', 'notes.md', 'processing_summary.txt'];
-const deliverables = (job) => (job.artifacts || []).filter((a) => !RECORDS.includes(a.name));
+const deliverables = (job) => (job.artifacts || []).filter((a) => isDeliverable(a.name));
 
 // Every piece of report text goes through here, so cells and file names in it can become links in one place.
 const reportText = (text) => linked(text);
@@ -331,7 +330,7 @@ function reportCard(job) {
   const files = deliverables(job)
     .map(
       (a, i) => `<div class="filerow"><span class="tag">${esc(a.name.split('.').pop())}</span>
-        <button class="name" data-open="${esc(a.path)}">${esc(a.name)}</button>
+        <button class="name" data-open="${esc(a.path)}" title="${esc(a.name)}">${nameHtml(a.name)}</button>
         ${a.status === 'validated' ? pill('ok', 'Checked') : a.status === 'draft' ? pill('warn', 'Draft') : ''}
         <button class="btn ${!partial && i === 0 ? 'primary' : 'quiet'} small" data-download="${esc(a.path)}">${icon('down')}Download</button></div>`,
     )

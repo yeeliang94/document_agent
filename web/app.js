@@ -142,7 +142,7 @@ function render() {
     paint('#composer-wrap', composerHtml());
     syncComposer();
     // A redraw of the viewer (a pin added, a row marked) must not lose the person's place in a long sheet.
-    const places = ['.files-body', '.sheet', '.shot'].map((sel) => [sel, $(sel)?.scrollTop, $(sel)?.scrollLeft]);
+    const places = ['.files-body', '.sheet', '.shot', '.rail'].map((sel) => [sel, $(sel)?.scrollTop, $(sel)?.scrollLeft]);
     const drawn = paint('#files', filesHtml());
     if (drawn) for (const [sel, top, left] of places) $(sel)?.scrollTo(left || 0, top || 0);
     applyZoom(drawn);
@@ -211,6 +211,7 @@ async function refreshConfig() {
 function leaveRun() {
   closeFile();
   Object.assign(state, { events: [], seen: 0, map: null, mapKey: '', mapFilter: 'all', showFiles: false, search: '', filter: 'all' });
+  Object.assign(state, { fileQuery: '', openFolders: new Set(), checksOpen: false });
   Object.assign(state, { commentDraft: null, rounds: [], roundsKey: '', versions: [], versionsKey: '', showVersions: false });
   Object.assign(state, { reply: null, activeComment: '', showResolved: false, menu: null });
   Object.assign(state.changes, { since: null, step: 0, jump: false }); // version numbers belong to one run
@@ -274,6 +275,8 @@ const localActions = {
     $('#template-picker').click();
   },
   'toggle-files': () => (state.showFiles = !state.showFiles),
+  'toggle-rail': () => (state.rail = !state.rail),
+  'toggle-checks': () => (state.checksOpen = !state.checksOpen),
   'close-file': closeFile,
   'skill-pick': () => $('#skill-picker').click(),
   attach: () => $('#attach-picker').click(),
@@ -625,6 +628,10 @@ document.addEventListener('click', async (e) => {
       const option = state.settings.options[name];
       state.settingsDraft[name] = Math.min(option.high, Math.max(option.low, state.settingsDraft[name] + Number(delta)));
       render();
+    } else if ((el = target('[data-fold]'))) {
+      const name = el.dataset.fold;
+      state.openFolders.has(name) ? state.openFolders.delete(name) : state.openFolders.add(name);
+      render();
     } else if ((el = target('[data-map-filter]'))) {
       state.mapFilter = el.dataset.mapFilter;
       render();
@@ -676,6 +683,10 @@ document.addEventListener('keydown', (e) => {
     state.commentDraft = null;
     return render();
   }
+  if (e.key === 'Escape' && e.target?.id === 'files-q' && state.fileQuery) {
+    state.fileQuery = ''; // Esc in the find box clears it first
+    return render();
+  }
   if (e.key === 'Escape' && state.full && state.view === 'run' && !$('#details').open) {
     state.full = false;
     return render();
@@ -689,7 +700,7 @@ document.addEventListener('keydown', (e) => {
   }
   // C flips the preview between View and Comment, unless the person is typing.
   const writing = e.target instanceof Element && e.target.matches('input, textarea, select, [contenteditable]');
-  if (e.key?.toLowerCase() === 'c' && !writing && !e.metaKey && !e.ctrlKey && !e.altKey && $('.modes') && !state.commentDraft) {
+  if (e.key?.toLowerCase() === 'c' && !writing && !e.metaKey && !e.ctrlKey && !e.altKey && $('.comment-btn') && !state.commentDraft) {
     return setMode(state.previewMode === 'view' ? 'comment' : 'view');
   }
   if (!(e.target instanceof Element)) return;
@@ -843,6 +854,18 @@ document.addEventListener('pointercancel', dropPick);
 document.addEventListener('contextmenu', dropPick);
 
 let searchTimer;
+// Full screen is offered only on a wide window. A window made narrow while in full screen leaves it, so the panel
+// gets its Close and Back again.
+const narrow = matchMedia('(max-width: 1000px)');
+function leaveFullWhenNarrow() {
+  if (narrow.matches && state.full) {
+    state.full = false;
+    render();
+  }
+}
+narrow.addEventListener('change', leaveFullWhenNarrow);
+addEventListener('resize', leaveFullWhenNarrow);
+
 document.addEventListener('input', (e) => {
   const { id, value } = e.target;
   if (id === 'msg') {
@@ -860,6 +883,10 @@ document.addEventListener('input', (e) => {
     syncReply();
   }
   if (id === 'find-q' && state.find) typed(value, turnPage, render);
+  if (id === 'files-q') {
+    state.fileQuery = value;
+    render();
+  }
   if (id === 'playbook-text') startDraft(state.book, value);
   if (id === 'client-notes') typeNotes(value);
   if (id === 'tune') state.book.ask = value;

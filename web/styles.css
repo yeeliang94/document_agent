@@ -658,6 +658,17 @@ button.file:hover {
   white-space: nowrap;
   text-align: left;
 }
+.filerow .name {
+  display: flex;
+}
+.filerow .name .start {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.filerow .name .end {
+  flex: none;
+}
 .filerow .name:hover {
   color: var(--accent);
 }
@@ -1239,9 +1250,6 @@ button.file:hover {
   justify-content: space-between;
   gap: 8px;
 }
-.list .filter {
-  padding-bottom: 8px;
-}
 .frow {
   display: flex;
   align-items: center;
@@ -1283,6 +1291,205 @@ button.frow:hover .name {
   overflow-wrap: anywhere;
 }
 
+/* A run with many files: compact rows, names cut in the middle, folders that fold, a find box and filter chips */
+button.frow {
+  border-top: 0;
+  padding: 5px 8px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
+  border-radius: 8px;
+  font-size: 13px;
+}
+button.frow:hover {
+  background: var(--grey-bg);
+}
+button.frow:hover .name {
+  color: inherit;
+}
+button.frow[aria-current='true'] {
+  background: var(--sheet);
+}
+button.frow.dim .name {
+  color: var(--muted);
+}
+.frow .tag {
+  width: 32px;
+  flex: none;
+}
+button.frow .name,
+.files-head h2 {
+  display: flex;
+}
+.frow .name .start,
+.files-head h2 .start {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.frow .name .end,
+.files-head h2 .end {
+  flex: none;
+  white-space: nowrap;
+}
+.frow mark {
+  background: var(--warn-bg);
+  color: inherit;
+  border-radius: 2px;
+}
+.list .count {
+  color: var(--faint);
+  font-weight: 400;
+}
+.sift {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.source-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--sheet);
+  border-radius: 12px;
+  padding: 4px 12px;
+  color: var(--faint);
+}
+.source-find svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.source-find input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.source-find:focus-within {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.chips button {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chips button[aria-pressed='true'] {
+  background: var(--sheet);
+  color: var(--text);
+}
+.fold {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--muted);
+}
+.fold:hover {
+  background: var(--grey-bg);
+}
+.fold svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  transition: transform 0.12s;
+}
+.fold[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+.fold .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fold .count {
+  font-size: 12px;
+  color: var(--faint);
+}
+.fold.checks {
+  color: var(--text);
+  font-weight: 500;
+}
+.inside {
+  padding-left: 14px;
+}
+.check-list {
+  padding: 0 0 4px 18px;
+  font-size: 13px;
+}
+.check-list div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.list .folder {
+  padding: 8px 0 2px;
+}
+
+/* Under an open file's name: sheet tabs that scroll sideways, what the agent made of the file, and Changes */
+.file-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.file-bar .tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.file-bar .tabs::-webkit-scrollbar {
+  display: none;
+}
+.file-bar .tabs button {
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.file-bar .tabs button.on {
+  background: var(--sheet);
+  color: var(--text);
+}
+.file-bar .changes {
+  margin-left: auto;
+}
+.reason {
+  color: var(--muted);
+  font-size: 13px;
+  margin: -12px 0 0;
+}
+.comment-btn[aria-pressed='true'],
+.comment-btn[aria-pressed='true']:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* File viewer */
 .meta {
   display: flex;
@@ -1291,9 +1498,6 @@ button.frow:hover .name {
   flex-wrap: wrap;
   color: var(--muted);
   font-size: 13px;
-}
-.meta .filter {
-  margin-left: auto;
 }
 .sheet {
   background: var(--sheet);
@@ -1864,26 +2068,6 @@ dialog > h3 {
   }
 }
 
-/* View / Comment: what a click in the preview does */
-.modes {
-  display: flex;
-  gap: 4px;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--line);
-  flex: none;
-}
-.modes button {
-  padding: 2px 12px;
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 13px;
-}
-.modes button[aria-pressed='true'] {
-  background: var(--bg);
-  color: var(--text);
-}
-
 /* A block of cells being picked, and blocks with a comment waiting. Edges are drawn with layered inset shadows,
    so the column lines stay and each corner gets both of its sides. */
 .grid td.sel {
@@ -2182,7 +2366,8 @@ button.chip:hover {
   width: 100%;
   max-width: none;
 }
-/* The file on show fills the window; comment boxes and messages still open above it */
+/* Full screen: the Files panel fills the window; comment boxes and messages still open above it. With a file open,
+   the list of every file sits beside it and can be hidden. */
 .work.full .files {
   position: fixed;
   inset: 0;
@@ -2190,6 +2375,32 @@ button.chip:hover {
   border-radius: 0;
   z-index: 7;
   display: flex;
+}
+.work.full:not(.viewing) .files-body {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+}
+.rail {
+  overflow: auto;
+  min-height: 0;
+  padding: 4px 16px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-right: 1px solid var(--line);
+}
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 .work.full .files-head {
   padding: 16px 24px 12px 32px;

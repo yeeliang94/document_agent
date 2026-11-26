@@ -104,7 +104,7 @@ function fitLevel(files) {
 export function applyZoom(measure = true) {
   const files = $('#files');
   const work = $('#work');
-  if (work) work.classList.toggle('full', !!(state.full && state.open));
+  if (work) work.classList.toggle('full', !!state.full);
   if (!files || !canZoom()) return;
   const zoom = state.zoom;
   if (zoom.fit && measure) zoom.level = fitLevel(files) ?? zoom.level;
