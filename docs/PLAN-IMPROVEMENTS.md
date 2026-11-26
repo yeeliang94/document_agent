@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `98%` (41 of 42 steps) (Phases 1-11 done; Phase 12 built, its gateway check left)
+**Overall Progress:** `89%` (41 of 46 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 proposed)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -305,6 +305,27 @@ The browser never holds the key. It sends its audio to this app, which opens the
 - [x] 🟩 **Step 42: The microphone button** (prototype first) — one shared button on every text box: the message box, comment and reply boxes, New run's goal, playbook and client notes. The words appear where the cursor was as they are spoken, then settle when the person stops. A plain message when the browser blocks the microphone, and when the app is opened over a network without HTTPS (browsers allow the microphone only on a secure address or on this computer).
   - **Verify:** I check each box in a browser, plus a blocked microphone and a gateway that refuses.
   - **Result:** prototype approved 2026-11-27 (`prototype/voice-input/index.html` on the `prototypes` branch). `web/voice.js` draws one button (also Ctrl+M in the box) on the message box, the question card, comment and reply boxes, New run's goal, playbook instructions and its ask box, and client notes. Words go where the cursor was; a recording belongs to the screen it started on and stops, keeping its words, when that screen is left or the box is changed under it. Checked in a browser with a spoken clip in place of a microphone, using real clicks: each box listed except the reply box and the question card (same code, not seen), both modes, blocked and missing microphone, an insecure address, a wrong model name, a dropped connection with Try again. One difference from the prototype: words still being heard cannot be grey inside a plain text box, so they appear in the normal colour.
+
+### Phase 13: Getting to know a new client (proposed 2026-11-27; not yet approved)
+
+Asked 2026-11-27. Today a client's notes are written by hand, or grow from remembered comments. For a new client, the person often already has last month's files: the deliverables someone made before, and the inputs behind them. Those files show how this client is done, including where it differs from the playbook and from other clients. The agent should notice those differences and offer them, as a helpful assistant would, rather than wait to be told or apply them silently.
+
+- [ ] 🟥 **Step 43: Folder roles on New run** (prototype first) — when a folder is chosen, the person can mark parts of it: this period's inputs, earlier runs (past deliverables and the inputs behind them), and reference. The app proposes the roles from folder and file names (an earlier month, "final", "submitted") and shows them before Start; nothing is applied silently. The agent is told each folder's role, and earlier runs are never used as this period's figures.
+  - **Verify:** a folder with this month's inputs and two earlier months gets sensible roles proposed; changing a role reaches the agent; a test shows earlier-run files are not counted as inputs.
+
+- [ ] 🟥 **Step 44: A scout that studies the earlier runs** — when a run has earlier-run files and its client is new (no notes yet) or has history not yet looked at, a scout (a helper agent with its own small budget) compares the earlier deliverables with what the playbook says. It lists what this client does differently, each with the file and cell or line that shows it: layout, extra sheets, rounding, pay dates, who is left out, naming. It reads only this client's files; other clients' notes are not shown to it.
+  - **Verify:** on a test packet with three planted differences, the scout finds them with their evidence and reports nothing the playbook already says.
+
+- [ ] 🟥 **Step 45: The agent asks, the person chooses** (prototype first) — the scout's findings come to the person as a question card: "Acme's earlier runs differ from the playbook in four ways. Keep which for Acme?" Each one can be kept, changed or dropped. Kept ones are saved to the client's notes as a new version with Undo, and this run follows them. Where an earlier run contradicts this month's instructions, the agent asks instead of choosing.
+  - **Verify:** keep two of four, and see exactly those two in the client's notes, the run following them, and Undo removing them.
+
+- [ ] 🟥 **Step 46: Measure it** — the same packet run with and without the scout: accuracy against the known answer, the questions asked, and the cost. The scout stays a Settings switch (on, off, or only for new clients).
+  - **Verify:** I report the numbers and recommend the default.
+
+Open questions for you before this starts:
+- Should the scout also run for a known client whenever new earlier runs appear, or only the first time?
+- "Different from the rest of the clients": comparing against the playbook keeps each client's files private from the others. Comparing against other clients' notes as well would catch more, but lets one client's practice inform another's. I'd start with the playbook only.
+- This fits beside the existing scouts (helpers for large folders, Settings: "Helper agents for large folders"), which are off by default. The new scout would be its own switch.
 
 ## Risks
 
