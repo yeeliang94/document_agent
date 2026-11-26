@@ -717,6 +717,13 @@ def create_app(settings_override: Settings | None = None):
         get(job_id)
         return {'versions': versions.listed(store.path(job_id) / 'versions')}
 
+    async def keep_current(root, description):
+        """Keep the outputs as a version of their own before they are replaced, unless they already are the newest
+        version: a run's last save, or a file changed by hand, can be newer than any kept version."""
+        outputs, folder = root / 'outputs', root / 'versions'
+        if any(p.is_file() for p in outputs.rglob('*')) and not await asyncio.to_thread(versions.matches_latest, outputs, folder):
+            await asyncio.to_thread(versions.keep, outputs, folder, 'kept', 0, description, False, store.settings()['versions_kept'])
+
     @api.post('/api/jobs/{job_id}/versions/{number}/continue')
     async def continue_from(job_id, number: int = Path(ge=1, le=MAX_VERSION)):
         """Make one kept version the outputs again and start a run that carries on from it in a fresh sandbox."""
@@ -741,6 +748,7 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(409, before['refused'])
         root = store.path(job_id)
         try:
+            await keep_current(root, f'Before going back to version {number}')
             version = await asyncio.to_thread(versions.restore, root / 'versions', number, root / 'outputs')
         except (KeyError, OSError) as error:
             store.update(job_id, status=before['status'])
@@ -781,13 +789,7 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(409, before['refused'])
         root = store.path(job_id)
         try:
-            # The outputs can be newer than the last kept version (a run's last save keeps none), so they are kept
-            # as a version of their own first; if that fails, nothing is set aside.
-            if any(p.is_file() for p in (root / 'outputs').rglob('*')):
-                await asyncio.to_thread(
-                    versions.keep, root / 'outputs', root / 'versions', 'start-over', 0, 'Before starting over',
-                    False, store.settings()['versions_kept'],
-                )  # fmt: skip
+            await keep_current(root, 'Before starting over')  # if that fails, nothing is set aside
             await asyncio.to_thread(versions.set_aside, root / 'outputs')
         except OSError as error:
             store.update(job_id, status=before['status'])

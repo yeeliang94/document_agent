@@ -257,7 +257,7 @@ function versionsCard() {
   return `<div class="card"><h2>Saved versions</h2><div class="versions">${versionRows(state.versions || [])}</div>
     <div class="choices">${btn('hide-versions', 'Back', 'text')}</div></div>`;
 }
-const showingVersions = () => state.showVersions && (state.versions || []).length > 1;
+const showingVersions = () => state.showVersions && (state.versions || []).length > 0;
 
 function stoppedCard(job) {
   const kept = state.versions || [];
@@ -270,8 +270,8 @@ function stoppedCard(job) {
     ? `Your work is saved up to step ${latest.step}${versionWhat(latest) ? ': ' + versionWhat(latest) : ''}.`
     : 'The run stopped before anything was saved. Your files are still uploaded.';
   const choices = latest
-    ? `<button class="btn primary" data-continue="${latest.number}" ${attr('disabled', state.busy)}>Continue from step ${latest.step}</button>
-       ${kept.length > 1 ? btn('show-versions', 'Earlier versions', 'text') : ''}${btn('start-over', 'Start over', 'text', state.busy)}`
+    ? `${btn('resume', 'Continue', 'primary', state.busy)}
+       ${kept.length ? btn('show-versions', 'Earlier versions', 'text') : ''}${btn('start-over', 'Start over', 'text', state.busy)}`
     : `${btn('resume', failed ? 'Try again' : 'Resume', 'primary', state.busy)}${failed ? btn('connection', 'Check the connection', 'text', state.busy) : ''}`;
   return `<div class="card ${failed ? 'bad' : ''}">${said ? `<h2>${esc(said)}</h2>` : ''}
     <p>${esc([next, where].filter(Boolean).join('\n'))}</p><div class="choices">${choices}</div>${rawDetail(job)}</div>`;
@@ -324,6 +324,7 @@ function reportCard(job) {
     reportPart('What I did', report?.done),
     reportPart('Decisions I made', report?.decisions),
     reportPart('Still to fix', left),
+    reportPart('Still open', job.unresolved),
     reportPart('Check before you send', report?.to_check),
   ].join('');
   const files = deliverables(job)

@@ -299,3 +299,41 @@ def test_starting_over_waits_until_the_run_has_stopped(tmp_path, monkeypatch):
         assert refused.status_code == 409 and refused.json()['detail'] == 'Stop the run before starting over.'
         client.post(f'/api/jobs/{job["id"]}/pause')
         wait_for_job(client, job['id'], statuses=('paused',))
+
+
+def test_going_back_to_a_version_first_keeps_newer_files_as_a_version(tmp_path, monkeypatch):
+    async def stops(outputs, **_):
+        save(outputs, 'v1')
+        versions.keep(outputs, outputs.parent / 'versions', 'run-01', 1, 'Step 1', True, 20)
+        save(outputs, 'v2')  # the run's last save keeps no version
+        return {**finished(status='stopped', passed=False, error='Reached the 60-turn limit.'), 'cut_short': 'turns'}
+
+    async def again(outputs, **_):
+        return finished()
+
+    run = FakeRun(stops)
+    monkeypatch.setattr(service, 'run_job', run)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        wait_for_runner_idle(client)
+        run.behaviour = again
+        assert client.post(f'/api/jobs/{job["id"]}/versions/1/continue').status_code == 200
+        wait_for_job(client, job['id'], statuses=('completed',))
+        kept = client.get(f'/api/jobs/{job["id"]}/versions').json()['versions']
+        assert (kept[0]['number'], kept[0]['description']) == (2, 'Before going back to version 1')
+
+
+def test_outputs_that_match_the_newest_version_are_not_kept_twice(tmp_path):
+    outputs, folder = tmp_path / 'outputs', tmp_path / 'versions'
+    outputs.mkdir()
+    assert not versions.matches_latest(outputs, folder)  # nothing kept yet
+    (outputs / 'a.csv').write_text('1', encoding='utf-8')
+    versions.keep(outputs, folder, 'run-01', 1, 'Step 1', True, 20)
+    assert versions.matches_latest(outputs, folder)
+    (outputs / 'a.csv').write_text('2', encoding='utf-8')
+    assert not versions.matches_latest(outputs, folder)
+    (outputs / 'a.csv').write_text('1', encoding='utf-8')
+    (outputs / 'b.csv').write_text('new', encoding='utf-8')
+    assert not versions.matches_latest(outputs, folder)
+

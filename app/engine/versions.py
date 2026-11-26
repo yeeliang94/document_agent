@@ -11,6 +11,7 @@ ones of that run are removed. Continuing from a version copies it back as the ou
 
 from __future__ import annotations
 
+import filecmp
 import json
 import shutil
 from datetime import datetime, timezone
@@ -96,6 +97,19 @@ def restore(folder: Path, number: int, outputs: Path) -> dict:
         raise
     shutil.rmtree(previous, ignore_errors=True)
     return version
+
+
+def matches_latest(outputs: Path, folder: Path) -> bool:
+    """True when the outputs are exactly the newest kept version, file for file and byte for byte."""
+    found = listed(folder)
+    if not found:
+        return False
+    base = folder / f'v{found[0]["number"]:04d}'
+    holder = base / FILES if (base / FILES).is_dir() else base
+    now = {p.relative_to(outputs).as_posix(): p for p in _files(outputs)} if outputs.is_dir() else {}
+    if set(now) != set(found[0]['files']):
+        return False
+    return all(filecmp.cmp(path, holder / relative, shallow=False) for relative, path in now.items())
 
 
 def set_aside(outputs: Path) -> None:
