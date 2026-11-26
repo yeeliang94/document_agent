@@ -2,6 +2,7 @@
 is replaced by a fake here; prototype/sandbox_agent/tests covers the engine, and live runs cover OpenAI."""
 
 import asyncio
+import io
 import json
 import time
 import zipfile
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
+import app.main as main_module
 from app.config import Settings
 from app.engine import service
 from app.engine.service import AppControl, resume_card, with_hint
@@ -585,7 +587,7 @@ def test_a_run_from_the_earlier_engine_can_be_read_but_not_continued(tmp_path):
             for job_id in (old['id'], done['id']):
                 assert client.post(f'/api/jobs/{job_id}/resume').status_code == 409
                 assert client.post(f'/api/jobs/{job_id}/answer', json={'answer': 'Yes'}).status_code == 409
-                assert client.post(f'/api/jobs/{job_id}/message', json={'message': 'Go on'}).status_code == 409
+                assert client.post(f'/api/jobs/{job_id}/message', data={'message': 'Go on'}).status_code == 409
             notes = [e['message'] for e in client.get(f'/api/jobs/{old["id"]}/events').json()]
             assert len([n for n in notes if 'earlier version' in n]) == 1
     assert (store.path(old['id']) / 'outputs' / 'draft.xlsx').read_bytes() == b'kept'
@@ -605,14 +607,17 @@ def test_pause_stop_and_messages_are_accepted_only_when_they_can_take_effect(tmp
         job = create_job(client)
         url = f'/api/jobs/{job["id"]}'
         assert client.post(url + '/pause').status_code == 409  # nothing running yet
-        assert client.post(url + '/message', json={'message': 'Hello'}).status_code == 409
+        assert client.post(url + '/message', data={'message': 'Hello'}).status_code == 409
         assert client.post(url + '/answer', json={'answer': 'Yes'}).status_code == 409
         assert client.post(url + '/start').status_code == 200
         wait_for_job(client, job['id'], statuses=('running',))
         assert client.post(url + '/start').status_code == 409  # already going
-        assert client.post(url + '/message', json={'message': '  '}).status_code == 400
-        assert client.post(url + '/message', json={'message': 'Leave out contractors.'}).status_code == 200
-        assert client.get(url).json()['pending_messages'] == ['Leave out contractors.']
+        assert client.post(url + '/message', data={'message': '  '}).status_code == 400
+        nothing = client.post(url + '/interrupt')  # nothing waiting: a late click is not an error, and asks nothing
+        assert nothing.status_code == 200 and not nothing.json().get('interrupt')
+        assert client.post(url + '/message', data={'message': 'Leave out contractors.'}).status_code == 200
+        [waiting] = client.get(url).json()['pending_messages']
+        assert waiting['text'] == 'Leave out contractors.' and waiting['files'] == []
         assert client.post(url + '/pause').json()['status'] == 'pausing'
         release.set()
         assert wait_for_job(client, job['id'], statuses=('paused',))['status'] == 'paused'
@@ -621,6 +626,32 @@ def test_pause_stop_and_messages_are_accepted_only_when_they_can_take_effect(tmp
         assert client.post(url + '/pause').status_code == 409
         stopped = [e['message'] for e in client.get(url + '/events').json() if e['name'] == 'job.cancelled']
         assert stopped == ['Cancelled; existing output retained.']
+
+
+def test_a_message_waits_until_a_cancelled_run_has_let_go(tmp_path, monkeypatch):
+    release = asyncio.Event()
+
+    async def behaviour(control, outputs, **_):
+        write_output(outputs)
+        await release.wait()
+        return finished(status=control.stop_requested() or 'complete')
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0)
+    with client_for(tmp_path) as client:
+        job = create_job(client)
+        url = f'/api/jobs/{job["id"]}'
+        assert client.post(url + '/start').status_code == 200
+        wait_for_job(client, job['id'], statuses=('running',))
+        assert client.post(url + '/cancel').json()['status'] == 'cancelled'
+        # The engine has not seen the cancel yet: queuing now would undo it.
+        refused = client.post(url + '/message', data={'message': 'Also check October.'})
+        assert refused.status_code == 409 and 'still finishing' in refused.json()['detail']
+        assert client.get(url).json()['status'] == 'cancelled'
+        release.set()
+        wait_for_runner_idle(client)
+        assert client.get(url).json()['status'] == 'cancelled'
+        assert client.post(url + '/message', data={'message': 'Also check October.'}).status_code == 200
 
 
 def test_a_run_that_crashes_or_was_cut_off_by_a_restart_is_kept_for_resuming(tmp_path, monkeypatch):
@@ -644,7 +675,7 @@ def test_a_run_that_crashes_or_was_cut_off_by_a_restart_is_kept_for_resuming(tmp
         assert client.post(f'/api/jobs/{job["id"]}/resume').status_code == 200
 
 
-def test_an_instruction_that_arrives_after_the_last_step_keeps_the_run_open(tmp_path, monkeypatch):
+def test_an_instruction_that_arrives_after_the_last_step_continues_the_run(tmp_path, monkeypatch):
     async def first(outputs, **_):
         write_output(outputs)
         return finished()  # the agent is done; it never reads the message below
@@ -667,13 +698,18 @@ def test_an_instruction_that_arrives_after_the_last_step_keeps_the_run_open(tmp_
     with client_for(tmp_path) as client:
         store = client.app.state.store
         job = start_sandbox_job(client)
-        held = wait_for_job(client, job['id'])
-        assert held['status'] == 'partial' and 'was not applied' in held['summary']
-        assert [a['status'] for a in held['artifacts'] if a['name'].endswith('.xlsx')] == ['validated']
+        deadline = time.monotonic() + 10
+        while len(fake.calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        wait_for_job(client, job['id'], statuses=('completed', 'failed'))
         wait_for_runner_idle(client)
-        assert client.post(f'/api/jobs/{job["id"]}/resume').status_code == 200
-        done = wait_for_job(client, job['id'], statuses=('completed', 'failed'))
+        done = client.get(f'/api/jobs/{job["id"]}').json()
         assert done['status'] == 'completed' and 'was not applied' not in done['summary']
+        events = [e['message'] for e in client.get(f'/api/jobs/{job["id"]}/events').json()]
+        assert 'Queued with your message' in events  # it went on by itself, with nobody pressing Continue
+        # ...so the thread never tells the user to press Continue, nor shows the run as partly done.
+        names = [e['name'] for e in client.get(f'/api/jobs/{job["id"]}/events').json()]
+        assert 'job.partial' not in names and not any('Continue to apply' in m for m in events)
         # The run that continues opens with the instruction, marked as new, so it acts on it at once.
         card = fake.calls[1].resume
         assert 'New from the user since that run ended' in card and card.endswith('Round to whole ringgit.')
@@ -709,3 +745,205 @@ def test_the_prompt_cache_gets_a_stable_key_per_job_and_a_record_per_call():
         'model.usage',
         {'who': 'review', 'input_tokens': 9000, 'cached_tokens': 8000, 'output_tokens': 300},
     )
+
+
+def picture_bytes():
+    from io import BytesIO
+
+    from PIL import Image
+
+    out = BytesIO()
+    Image.new('RGB', (4, 4), 'red').save(out, 'JPEG')
+    return out.getvalue()
+
+
+def test_a_message_to_a_finished_run_continues_it_with_the_files_it_brings(tmp_path, monkeypatch):
+    seen = []
+
+    async def first(outputs, **_):
+        write_output(outputs)
+        return finished()
+
+    async def second(control, **_):
+        seen.append(control.new_messages())  # taken at the start of the run, before this point
+        return finished()
+
+    runs = iter([first, second])
+
+    async def behaviour(**kwargs):
+        return await next(runs)(**kwargs)
+
+    fake = FakeRun(behaviour)
+    monkeypatch.setattr(service, 'run_job', fake)
+    monkeypatch.setattr(service, 'POLL_SECONDS', 0)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        url = f'/api/jobs/{job["id"]}'
+        assert wait_for_job(client, job['id'])['status'] == 'completed'
+        wait_for_runner_idle(client)
+        sent = client.post(
+            url + '/message',
+            data={'message': 'Use the November rates too.'},
+            files=[
+                ('files', ('rates.csv', b'MYR,4.4', 'text/csv')),
+                ('files', ('screen.jpg', picture_bytes(), 'image/jpeg')),
+            ],
+        )
+        assert sent.status_code == 200, sent.text
+        wait_for_runner_idle(client)
+        done = wait_for_job(client, job['id'], statuses=('completed', 'failed'))
+        assert done['status'] == 'completed' and len(fake.calls) == 2
+        # The files sit in the packet's own top folder, so the earlier packet paths stay as they were.
+        added = [f for f in done['files'] if f.get('added')]
+        assert [f['path'] for f in added] == ['inputs/HR/Added/rates.csv', 'inputs/HR/Added/screen.jpg']
+        names = zipfile.ZipFile(fake.calls[1].spec.zip).namelist()
+        assert sorted(names) == ['HR/Added/rates.csv', 'HR/Added/screen.jpg', 'HR/Reports/employees.txt']
+        card = fake.calls[1].resume
+        assert 'Use the November rates too.' in card and 'Added/rates.csv, Added/screen.jpg' in card
+        [picture] = fake.calls[1].options['resume_images']  # an added picture is shown to the agent too
+        assert picture['name'] == 'screen.jpg' and picture['type'] == 'image/jpeg'
+        [event] = [e for e in client.get(url + '/events').json() if e['name'] == 'user.instruction']
+        assert event['message'] == 'Use the November rates too.' and [f['packet'] for f in event['files']] == [
+            'Added/rates.csv', 'Added/screen.jpg']  # fmt: skip
+        # A second file with the same name is kept beside the first.
+        client.post(url + '/message', files=[('files', ('rates.csv', b'MYR,4.5', 'text/csv'))])
+        wait_for_runner_idle(client)
+        again = [f['path'] for f in client.get(url).json()['files'] if f.get('added')]
+        assert again[-1] == 'inputs/HR/Added/rates (2).csv'
+
+
+def test_files_sent_with_a_message_are_checked_before_anything_is_kept(tmp_path, monkeypatch):
+    release = asyncio.Event()
+
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        await release.wait()
+        return finished()
+
+    monkeypatch.setattr(service, 'run_job', FakeRun(behaviour))
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        url = f'/api/jobs/{job["id"]}'
+        wait_for_job(client, job['id'], statuses=('running',))
+        zipped = client.post(url + '/message', files=[('files', ('more.zip', b'PK', 'application/zip'))])
+        assert zipped.status_code == 400 and 'one by one' in zipped.json()['detail']
+        empty = client.post(
+            url + '/message', files=[('files', ('a.csv', b'ok', 'text/csv')), ('files', ('b.csv', b'', 'text/csv'))]
+        )
+        assert empty.status_code == 400
+        kept = client.get(url).json()
+        assert not any(f.get('added') for f in kept['files']) and not kept.get('pending_messages')
+        assert not (tmp_path / 'jobs' / job['id'] / 'inputs' / 'HR' / 'Added' / 'a.csv').exists()
+        # A file that fails as it is being kept takes the ones kept before it in the same message with it.
+        real_add, calls = main_module.add_file, []
+
+        def add_then_fail(*args):
+            calls.append(args)
+            if len(calls) == 2:
+                raise ValueError('Disk full')
+            return real_add(*args)
+
+        monkeypatch.setattr(main_module, 'add_file', add_then_fail)
+        failed = client.post(
+            url + '/message', files=[('files', ('a.csv', b'ok', 'text/csv')), ('files', ('b.csv', b'ok', 'text/csv'))]
+        )
+        assert failed.status_code == 400 and 'Disk full' in failed.json()['detail']
+        monkeypatch.setattr(main_module, 'add_file', real_add)
+        kept = client.get(url).json()
+        assert not any(f.get('added') for f in kept['files']) and not kept.get('pending_messages')
+        assert not (tmp_path / 'jobs' / job['id'] / 'inputs' / 'HR' / 'Added' / 'a.csv').exists()
+        # While it runs, a message waits for the agent's next step; Send now asks for it to be read at once.
+        assert (
+            client.post(url + '/message', files=[('files', ('rates.csv', b'MYR,4.4', 'text/csv'))]).status_code == 200
+        )
+        assert client.get(url).json()['status'] == 'running'  # not queued again
+        assert client.post(url + '/interrupt').json()['interrupt'] is True
+        control = AppControl(client.app.state.store, job['id'])
+        assert control.interrupt_requested()
+        [message] = control.new_messages()
+        assert message['text'] == 'Files the user added to the packet: Added/rates.csv.' and message['images'] == []
+        assert message['files'][0]['local'].read_bytes() == b'MYR,4.4'
+        assert not control.interrupt_requested() and not client.get(url).json()['interrupt']
+        release.set()
+
+
+def test_a_run_waiting_for_an_answer_takes_the_answer_first(tmp_path):
+    store = Store(tmp_path)
+    job = store.create('payroll', '2026-10', 'x', 'y')
+    store.update(job['id'], status='waiting', question={'text': 'Which month?'})
+    with client_for(tmp_path) as client:
+        refused = client.post(f'/api/jobs/{job["id"]}/message', data={'message': 'October'})
+        assert refused.status_code == 409 and refused.json()['detail'] == 'Answer the question first'
+
+
+def test_added_files_go_in_the_packets_top_folder_when_it_has_one():
+    from app.files import added_name
+
+    def manifest(*paths):
+        return [{'path': p, 'role': 'inputs'} for p in paths]
+
+    assert added_name(manifest('inputs/HR/a.txt', 'inputs/HR/b/c.txt'), 'x.pdf') == ('HR/Added/x.pdf', 'Added/x.pdf')
+    assert added_name(manifest('inputs/a.txt', 'inputs/HR/c.txt'), 'x.pdf') == ('Added/x.pdf', 'Added/x.pdf')
+    assert added_name(manifest('inputs/a.txt'), 'folder/x.pdf') == ('Added/x.pdf', 'Added/x.pdf')
+    taken = manifest('inputs/HR/a.txt', 'inputs/HR/Added/X.pdf')
+    assert added_name(taken, 'x.pdf') == ('HR/Added/x (2).pdf', 'Added/x (2).pdf')
+
+
+def test_an_added_picture_is_shown_to_the_agent_no_larger_than_a_page(tmp_path):
+    from PIL import Image
+
+    from app import preview
+    from app.engine.service import picture_of
+
+    Image.new('RGB', (4000, 3000), 'white').save(tmp_path / 'photo.jpg', 'JPEG')
+    shown = picture_of(tmp_path / 'photo.jpg')
+    with Image.open(io.BytesIO(shown['data'])) as image:  # a photo travels as a JPEG: it is in every later request
+        assert max(image.size) == preview.PAGE_PIXELS and image.format == 'JPEG' and shown['type'] == 'image/jpeg'
+    Image.new('RGBA', (40, 30), (0, 0, 0, 0)).save(tmp_path / 'logo.png')
+    clear = picture_of(tmp_path / 'logo.png')  # see-through parts stay see-through
+    assert clear['type'] == 'image/png' and clear['data'][:4] == b'\x89PNG'
+    from app.engine.control import user_content
+
+    assert user_content('Look', [shown])[2]['image_url'].startswith('data:image/jpeg;base64,')
+    (tmp_path / 'rates.csv').write_text('MYR,4.4')
+    assert picture_of(tmp_path / 'rates.csv') is None  # only pictures are shown; every file is in the sandbox
+
+
+def test_a_file_sent_as_a_run_restarts_is_in_its_packet(tmp_path, monkeypatch):
+    import hashlib
+
+    async def behaviour(outputs, **_):
+        write_output(outputs)
+        return finished()
+
+    fake = FakeRun(behaviour)
+    monkeypatch.setattr(service, 'run_job', fake)
+    real_take = service.AppControl.new_messages
+
+    def file_arrives_first(self):
+        # The file lands after the run read the job and before it takes the waiting messages.
+        def add(job):
+            if not any(f['path'].endswith('late.csv') for f in job['files']):
+                path = self.store.path(self.job_id) / 'inputs' / 'HR' / 'Added' / 'late.csv'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'MYR,4.4')
+                job['files'].append({'path': 'inputs/HR/Added/late.csv', 'size': 7, 'role': 'inputs', 'added': True,
+                                     'sha256': hashlib.sha256(b'MYR,4.4').hexdigest(), 'supported': True})  # fmt: skip
+                job['pending_messages'] = [*(job.get('pending_messages') or []),
+                                           {'id': 'm2', 'text': '', 'files': [{'packet': 'Added/late.csv',
+                                                                               'path': 'inputs/HR/Added/late.csv'}]}]  # fmt: skip
+
+        if fake.calls:
+            self.store.mutate(self.job_id, add)
+        return real_take(self)
+
+    monkeypatch.setattr(service.AppControl, 'new_messages', file_arrives_first)
+    with client_for(tmp_path) as client:
+        job = start_sandbox_job(client)
+        wait_for_job(client, job['id'])
+        assert client.post(f'/api/jobs/{job["id"]}/message', data={'message': 'Use the late rates.'}).status_code == 200
+        deadline = time.monotonic() + 30
+        while not (len(fake.calls) == 2 and client.get(f'/api/jobs/{job["id"]}').json()['status'] == 'completed'):
+            assert time.monotonic() < deadline, 'the second run never finished'
+            time.sleep(0.02)
+        assert 'HR/Added/late.csv' in zipfile.ZipFile(fake.calls[1].spec.zip).namelist()

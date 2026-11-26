@@ -213,13 +213,14 @@ def test_a_late_cancel_or_an_unread_instruction_decides_before_anything_is_learn
     done = finish(store, job)
     assert (done['status'], done['lessons'][0]['status']) == ('cancelled', 'dropped')
     assert store.playbooks.get('payroll')['version'] == 1 and cases.cases(store, 'payroll') == []
-    # An instruction arrived after the agent's last step: the lesson waits for the run that reads it.
+    # An instruction arrived after the agent's last step: the run ends as it is and starts again by itself to read it
+    # (runtime.resume_if_answered); the lesson waits for the run that reads it.
     store, job = job_with_outputs(tmp_path / 'b')
     delivered(store, job)
     lessons.note(store, job['id'], '1.1', RULE)
     store.update(job['id'], pending_messages=['Actually, pay him from the 18th.'])
     waiting = finish(store, job)
-    assert (waiting['status'], waiting['lessons'][0]['status']) == ('partial', 'noted')
+    assert (waiting['status'], waiting['lessons'][0]['status']) == ('completed', 'noted')
     assert waiting['feedback'][0]['status'] == 'done' and store.playbooks.get('payroll')['version'] == 1
     # That run reads it and ends well: now the lesson is kept, judged by its own round's report.
     service.AppControl(store, job['id']).new_messages()

@@ -1,8 +1,10 @@
 """How a caller steers a running job, and the shape of what the user sends it while it runs.
 
-A message from the user is plain text, or {'text': ..., 'images': [{'name': ..., 'data': PNG bytes}, ...]} when
-pictures go with it. Each picture is sent right after a line that names it, so text that says "picture X" and the
-picture itself can be matched even when several messages arrive together.
+A message from the user is plain text, or {'text': ..., 'images': [{'name': ..., 'data': ..., 'type': ...}, ...]} when
+pictures go with it (data is the image's bytes; type its media type, image/png when left out). Each picture is sent right after a line that names it, so text that says "picture X" and the
+picture itself can be matched even when several messages arrive together. A message can also carry 'files': files
+the user added to the packet, each {'packet': its path in the packet, 'local': where it is on this machine}. The
+text already names them; the engine puts them in the sandbox and says where.
 """
 
 from __future__ import annotations
@@ -22,6 +24,10 @@ class Control:
     def new_messages(self) -> list:
         """What the user sent since the last call; each message is delivered once."""
         return []
+
+    def interrupt_requested(self) -> bool:
+        """True when the user asked for their waiting messages to be read now, without waiting for the step to end."""
+        return False
 
     can_remember = False  # True when the caller can keep a lesson; the agent then gets the remember tool
 
@@ -48,7 +54,7 @@ def user_content(text: str, images=()):
         return text
     parts = [{'type': 'input_text', 'text': text}]
     for image in images:
-        url = 'data:image/png;base64,' + base64.b64encode(image['data']).decode()
+        url = f'data:{image.get("type", "image/png")};base64,' + base64.b64encode(image['data']).decode()
         parts += [
             {'type': 'input_text', 'text': f'Picture {image["name"]}:'},
             {'type': 'input_image', 'detail': 'high', 'image_url': url},
@@ -56,12 +62,31 @@ def user_content(text: str, images=()):
     return parts
 
 
-def instructions(messages: list):
+def added_files(messages: list) -> list[dict]:
+    return [f for m in messages if not isinstance(m, str) for f in m.get('files') or ()]
+
+
+INTERRUPTED = (
+    'The user stopped your last step before it finished, to tell you this now. That step is not in the conversation '
+    'and may be half done: files it wrote in the sandbox can be incomplete, so check before you rely on them.\n'
+)
+
+
+def instructions(messages: list, placed=(), interrupted: bool = False, running=()):
+    """The user's messages as one message to the agent. placed: where the files they added landed in the sandbox.
+    running: what the scripts the user stopped were doing, so the agent knows what to check."""
+    cut = ''
+    if interrupted:
+        cut = INTERRUPTED + ''.join(f'It was running a script that: {r}\n' for r in running if r)
     text = (
-        'New instructions from the user. Decide what they change, redo only the affected work, and save again:\n'
-        + '\n'.join(texts(messages))
+        'New message from the user. Answer anything it asks in your summary; where it changes the work, redo only the '
+        'affected work and save again:\n' + '\n'.join(texts(messages))
     )
-    return user_content(text, pictures(messages))
+    if placed:
+        text += '\nThe files the user added are in your sandbox at:\n' + '\n'.join(
+            f'- {f["remote"]} (packet path {f["packet"]})' for f in placed
+        )
+    return user_content(cut + text, pictures(messages))
 
 
 def with_message(prompt, content) -> list:

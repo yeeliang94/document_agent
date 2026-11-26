@@ -210,7 +210,7 @@ def review_with_fake_sandbox(monkeypatch, spec, tmp_path):
     store = RunStore(tmp_path / 'runs')
     job = SimpleNamespace(
         store=store, settings=Endpoint(api_key='unused'), spec=spec, zip_parts=[spec.zip], files=[], effort='low',
-        card=goal_card(spec, REMOTE, 'row'), answerer=SimpleNamespace(log=[]), review_usage=[], skills_read={},
+        card=goal_card(spec, REMOTE, 'row'), answerer=SimpleNamespace(log=[]), review_usage=[], skills_read={}, added=[],
         skills_packed=engine_skills.load_skills(spec) if spec.skills else b'',
     )  # fmt: skip
     asyncio.run(engine.review(job, 1, []))

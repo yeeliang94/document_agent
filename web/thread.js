@@ -73,7 +73,8 @@ export function threadItems() {
       const also = e.elsewhere ? ` ${plural(e.elsewhere, 'other change')} in the files.` : '';
       push({ kind: 'note', ...base, text: `Changed ${e.changed} of ${plural(asked, 'commented spot')}.${also}` });
     } else if (e.name === 'lesson.saved') push({ kind: 'learned', ...base, lesson: e.lesson, version: e.version });
-    else if (e.type === 'user') push({ kind: 'me', ...base, text: e.message });
+    else if (e.type === 'user') push({ kind: 'me', ...base, text: e.message, files: e.files || [], id: e.message_id });
+    else if (e.name === 'engine.instructions.delivered' && e.interrupted) push({ kind: 'note', ...base, text: 'Stopped the current step to read your message.' });
     else if (e.type === 'question' || e.name === 'engine.question.asked') {
       if (e !== asked) push({ kind: 'say', ...base, text: String(e.message).replace(/^Question for you:\s*/, '') });
     } else if (e.type === 'tool') {
@@ -229,8 +230,28 @@ function endCard(job) {
     ${status === 'partial' && !job.legacy ? `<div class="choices">${btn('resume', 'Continue', 'primary', state.busy)}</div>` : ''}`;
 }
 
+// The messages the agent has not read yet: it reads them at its next step, or at once after Send now.
+function waitingIds() {
+  const job = state.job;
+  if (!inGroup('active', job.status)) return new Set(); // a run that is not going reads them when it starts
+  return new Set((job.pending_messages || []).map((m) => m?.id).filter(Boolean));
+}
+
+function meHtml(it, waiting, last) {
+  const files = (it.files || []).map((f) => `<button class="chip" data-open="${esc(f.path)}" title="${esc(f.packet)}"><span>${esc(baseName(f.path))}</span></button>`);
+  const queued = waiting.has(it.id);
+  const bubble = `<div class="me ${queued ? 'queued' : ''} ${fresh(it.seq)}">${it.text ? esc(it.text) : ''}${files.length ? `<div class="att">${files.join('')}</div>` : ''}</div>`;
+  if (!queued || !last) return bubble;
+  const now = state.job.interrupt
+    ? pill('live', 'Sending now')
+    : `${pill('', 'Queued')}${jobStatus() === 'running' ? btn('interrupt', 'Send now', 'text small', state.busy) : ''}`;
+  return `${bubble}<div class="queue-foot">${now}</div>`;
+}
+
 export function threadHtml() {
   const items = threadItems();
+  const waiting = waitingIds();
+  const lastWaiting = items.findLast((it) => it.kind === 'me' && waiting.has(it.id));
   const active = isActive();
   const line = active ? liveLine(items.script) : '';
   const inGroupLine = items[items.length - 1]?.kind === 'group';
@@ -239,8 +260,9 @@ export function threadHtml() {
     if (it.kind === 'round') return roundHtml(it.event, fresh(it.seq));
     // Undo sits on the last lesson of a version: one version holds every lesson of a round.
     if (it.kind === 'learned') return learnedHtml(it, !items.slice(i + 1).some((x) => x.kind === 'learned' && x.version === it.version), fresh(it.seq));
-    const cls = it.kind === 'say' ? 'say' : it.kind === 'me' ? 'me' : 'say note';
-    return `<${it.kind === 'me' ? 'div' : 'p'} class="${cls} ${fresh(it.seq)}">${esc(it.text)}</${it.kind === 'me' ? 'div' : 'p'}>`;
+    if (it.kind === 'me') return meHtml(it, waiting, it === lastWaiting);
+    const cls = it.kind === 'say' ? 'say' : 'say note';
+    return `<p class="${cls} ${fresh(it.seq)}">${esc(it.text)}</p>`;
   });
   if (!state.events.length && !active) html.push('<p class="say note">Not started yet.</p>');
   return html.join('') + (inGroupLine ? '' : line) + endCard(state.job);
@@ -279,9 +301,17 @@ export function composerHtml() {
   const status = jobStatus();
   if (status === 'waiting' && state.job.question) return ''; // the question card holds the message box while it is open
   const usable = !state.job.legacy && inGroup('accepts_messages', status);
-  const hint = usable ? 'Message the agent' : status === 'ready' ? 'Start the run to message the agent' : 'This run has ended';
+  // A message to a run that has stopped, a finished one included, starts it again.
+  const hint = !usable
+    ? status === 'ready' ? 'Start the run to message the agent' : 'This run has ended'
+    : isActive() ? 'Message the agent' : 'Ask for changes or a follow-up';
+  const files = usable ? state.attachments[state.job.id] || [] : [];
+  const chips = files.length
+    ? `<div class="chips">${files.map((f, i) => `<span class="chip" title="${esc(f.name)}"><span>${esc(f.name)}</span><button type="button" aria-label="Remove ${esc(f.name)}" data-unattach="${i}">${icon('x')}</button></span>`).join('')}</div>`
+    : '';
   // The typed text is put back by app.js after drawing, so typing never redraws the box.
-  return `<form id="composer">
+  return `<form id="composer">${chips}<div class="line">
+    <button type="button" class="icon-btn" data-action="attach" aria-label="Add files" title="Add files" ${attr('disabled', !usable)}>${icon('clip')}</button>
     <textarea id="msg" rows="1" aria-label="${hint}" placeholder="${hint}" ${attr('disabled', !usable)}></textarea>
-    <button class="send" aria-label="Send" disabled>${icon('send')}</button></form>`;
+    <button class="send" aria-label="Send" disabled>${icon('send')}</button></div></form>`;
 }

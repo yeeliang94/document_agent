@@ -1,0 +1,375 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: zoom in the file preview, and talking to the agent during and after a run.
+     Open this file in a browser; no server needed. Uses the app's real stylesheet. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat and zoom prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../web/styles.css">
+<style>
+  /* Prototype controls, not part of the design */
+  .proto { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 50; background: #18181b; color: #fff; padding: 0 12px; display: flex; gap: 4px; align-items: center; font-size: 12px; }
+  body { padding-top: 40px; overflow: hidden; }
+  .app { height: calc(100dvh - 40px); }
+  .full { top: 40px !important; }
+  .proto span { color: #a3a3ab; margin: 0 4px 0 8px; }
+  .proto button { padding: 4px 10px; border-radius: 999px; color: #d4d4d8; }
+  .proto button[aria-pressed="true"] { background: #fff; color: #18181b; }
+  .proto .sep { width: 1px; height: 16px; background: #3a3a3f; margin: 0 4px; }
+
+  /* --- New: zoom controls in the viewer head --- */
+  .zoom { display: inline-flex; align-items: center; gap: 2px; background: var(--sheet); border-radius: 999px; padding: 2px; }
+  .zoom button { height: 28px; min-width: 28px; border-radius: 999px; display: grid; place-items: center; color: var(--muted); }
+  .zoom button:hover:not(:disabled) { background: var(--panel); color: var(--text); }
+  .zoom button:disabled { opacity: .3; }
+  .zoom .pct { min-width: 52px; padding: 0 8px; font-variant-numeric: tabular-nums; color: var(--text); }
+  .zoom .fit { padding: 0 10px; }
+  .zoom .fit.on, .zoom .fit.on:hover:not(:disabled) { background: var(--accent-bg); color: var(--accent); }
+  .viewer { display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1; }
+  .viewer .sheet { flex: 1; min-height: 0; }
+  .viewer .sheet.fill { flex: 1; }
+  .canvas { flex: 1; min-height: 0; overflow: auto; border-radius: 12px; background: var(--grey-bg); padding: 24px; }
+  .page { background: #fff; margin: 0 auto 24px; aspect-ratio: 612 / 792; padding: 8% 9%; display: flex; flex-direction: column; gap: 1.4%; }
+  .page b { display: block; height: 1.1%; background: #d9d9de; border-radius: 2px; }
+  .page b.h { height: 2.2%; width: 55%; background: #18181b; margin-bottom: 3%; }
+  .page b.gap { background: none; height: 2%; }
+  .grid.zoomed td { max-width: none; }
+
+  /* Full screen viewer */
+  .full { position: fixed; inset: 0; z-index: 20; background: var(--panel); display: flex; flex-direction: column; animation: rise .2s ease both; }
+  .full .files-head { padding: 16px 24px 12px 32px; }
+  .full .viewer { padding: 0 32px 32px; }
+
+  /* --- New: composer with attachments --- */
+  .composer form { flex-direction: column; align-items: stretch; gap: 8px; padding: 8px; }
+  .composer .row { display: flex; align-items: flex-end; gap: 8px; }
+  .composer textarea { padding: 6px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 4px 0; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; background: var(--sheet); border-radius: 999px; padding: 4px 4px 4px 12px; font-size: 13px; max-width: 240px; }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip button { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
+  .chip button:hover { background: var(--panel); color: var(--text); }
+  .chip svg { width: 12px; height: 12px; }
+  .chat { position: relative; }
+  .drop { position: absolute; inset: 16px; border-radius: 12px; background: rgba(232,240,253,.92); box-shadow: inset 0 0 0 2px var(--accent); display: grid; place-items: center; color: var(--accent); font-weight: 500; z-index: 5; pointer-events: none; }
+
+  /* Messages that carry files, and messages waiting to be read */
+  .me .att { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .me .att .chip { padding: 4px 12px; }
+  .me.queued { background: var(--sheet); box-shadow: inset 0 0 0 1px var(--line); }
+  .me.queued .chip { background: var(--panel); }
+  .queue-foot { align-self: flex-end; display: flex; align-items: center; gap: 8px; margin-top: -8px; }
+  .pill.live { background: var(--accent-bg); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">Document Intelligence</div>
+    <button class="btn quiet add">New run</button>
+    <div class="runs">
+      <h3>Runs</h3>
+      <button class="item on"><span>FY2025 group financials</span><i id="side-dot"></i><time>25 Nov</time></button>
+      <button class="item"><span>Lease schedule review</span><time>24 Nov</time></button>
+      <button class="item"><span>Q3 intercompany tie-out</span><time>22 Nov</time></button>
+    </div>
+  </nav>
+  <main id="main">
+    <div class="work viewing" id="work">
+      <section class="chat" id="chat">
+        <header class="chat-head" id="chat-head"></header>
+        <div class="stages" id="stages"></div>
+        <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-live="polite"></div></div>
+        <div class="composer" id="composer-wrap"></div>
+      </section>
+      <aside class="files" id="files" aria-label="Files"></aside>
+    </div>
+  </main>
+</div>
+<div id="full-wrap"></div>
+<input type="file" id="picker" multiple hidden>
+
+<div class="proto" aria-label="Prototype controls">
+  <span>Run</span>
+  <button data-proto-run="working">Working</button>
+  <button data-proto-run="complete">Complete</button>
+  <div class="sep"></div>
+  <span>Preview</span>
+  <button data-proto-view="sheet">Sheet</button>
+  <button data-proto-view="pdf">PDF</button>
+  <button data-proto-view="list">File list</button>
+  <div class="sep"></div>
+  <button data-proto-reset>Reset</button>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const ICONS = {
+  back: '<path d="M15 18l-6-6 6-6"/>',
+  minus: '<path d="M5 12h14"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  close: '<path d="M18 6L6 18M6 6l12 12"/>',
+  clip: '<path d="M21.4 11.1l-9.2 9.2a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 015.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.5-8.5"/>',
+  send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  chev: '<path d="M9 18l6-6-6-6"/>',
+};
+const icon = (n) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
+const STEPS = [25, 33, 50, 67, 75, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400];
+
+// ---- Mock data ---------------------------------------------------------------
+const COLS = 'ABCDEFGHIJKLMNOPQRSTUV'.split('');
+const HEAD = ['Entity', 'Account', 'Description', 'FY2021', 'FY2022', 'FY2023', 'FY2024', 'FY2025', 'Change', 'Change %', 'Q1', 'Q2', 'Q3', 'Q4', 'Budget', 'Variance', 'Source', 'Page', 'Checked', 'Note', 'Owner', 'Status'];
+const ENT = ['Holdings Ltd', 'Trading Sdn Bhd', 'Services Pte', 'Property Ltd'];
+const ACC = ['Revenue', 'Cost of sales', 'Gross profit', 'Admin expenses', 'Selling costs', 'Other income', 'Finance costs', 'Tax', 'Net profit'];
+function num(seed) { return Math.round((Math.sin(seed) * 0.5 + 0.6) * 1000000).toLocaleString('en'); }
+const ROWS = Array.from({ length: 90 }, (_, r) => HEAD.map((h, c) => {
+  if (c === 0) return ENT[r % 4];
+  if (c === 1) return ACC[r % 9];
+  if (c === 2) return `${ACC[r % 9]} per audited accounts`;
+  if (c === 9) return `${((Math.sin(r * 3) * 12)).toFixed(1)}%`;
+  if (c === 16) return `AFS_${2021 + (r % 5)}.pdf`;
+  if (c === 17) return String(4 + (r % 30));
+  if (c === 18) return r % 7 ? 'Yes' : 'No';
+  if (c === 19) return r % 11 ? '' : 'Restated in FY2024';
+  if (c === 20) return ['Amir', 'Mei', 'Raj'][r % 3];
+  if (c === 21) return r % 7 ? 'Done' : 'To fix';
+  return num(r * 31 + c);
+}));
+
+// ---- State -------------------------------------------------------------------
+let S;
+function reset() {
+  S = {
+    run: 'working', view: 'sheet', zoom: 100, fit: false, full: false, drag: false,
+    attachments: [], draft: '', timers: [], live: 'Filling the revenue sheet',
+    thread: [
+      { k: 'me', text: 'Fill the group financials template from the audited accounts in the ZIP.' },
+      { k: 'grp', text: 'Read 12 files', steps: ['Opened AFS_2025.pdf', 'Opened AFS_2024.pdf', 'Read the template'] },
+      { k: 'say', text: 'The template has five sheets. I am starting with Revenue, then the cost lines.' },
+      { k: 'grp', text: 'Filled 3 sheets', steps: ['Wrote Revenue for 4 entities', 'Wrote Cost of sales', 'Checked totals tie to AFS'] },
+    ],
+  };
+}
+function finishThread() {
+  S.thread.push({ k: 'grp', text: 'Checked the workbook', steps: ['Totals tie for all years', '2 cells still to fix'] });
+  S.thread.push({ k: 'say', text: 'Done. The workbook is filled for all four entities. Two cells under Still to fix need a figure that only appears in a scanned page.' });
+}
+function setRun(run) {
+  S.timers.forEach(clearTimeout); S.timers = [];
+  if (run === 'complete' && S.run !== 'complete') { S.thread = S.thread.filter((t) => !t.queued); finishThread(); }
+  if (run === 'working' && S.run === 'complete') S.live = 'Working on your message';
+  S.run = run; draw();
+}
+const later = (ms, fn) => S.timers.push(setTimeout(() => { fn(); draw(); }, ms));
+
+// ---- Chat --------------------------------------------------------------------
+function headHtml() {
+  const working = S.run === 'working';
+  const pill = working ? '<span class="pill live">Working</span>' : '<span class="pill ok">Complete</span>';
+  const controls = working
+    ? '<button class="btn text" data-act="pause">Pause</button><button class="btn text" data-act="stop">Stop</button>'
+    : '';
+  return `<h1>FY2025 group financials</h1>${pill}<div class="controls">${controls}<button class="btn text">Technical log</button></div>`;
+}
+function stagesHtml() {
+  const at = S.run === 'complete' ? 2 : 0;
+  return ['Work', 'Check'].map((n, i) => `<span class="${i < at ? 'done' : i === at ? 'now' : ''}">${n}</span>`).join('<span>›</span>');
+}
+function attHtml(files) {
+  return files.length ? `<div class="att">${files.map((f) => `<span class="chip"><span>${esc(f)}</span></span>`).join('')}</div>` : '';
+}
+function threadHtml() {
+  const out = S.thread.map((t, i) => {
+    if (t.k === 'me') {
+      const bubble = `<div class="me ${t.queued ? 'queued' : ''}">${esc(t.text)}${attHtml(t.files || [])}</div>`;
+      if (!t.queued) return bubble;
+      return bubble + `<div class="queue-foot"><span class="pill">Queued</span><button class="btn text small" data-now="${i}">Send now</button></div>`;
+    }
+    if (t.k === 'grp') return `<div class="grp"><button class="grp-head" data-grp>${icon('chev')}<span>${esc(t.text)}</span></button><div class="grp-body">${t.steps.map((s) => `<div class="step plain"><span>${esc(s)}</span></div>`).join('')}</div></div>`;
+    if (t.k === 'note') return `<p class="say note">${esc(t.text)}</p>`;
+    return `<p class="say">${esc(t.text)}</p>`;
+  });
+  if (S.run === 'working') out.push(`<div class="live"><i></i><b>${esc(S.live)}</b><time>0:42</time></div>`);
+  return out.join('');
+}
+function composerHtml() {
+  const hint = S.run === 'working' ? 'Message the agent' : 'Ask for changes or a follow-up';
+  const chips = S.attachments.length
+    ? `<div class="chips">${S.attachments.map((f, i) => `<span class="chip"><span>${esc(f)}</span><button type="button" aria-label="Remove ${esc(f)}" data-unattach="${i}">${icon('close')}</button></span>`).join('')}</div>`
+    : '';
+  const can = S.draft.trim() || S.attachments.length;
+  return `<form id="composer">${chips}<div class="row">
+    <button type="button" class="icon-btn" aria-label="Add files" data-act="attach">${icon('clip')}</button>
+    <textarea id="msg" rows="1" aria-label="${hint}" placeholder="${hint}">${esc(S.draft)}</textarea>
+    <button class="send" aria-label="Send" ${can ? '' : 'disabled'}>${icon('send')}</button></div></form>`;
+}
+function send() {
+  const text = S.draft.trim(); const files = S.attachments.slice();
+  if (!text && !files.length) return;
+  S.draft = ''; S.attachments = [];
+  const msg = { k: 'me', text: text || (files.length === 1 ? 'Added a file.' : `Added ${files.length} files.`), files };
+  if (S.run === 'working') {
+    // Read at the agent's next step, like today; "Send now" stops the current step.
+    msg.queued = true; S.thread.push(msg); draw();
+    later(7000, () => deliver(msg, false));
+  } else {
+    // After the run: the same run carries on with the new message.
+    S.thread.push(msg); S.run = 'working'; S.live = 'Reading your message'; draw();
+    later(2500, () => { S.live = files.length ? `Reading ${files[0]}` : 'Updating the workbook'; });
+    later(5500, () => {
+      S.thread.push({ k: 'grp', text: 'Updated the workbook', steps: ['Rewrote 4 cells', 'Checked totals tie'] });
+      S.thread.push({ k: 'say', text: 'Done. I made that change and the totals still tie.' });
+      S.run = 'complete';
+    });
+  }
+}
+function deliver(msg, now) {
+  if (!msg.queued) return;
+  msg.queued = false;
+  const i = S.thread.indexOf(msg);
+  if (now) S.thread.splice(i, 0, { k: 'note', text: 'Stopped the current step.' });
+  S.thread.push({ k: 'say', text: msg.files?.length ? `Got it. I will use ${msg.files.join(', ')} as well.` : 'Got it. I will take that into account from here.' });
+  S.live = 'Working on your message';
+}
+
+// ---- Files panel and viewer --------------------------------------------------
+const FILE = { sheet: 'FY2025_group_financials.xlsx', pdf: 'AFS_2025.pdf' };
+function zoomHtml() {
+  const i = STEPS.indexOf(S.zoom);
+  return `<div class="zoom" role="group" aria-label="Zoom">
+    <button data-act="zoom-out" aria-label="Zoom out" ${S.zoom <= STEPS[0] ? 'disabled' : ''}>${icon('minus')}</button>
+    <button class="pct" data-act="zoom-reset" aria-label="Reset zoom to 100%" title="Reset to 100%">${S.zoom}%</button>
+    <button data-act="zoom-in" aria-label="Zoom in" ${S.zoom >= STEPS.at(-1) ? 'disabled' : ''}>${icon('plus')}</button>
+    <button class="fit ${S.fit ? 'on' : ''}" data-act="fit" aria-pressed="${S.fit}">Fit</button></div>`;
+}
+function bodyHtml() {
+  const z = S.zoom / 100;
+  if (S.view === 'sheet') {
+    const head = `<tr><th></th>${HEAD.map((_, c) => `<th>${COLS[c]}</th>`).join('')}</tr>`;
+    const first = `<tr><td>1</td>${HEAD.map((h) => `<td><b style="font-weight:500">${h}</b></td>`).join('')}</tr>`;
+    const rows = ROWS.map((r, i) => `<tr><td>${i + 2}</td>${r.map((v, c) => `<td class="${c >= 3 && c <= 15 ? 'num' : ''}">${esc(v)}</td>`).join('')}</tr>`).join('');
+    return `<div class="meta"><span>Showing the first 500 rows</span><div class="filter"><button class="on">Revenue</button><button>Costs</button><button>Balance sheet</button></div></div>
+      <div class="sheet" id="pane"><table class="grid ${z !== 1 ? 'zoomed' : ''}" style="zoom:${z}"><thead>${head}</thead><tbody>${first}${rows}</tbody></table></div>`;
+  }
+  const page = () => `<div class="page" style="width:${520 * z}px">${'<b class="h"></b>' + Array.from({ length: 34 }, (_, i) => i % 9 === 8 ? '<b class="gap"></b>' : `<b style="width:${60 + ((i * 37) % 40)}%"></b>`).join('')}</div>`;
+  return `<div class="meta"><span>Page 1 of 3</span></div><div class="canvas" id="pane">${page()}${page()}${page()}</div>`;
+}
+function viewerHead(full) {
+  const name = FILE[S.view];
+  const left = full ? '' : `<button class="icon-btn" aria-label="Back to files" data-act="back">${icon('back')}</button>`;
+  const right = full
+    ? `<button class="icon-btn" aria-label="Close full screen" data-act="unfull">${icon('close')}</button>`
+    : `<button class="icon-btn" aria-label="Full screen" data-act="full">${icon('expand')}</button>`;
+  return `<div class="files-head">${left}<h2>${esc(name)}</h2>${zoomHtml()}${right}</div>`;
+}
+function filesHtml() {
+  if (S.view === 'list') {
+    const row = (n, v) => `<button class="frow" data-open="${v}"><span class="name">${n}</span></button>`;
+    return `<div class="files-head"><h2>Files</h2></div><div class="files-body">
+      <div class="list"><h3>Outputs</h3>${row(FILE.sheet, 'sheet')}</div>
+      <div class="list"><h3>Uploads</h3>${row(FILE.pdf, 'pdf')}<button class="frow"><span class="name">AFS_2024.pdf</span></button><button class="frow"><span class="name">AFS_2023.pdf</span></button></div></div>`;
+  }
+  if (S.full) return `<div class="files-head"><h2>${esc(FILE[S.view])}</h2></div><div class="files-body"><p class="say note">Open in full screen.</p></div>`;
+  return viewerHead(false) + `<div class="files-body"><div class="viewer">${bodyHtml()}</div></div>`;
+}
+function fullHtml() {
+  return S.full && S.view !== 'list' ? `<div class="full" role="dialog" aria-modal="true" aria-label="${esc(FILE[S.view])}">${viewerHead(true)}<div class="viewer">${bodyHtml()}</div></div>` : '';
+}
+function setZoom(z) { S.zoom = z; S.fit = false; draw(); }
+function step(dir) {
+  const i = STEPS.findIndex((s) => s >= S.zoom);
+  const next = dir > 0 ? STEPS.find((s) => s > S.zoom) : [...STEPS].reverse().find((s) => s < S.zoom);
+  if (next) setZoom(next);
+}
+// Fit: the whole width of the sheet (or one page) inside the pane.
+function fit() {
+  S.fit = !S.fit;
+  if (!S.fit) { S.zoom = 100; draw(); return; }
+  S.zoom = 100; draw(); // measure at 100%
+  const pane = $(S.full ? '.full #pane' : '#pane');
+  if (!pane) return;
+  const inner = S.view === 'sheet' ? $('table', pane).offsetWidth : 520;
+  const room = pane.clientWidth - (S.view === 'sheet' ? 2 : 48);
+  S.zoom = Math.max(25, Math.min(400, Math.floor((room / inner) * 100)));
+  draw();
+}
+
+// ---- Drawing -----------------------------------------------------------------
+function paint(sel, html) { const el = $(sel); if (el.__html !== html) { el.innerHTML = html; el.__html = html; return true; } return false; }
+function draw() {
+  paint('#chat-head', headHtml());
+  paint('#stages', stagesHtml());
+  const scroll = $('#scroll'); const atEnd = scroll.scrollTop + scroll.clientHeight > scroll.scrollHeight - 40;
+  const open = [...document.querySelectorAll('.grp.open')].map((g) => [...g.parentNode.children].indexOf(g));
+  if (paint('#thread', threadHtml())) { open.forEach((i) => $('#thread').children[i]?.classList.add('open')); if (atEnd) scroll.scrollTop = scroll.scrollHeight; }
+  const focused = document.activeElement?.id === 'msg';
+  const pos = focused ? document.activeElement.selectionStart : null;
+  if (paint('#composer-wrap', composerHtml())) { grow(); if (focused) { const m = $('#msg'); m.focus(); m.setSelectionRange(pos, pos); } }
+  $('#work').classList.toggle('viewing', S.view !== 'list');
+  const pane = $('#files #pane'); const keep = pane && [pane.scrollLeft, pane.scrollTop];
+  paint('#files', filesHtml());
+  if (keep && $('#files #pane')) [$('#files #pane').scrollLeft, $('#files #pane').scrollTop] = keep;
+  paint('#full-wrap', fullHtml());
+  $('#side-dot').style.display = S.run === 'working' ? '' : 'none';
+  $('#chat').querySelector('.drop')?.remove();
+  if (S.drag) $('#chat').insertAdjacentHTML('beforeend', '<div class="drop">Drop files to add them</div>');
+  document.querySelectorAll('[data-proto-run]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.protoRun === S.run));
+  document.querySelectorAll('[data-proto-view]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.protoView === S.view));
+}
+
+// ---- Events ------------------------------------------------------------------
+document.addEventListener('click', (e) => {
+  const t = (s) => e.target.closest(s);
+  let el;
+  if ((el = t('[data-proto-run]'))) setRun(el.dataset.protoRun);
+  else if ((el = t('[data-proto-view]'))) { S.view = el.dataset.protoView; S.zoom = 100; S.fit = false; S.full = false; draw(); }
+  else if (t('[data-proto-reset]')) { S.timers.forEach(clearTimeout); reset(); draw(); }
+  else if ((el = t('[data-open]'))) { S.view = el.dataset.open; draw(); }
+  else if ((el = t('[data-grp]'))) el.parentNode.classList.toggle('open');
+  else if ((el = t('[data-now]'))) { deliver(S.thread[+el.dataset.now], true); draw(); }
+  else if ((el = t('[data-unattach]'))) { S.attachments.splice(+el.dataset.unattach, 1); draw(); }
+  else if ((el = t('[data-act]'))) {
+    const a = el.dataset.act;
+    if (a === 'zoom-in') step(1);
+    else if (a === 'zoom-out') step(-1);
+    else if (a === 'zoom-reset') setZoom(100);
+    else if (a === 'fit') fit();
+    else if (a === 'full') { S.full = true; draw(); if (S.fit) { S.fit = false; fit(); } }
+    else if (a === 'unfull') { S.full = false; draw(); if (S.fit) { S.fit = false; fit(); } }
+    else if (a === 'back') { S.view = 'list'; S.full = false; draw(); }
+    else if (a === 'attach') $('#picker').click();
+    else if (a === 'stop' || a === 'pause') { S.thread.push({ k: 'note', text: a === 'stop' ? 'Stopped. Everything so far is kept.' : 'Paused.' }); S.run = 'complete'; S.timers.forEach(clearTimeout); draw(); }
+  }
+});
+document.addEventListener('submit', (e) => { e.preventDefault(); send(); });
+function grow() { const m = $('#msg'); if (m) { m.style.height = 'auto'; m.style.height = Math.min(140, Math.max(34, m.scrollHeight)) + 'px'; } }
+document.addEventListener('input', (e) => { if (e.target.id === 'msg') { S.draft = e.target.value; grow(); $('.send').disabled = !(S.draft.trim() || S.attachments.length); } });
+document.addEventListener('keydown', (e) => {
+  if (e.target.id === 'msg' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return; }
+  if (e.key === 'Escape' && S.full) { S.full = false; draw(); return; }
+  if (S.view === 'list' || e.target.id === 'msg') return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); step(1); }
+  else if (mod && e.key === '-') { e.preventDefault(); step(-1); }
+  else if (mod && e.key === '0') { e.preventDefault(); setZoom(100); }
+});
+// Ctrl or Cmd with the scroll wheel (or a trackpad pinch) zooms the file, not the page.
+document.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || !e.target.closest('#pane')) return;
+  e.preventDefault(); step(e.deltaY < 0 ? 1 : -1);
+}, { passive: false });
+$('#picker').addEventListener('change', (e) => { S.attachments.push(...[...e.target.files].map((f) => f.name)); e.target.value = ''; draw(); $('#msg').focus(); });
+const chat = $('#chat');
+chat.addEventListener('dragover', (e) => { e.preventDefault(); if (!S.drag) { S.drag = true; draw(); } });
+chat.addEventListener('dragleave', (e) => { if (!chat.contains(e.relatedTarget)) { S.drag = false; draw(); } });
+chat.addEventListener('drop', (e) => { e.preventDefault(); S.drag = false; S.attachments.push(...[...e.dataTransfer.files].map((f) => f.name)); draw(); });
+
+reset(); draw();
+</script>
+</body>
+</html>

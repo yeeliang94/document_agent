@@ -19,6 +19,7 @@ import {
   submitDialog, syncPlaybook, uploadSkill,
 } from './playbooks.js'; // prettier-ignore
 import { composerHtml, headHtml, stagesHtml, threadHtml } from './thread.js';
+import { applyZoom, canZoom, wheelZoom, zoomAction } from './zoom.js';
 
 const RUN = `
   <div id="notices"></div>
@@ -99,7 +100,20 @@ function syncComposer() {
   if (box.value !== draft) box.value = draft;
   box.style.height = '34px';
   box.style.height = Math.min(140, box.scrollHeight) + 'px';
-  $('.send').disabled = box.disabled || !draft.trim();
+  $('.send').disabled = box.disabled || !(draft.trim() || attached().length);
+}
+
+// Files waiting to go with the next message to the agent.
+const attached = () => (state.attachments[state.job?.id] ||= []);
+
+function attach(files) {
+  const list = attached();
+  for (const file of files) {
+    if (/\.zip$/i.test(file.name)) toast('Add the files inside a ZIP one by one.');
+    else if (!list.some((f) => f.name === file.name && f.size === file.size)) list.push(file);
+  }
+  render();
+  $('#msg')?.focus();
 }
 
 function render() {
@@ -125,7 +139,9 @@ function render() {
     syncComposer();
     // A redraw of the viewer (a pin added, a row marked) must not lose the person's place in a long sheet.
     const places = ['.files-body', '.sheet', '.shot'].map((sel) => [sel, $(sel)?.scrollTop, $(sel)?.scrollLeft]);
-    if (paint('#files', filesHtml())) for (const [sel, top, left] of places) $(sel)?.scrollTo(left || 0, top || 0);
+    const drawn = paint('#files', filesHtml());
+    if (drawn) for (const [sel, top, left] of places) $(sel)?.scrollTo(left || 0, top || 0);
+    applyZoom(drawn);
     revealMarks($('#files'));
     tick();
   } else {
@@ -230,6 +246,7 @@ const localActions = {
   'toggle-files': () => (state.showFiles = !state.showFiles),
   'close-file': closeFile,
   'skill-pick': () => $('#skill-picker').click(),
+  attach: () => $('#attach-picker').click(),
   ...playbookDialogs,
 };
 localActions['back-file'] = () => backFile(render);
@@ -257,6 +274,10 @@ const serverActions = {
     await Promise.all([refreshJob(), refreshConfig()]);
   },
   start: uploadAndStart,
+  interrupt: async () => {
+    await api(jobUrl('/interrupt'), { method: 'POST' });
+    await refreshJob();
+  },
   export: () => download(jobUrl('/logs'), `${state.job.id}.jsonl`),
 };
 for (const name of ['pause', 'resume', 'cancel']) {
@@ -269,7 +290,7 @@ for (const name of ['pause', 'resume', 'cancel']) {
 async function action(name) {
   if (localActions[name]) {
     localActions[name]();
-    if (!['folder', 'files', 'template', 'skill-pick'].includes(name)) render();
+    if (!['folder', 'files', 'template', 'skill-pick', 'attach'].includes(name)) render();
     return;
   }
   state.busy = true;
@@ -343,16 +364,29 @@ async function answerWith(text) {
 }
 
 async function sendText() {
-  const text = (state.drafts[state.job.id] || '').trim();
-  if (!text) return;
-  const kind = jobStatus() === 'waiting' && state.job.question ? 'answer' : 'message';
-  state.drafts[state.job.id] = '';
-  syncComposer();
+  const id = state.job.id;
+  const text = (state.drafts[id] || '').trim();
+  const answering = jobStatus() === 'waiting' && state.job.question;
+  // An answer carries no files: those added before the question stay, to go with the next message.
+  const files = answering ? [] : attached().slice();
+  if (!text && !files.length) return;
+  state.drafts[id] = '';
+  if (!answering) state.attachments[id] = [];
+  render();
   try {
-    await api(jobUrl('/' + kind), { method: 'POST', body: JSON.stringify({ [kind]: text }) });
+    if (answering) await api(jobUrl('/answer'), { method: 'POST', body: JSON.stringify({ answer: text }) });
+    else {
+      // A message to a run that has stopped, a finished one included, starts it again.
+      const form = new FormData();
+      form.append('message', text);
+      for (const f of files) form.append('files', f, f.name);
+      await api(jobUrl('/message'), { method: 'POST', body: form });
+    }
     await refreshJob();
+    state.jobs = await api('/api/jobs');
   } catch (e) {
-    state.drafts[state.job.id] = text; // keep what they typed
+    state.drafts[id] = text; // keep what they typed and added
+    if (!answering) state.attachments[id] = files;
     throw e;
   } finally {
     render();
@@ -384,6 +418,11 @@ document.addEventListener('click', async (e) => {
         await refreshConfig(); // refused or not, show what the playbook's latest version now is
         render();
       }
+    } else if ((el = target('[data-zoom]'))) {
+      if (zoomAction(el.dataset.zoom)) render();
+    } else if ((el = target('[data-unattach]'))) {
+      attached().splice(Number(el.dataset.unattach), 1);
+      render();
     } else if ((el = target('[data-action]'))) await action(el.dataset.action);
     else if (await playbookClick(target, render)) return;
     else if ((el = target('[data-mode]'))) setMode(el.dataset.mode);
@@ -476,6 +515,17 @@ document.addEventListener('keydown', (e) => {
     dropPick();
     state.commentDraft = null;
     return render();
+  }
+  if (e.key === 'Escape' && state.full && state.view === 'run' && !$('#details').open) {
+    state.full = false;
+    return render();
+  }
+  // Ctrl/Cmd with +, - or 0 zooms the file on show, in place of the browser's zoom of the whole page.
+  const zoomKey = { '=': 'in', '+': 'in', '-': 'out', 0: 'reset' }[e.key];
+  if (zoomKey && (e.metaKey || e.ctrlKey) && !e.altKey && state.view === 'run' && state.open && canZoom()) {
+    e.preventDefault();
+    if (zoomAction(zoomKey)) render();
+    return;
   }
   // C flips the preview between View and Comment, unless the person is typing.
   const writing = e.target instanceof Element && e.target.matches('input, textarea, select, [contenteditable]');
@@ -682,6 +732,10 @@ document.addEventListener('change', async (e) => {
   } else if (e.target.id === 'folder-picker' || e.target.id === 'files-picker') {
     state.files = Array.from(e.target.files);
     e.target.value = '';
+  } else if (e.target.id === 'attach-picker') {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    return attach(files);
   } else if (e.target.id === 'template-picker') {
     state.template = e.target.files[0] || null;
     e.target.value = '';
@@ -709,6 +763,49 @@ document.addEventListener('submit', async (e) => {
     toast(err.message);
   }
   render();
+});
+
+// --- Zoom with the wheel, and files dropped on the conversation ----------------
+
+// Ctrl/Cmd with the scroll wheel, or a pinch on a trackpad, zooms the file on show, not the page.
+document.addEventListener(
+  'wheel',
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey) || !e.target.closest?.('#files .files-body') || !canZoom()) return;
+    e.preventDefault();
+    if (wheelZoom(e.deltaY)) render();
+  },
+  { passive: false },
+);
+
+let resizing;
+window.addEventListener('resize', () => {
+  clearTimeout(resizing);
+  resizing = setTimeout(() => state.zoom.fit && applyZoom(), 100); // Fit follows the window
+});
+
+const canAttach = () => state.view === 'run' && !!$('#composer [data-action="attach"]:not(:disabled)');
+let dragDepth = 0;
+const dropShown = (on) => $('.chat')?.classList.toggle('dropping', on);
+document.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer?.types?.includes('Files') || !e.target.closest?.('.chat') || !canAttach()) return;
+  dragDepth += 1;
+  dropShown(true);
+});
+document.addEventListener('dragleave', (e) => {
+  if (!e.target.closest?.('.chat')) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropShown(false);
+});
+document.addEventListener('dragover', (e) => {
+  if (e.target.closest?.('.chat') && canAttach() && e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+});
+document.addEventListener('drop', (e) => {
+  if (!e.target.closest?.('.chat') || !canAttach()) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropShown(false);
+  attach(Array.from(e.dataTransfer.files || []));
 });
 
 // --- Polling ---------------------------------------------------------------

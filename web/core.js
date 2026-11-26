@@ -20,6 +20,9 @@ const icons = {
   up: 'M12 20V8M7 13l5-5 5 5M5 4h14',
   find: 'M10.5 17a6.5 6.5 0 100-13 6.5 6.5 0 000 13zM15.5 15.5L20 20',
   up1: 'M6 15l6-6 6 6',
+  minus: 'M5 12h14',
+  expand: 'M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6',
+  shrink: 'M4 14h6v6M20 10h-6V4M14 10l6-6M10 14l-6 6',
   down1: 'M6 9l6 6 6-6',
 };
 export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"/></svg>`;
@@ -56,7 +59,10 @@ export const state = {
   deliverable: 'template', // a new run fills a template or builds to a format
   instructions: {}, // what the agent should produce, as typed on the New run page, by playbook
   drafts: {},
+  attachments: {}, // files waiting to go with the next message, by job id
   open: null, // the file shown in the Files panel
+  zoom: { level: 100, fit: false }, // how large the file on show is drawn; see zoom.js
+  full: false, // the file on show fills the window
   preview: null, // { path, data, sheet, page, image, error }
   row: null,
   find: null, // the find bar in the preview, while open; see review.js

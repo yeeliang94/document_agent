@@ -631,7 +631,7 @@ class StopAfter(SimpleNamespace):
 
 def _drive_job(tmp_path, **limits):
     return SimpleNamespace(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60, files=[],
-                           max_tokens=10_000, **limits)  # fmt: skip
+                           max_tokens=10_000, tools_running=[], **limits)  # fmt: skip
 
 
 def test_a_cancel_wins_even_when_the_agent_has_just_finished(tmp_path, monkeypatch):
@@ -667,6 +667,149 @@ def test_turn_and_token_limits_hold_across_continuations(tmp_path, monkeypatch):
     job.turns_used = 60
     with pytest.raises(engine.LimitReached, match='60-turn limit'):
         asyncio.run(engine._drive(None, 'go', job, store, print, StopAfter(stop=None)))
+
+
+class SlowStream(FakeStream):
+    """A turn that is still going (a long script in the sandbox) until it is cancelled."""
+
+    def __init__(self, items=None):
+        super().__init__(final=None)
+        self.items, self.stopped = items or [], asyncio.Event()
+        self.new_items = self.items
+
+    async def stream_events(self):  # nothing streams in while the script runs
+        await self.stopped.wait()
+        return
+        yield
+
+    def cancel(self, mode):
+        self.cancelled = mode
+        self.stopped.set()
+
+    def to_input_list(self):
+        return list(self.items)
+
+
+class InterruptOnce(SimpleNamespace):
+    def stop_requested(self):
+        return None
+
+    def interrupt_requested(self):
+        return bool(self.waiting)
+
+    def new_messages(self):
+        taken, self.waiting = self.waiting, []
+        return taken
+
+
+def test_send_now_stops_the_turn_where_it_is_and_hands_over_the_message(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    monkeypatch.setattr(engine, 'INTERRUPT_POLL_SECONDS', 0.01)
+    done = SimpleNamespace(status='complete')
+    whole = [{'role': 'user', 'content': 'go'}, {'type': 'reasoning', 'id': 'rs_1'},
+             {'type': 'function_call', 'call_id': 'c1', 'name': 'save_outputs'}]  # fmt: skip
+    streams = [SlowStream(whole), FakeStream(final=done)]
+    prompts = []
+
+    def run(agent, prompt, **_):
+        prompts.append(prompt)
+        return streams.pop(0)
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', run)
+    (tmp_path / 'rates.csv').write_bytes(b'MYR,4.4')
+    uploads = []
+
+    class Box:
+        async def upload_file(self, local, name=None):
+            uploads.append(local.read_bytes())
+            return f'/mnt/data/{name}'
+
+    store = RunStore(tmp_path)
+    job = _drive_job(tmp_path, main=Box(), added=[], store=store)
+    message = {'text': 'Use November rates.', 'images': [],
+               'files': [{'packet': 'Added/rates.csv', 'local': tmp_path / 'rates.csv'}]}  # fmt: skip
+    control = InterruptOnce(waiting=[message])
+    result = asyncio.run(engine._drive(None, 'go', job, store, print, control))
+    assert result.final_output is done and prompts[0] == 'go'
+    # The turn was cut short: the tool call that never got its result goes, with the reasoning before it.
+    assert prompts[1][:-1] == [{'role': 'user', 'content': 'go'}]
+    sent = prompts[1][-1]['content']
+    assert sent.startswith(engine_control_interrupted()) and 'Use November rates.' in sent
+    assert '/mnt/data/added__rates.csv (packet path Added/rates.csv)' in sent and uploads == [b'MYR,4.4']
+    assert job.files[-1]['path'] == 'Added/rates.csv' and job.added[0]['packet'] == 'Added/rates.csv'
+    lines = [json.loads(line) for line in (store.dir / 'events.jsonl').read_text().splitlines()]
+    delivered = [e for e in lines if e['event'] == 'instructions.delivered']
+    assert delivered and delivered[0]['interrupted'] is True
+
+
+def test_a_file_already_in_the_runs_packet_is_not_added_again(tmp_path):
+    import app.engine.agent as engine
+
+    (tmp_path / 'rates.csv').write_bytes(b'MYR,4.4')
+    job = _drive_job(tmp_path, main=None, added=[], store=RunStore(tmp_path))
+    job.files.append({'path': 'Added/rates.csv'})  # sent while the run was queued, so the packet holds it
+    message = {'text': 'x', 'images': [], 'files': [{'packet': 'Added/rates.csv', 'local': tmp_path / 'rates.csv'}]}
+    assert asyncio.run(engine._place_files(job, [message])) == [] and len(job.files) == 1 and job.added == []
+
+
+def test_send_now_waits_for_the_agents_own_tool_to_finish(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    monkeypatch.setattr(engine, 'INTERRUPT_POLL_SECONDS', 0.01)
+    job = _drive_job(tmp_path)
+    cancels, fired = [], []
+    result = SimpleNamespace(cancel=lambda mode: cancels.append(mode))
+    control = InterruptOnce(waiting=['Stop and use November rates.'])
+    hook = SimpleNamespace(context=job)
+
+    async def go():
+        await engine.TOOL_WATCH.on_tool_start(hook, None, SimpleNamespace(name='save_outputs'))
+        watcher = asyncio.create_task(engine._watch_for_interrupt(result, job, control, fired))
+        await asyncio.sleep(0.05)
+        assert cancels == [] and fired == []  # a save is never cut off part way
+        await engine.TOOL_WATCH.on_tool_end(hook, None, SimpleNamespace(name='save_outputs'), '{}')
+        await asyncio.sleep(0.05)
+        assert cancels == ['immediate'] and fired == [True]  # then the message goes in at once
+        await watcher
+        # A tool whose end was never reported cannot hold Send now back past the next model call.
+        await engine.TOOL_WATCH.on_tool_start(hook, None, SimpleNamespace(name='scout_folders'))
+        await engine.TOOL_WATCH.on_llm_start(hook, None, None, [])
+        assert job.tools_running == []
+
+    asyncio.run(go())
+
+
+def test_the_agent_is_told_what_the_stopped_script_was_doing():
+    from app.engine.control import INTERRUPTED, instructions
+
+    sent = instructions(['Use November rates.'], interrupted=True, running=['Fill the October sheet'])
+    assert sent.startswith(INTERRUPTED) and 'It was running a script that: Fill the October sheet' in sent
+    assert 'in your summary' in sent
+    assert not instructions(['Use November rates.']).startswith(INTERRUPTED)
+
+
+def test_a_scout_of_a_folder_reads_a_file_added_during_the_run(tmp_path):
+    import io as _io
+    import zipfile as _zipfile
+
+    import app.engine.agent as engine
+
+    packet = tmp_path / 'packet.zip'
+    with _zipfile.ZipFile(packet, 'w') as z:
+        z.writestr('HR/a.csv', 'x')
+    (tmp_path / 'rates.csv').write_bytes(b'MYR,4.4')
+    files = [{'path': 'HR/a.csv', 'member': 'HR/a.csv'},
+             {'path': 'Added/rates.csv', 'member': '', 'local': str(tmp_path / 'rates.csv')}]  # fmt: skip
+    data, count = engine.folder_zip(packet, files, 'Added')
+    with _zipfile.ZipFile(_io.BytesIO(data)) as z:
+        assert count == 1 and z.read('Added/rates.csv') == b'MYR,4.4'
+
+
+def engine_control_interrupted():
+    from app.engine.control import INTERRUPTED
+
+    return INTERRUPTED
 
 
 class FakeSandbox:
@@ -781,7 +924,11 @@ def test_a_dropped_reply_is_retried_from_the_finished_items(tmp_path, monkeypatc
         prompts.append(prompt)
         return streams.pop(0)
 
+    real_sleep = asyncio.sleep
+
     async def no_sleep(seconds):
+        if seconds == engine.INTERRUPT_POLL_SECONDS:  # the Send now watcher looking in, not a pause before a retry
+            return await real_sleep(0)
         waits.append(seconds)
 
     monkeypatch.setattr(engine.Runner, 'run_streamed', run)
@@ -820,7 +967,6 @@ def test_a_dropped_reply_is_retried_from_the_finished_items(tmp_path, monkeypatc
 
 def test_a_run_the_ai_service_fails_keeps_its_saved_work_and_can_continue(tmp_path, monkeypatch):
     from openai import APIError
-
 
     def failing(status=None):
         async def drive(*_args, **_kw):
@@ -1357,20 +1503,36 @@ def test_loop_packets_run_through_the_app_with_comments_and_a_remembered_rule(tm
     monkeypatch.setattr(service, 'run_job', fake_run_job)
     settings = Settings(api_key='unused')
     current = {'packet': 'payroll_comment_fix'}
-    row = asyncio.run(loop_run(tmp_path / 'p' / 'payroll_comment_fix', 'A', settings, tmp_path / 'runs', echo=lambda _: None))
+    row = asyncio.run(
+        loop_run(tmp_path / 'p' / 'payroll_comment_fix', 'A', settings, tmp_path / 'runs', echo=lambda _: None)
+    )
     assert (row['status'], row['cell_accuracy'], row['row_precision']) == ('complete', 1.0, 1.0)
-    assert (row['comments'], row['comments_changed'], row['changed_elsewhere'], row['round_status']) == (1, 1, 0, 'done')
+    assert (row['comments'], row['comments_changed'], row['changed_elsewhere'], row['round_status']) == (
+        1,
+        1,
+        0,
+        'done',
+    )
     assert row['proved'] is True
     assert 'This salary does not match the joiners list' in seen[0].resume
     assert len(seen[0].report['comment_changes']['changed_where_asked']) == 1
 
     current['packet'] = 'payroll_remember'
-    row = asyncio.run(loop_run(tmp_path / 'p' / 'payroll_remember', 'A', settings, tmp_path / 'runs', echo=lambda _: None))
-    assert (row['status'], row['cell_accuracy'], row['remembered_version'], row['playbook_version']) == ('complete', 1.0, 2, 2)
+    row = asyncio.run(
+        loop_run(tmp_path / 'p' / 'payroll_remember', 'A', settings, tmp_path / 'runs', echo=lambda _: None)
+    )
+    assert (row['status'], row['cell_accuracy'], row['remembered_version'], row['playbook_version']) == (
+        'complete',
+        1.0,
+        2,
+        2,
+    )
     assert row['requests'] == 4  # both runs are counted
     assert row['proved'] is True and row['first_run']['status'] == 'complete'
     fresh = seen[-1]
-    assert fresh.resume is None and fresh.context.endswith('Write every name as SURNAME, First name, for example ' + fresh.context.rsplit('example ', 1)[1])
+    assert fresh.resume is None and fresh.context.endswith(
+        'Write every name as SURNAME, First name, for example ' + fresh.context.rsplit('example ', 1)[1]
+    )
     assert 'Write every name as SURNAME, First name' in fresh.context and fresh.report == {}
 
 
@@ -1401,7 +1563,15 @@ def test_a_loop_run_that_does_nothing_or_gets_the_style_wrong_is_not_counted_as_
         return SimpleNamespace(record=record)
 
     monkeypatch.setattr(service, 'run_job', lazy)
-    row = asyncio.run(loop_run(tmp_path / 'p' / 'payroll_comment_fix', 'A', Settings(api_key='unused'), tmp_path / 'runs', echo=lambda _: None))
+    row = asyncio.run(
+        loop_run(
+            tmp_path / 'p' / 'payroll_comment_fix',
+            'A',
+            Settings(api_key='unused'),
+            tmp_path / 'runs',
+            echo=lambda _: None,
+        )
+    )
     assert row['status'] == 'complete' and row['cell_accuracy'] > 0.9  # the score alone looks fine
     assert row['proved'] is False and row['comments_changed'] == 0
     # Names in the right order but not in capitals pass the forgiving scorer and fail the exact check.
@@ -1431,14 +1601,27 @@ def test_the_summary_sets_an_earlier_scorecard_beside_this_one_and_marks_runs_wi
 
     base = {'shape': 'A', 'status': 'complete', 'row_recall': 1.0, 'row_precision': 1.0, 'relevance_accuracy': 1.0,
             'asked_expected': None, 'unneeded_questions': 0, 'run': 'r'}  # fmt: skip
-    before = [{**base, 'packet': 'payroll_noise', 'cell_accuracy': 1.0, 'seconds': 120, 'requests': 2, 'input_tokens': 50_000, 'output_tokens': 4000}]
+    before = [
+        {
+            **base,
+            'packet': 'payroll_noise',
+            'cell_accuracy': 1.0,
+            'seconds': 120,
+            'requests': 2,
+            'input_tokens': 50_000,
+            'output_tokens': 4000,
+        }
+    ]
     now = [
         {**base, 'packet': 'payroll_noise', 'cell_accuracy': 0.9, 'seconds': 180, 'requests': 3, 'input_tokens': 60_000, 'output_tokens': 5000},
         {**base, 'packet': 'payroll_skill_rule', 'cell_accuracy': 0.667, 'seconds': 80, 'requests': 3, 'input_tokens': 30_000,
          'output_tokens': 1000, 'without_skills': True, 'skills_offered': [], 'skills_read': [], 'proved': None},
     ]  # fmt: skip
     text = summary(now, before)
-    assert '| payroll_noise / A | 1 -> 1 | 1.000 -> 0.900 | 1.000 -> 1.000 | 1.000 -> 1.000 | 2.000 -> 3.000 | 2.000 -> 3.000 | 50.000 -> 60.000 | 4.000 -> 5.000 |' in text
+    assert (
+        '| payroll_noise / A | 1 -> 1 | 1.000 -> 0.900 | 1.000 -> 1.000 | 1.000 -> 1.000 | 2.000 -> 3.000 | 2.000 -> 3.000 | 50.000 -> 60.000 | 4.000 -> 5.000 |'
+        in text
+    )
     assert '| payroll_skill_rule / A | r | - | run without its skills, for comparison: cells right 0.667 |' in text
 
 
@@ -1484,6 +1667,9 @@ def test_a_packet_whose_skill_holds_a_program_is_proven_only_when_the_program_ra
     rows = key['deliverables']['levy_sheet_output.xlsx']['sheets']['Levy']['rows']
     assert all(r['Staff Levy'] == staff_levy(r['Monthly Salary']) for r in rows)
     right = {'cell_accuracy': 1.0}
-    assert _proved(spec, {'skills_read': {'main': ['staff-levy']}, 'skills_run': ['staff-levy/scripts/levy.py']}, right) is True
+    assert (
+        _proved(spec, {'skills_read': {'main': ['staff-levy']}, 'skills_run': ['staff-levy/scripts/levy.py']}, right)
+        is True
+    )
     assert _proved(spec, {'skills_read': {'main': ['staff-levy']}, 'skills_run': []}, right) is False
     assert _proved(spec, {'skills_run': ['staff-levy/scripts/levy.py']}, {'cell_accuracy': 0.9}) is False

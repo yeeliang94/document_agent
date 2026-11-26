@@ -294,7 +294,7 @@ def test_comments_reach_a_running_job_between_steps_and_stay_for_a_resumed_run(t
     assert content[1]['text'] == 'Picture round-01-picture-01.png:'
     assert content[2]['image_url'].startswith('data:image/png;base64,iVBOR')
     assert engine._instructions(['Only text']) == (
-        'New instructions from the user. Decide what they change, redo only the affected work, and save again:\nOnly text'
+        'New message from the user. Answer anything it asks in your summary; where it changes the work, redo only the affected work and save again:\nOnly text'
     )
     # The run record keeps the conversation without the bytes of the pictures.
     kept = engine.without_pictures([{'role': 'user', 'content': content}])

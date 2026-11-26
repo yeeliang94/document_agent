@@ -118,7 +118,7 @@ def test_the_filter_shrinks_pictures_and_passes_the_rest_on():
 def test_the_main_run_goes_through_the_filter(monkeypatch):
     seen = {}
 
-    def run_streamed(agent_, prompt, context=None, max_turns=0, run_config=None):
+    def run_streamed(agent_, prompt, context=None, max_turns=0, run_config=None, hooks=None):
         seen['run_config'] = run_config
         raise RuntimeError('stop here')
 
