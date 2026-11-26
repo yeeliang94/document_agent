@@ -1,0 +1,357 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: plan Step 47, "Tell the person when the run needs them".
+     Made-up data: an October payroll run. Open this file in a browser; no server needed. The dark bar at the
+     bottom jumps between states; it is not part of the design. The desktop, the browser window, its tabs, the
+     permission box and the desktop notification are drawn to show where things appear: the browser and the
+     computer draw those for real, so only their words come from the app.
+     What changes:
+     - When a run asks a question, finishes or stops while its tab is not in front, the computer shows one
+       notification. Clicking it brings the browser forward on that run.
+     - The tab's title starts with what happened ("Question", "Finished", "Stopped") and its icon gets a dot.
+       Both clear as soon as the person is back on the tab.
+     - Settings gets a Notifications panel with one switch, on by default. The browser asks permission the first
+       time it is switched on; a blocked permission shows one sentence with what to do. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run alerts prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f5f6; --sheet: #ffffff; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab;
+    --line: #e7e7ea; --accent: #2f6fdb; --accent-bg: #e8f0fd; --ok-bg: #e6f3e6; --ok-fg: #24592a;
+    --warn-bg: #fbf0dc; --warn-fg: #6b4206; --bad-bg: #fbe9e9; --bad-fg: #7a2020; --grey-bg: #ececee; --grey-fg: #55555c;
+    --ask-dot: #c98a1b; --ok-dot: #2f8a3a; --bad-dot: #c0392b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; color: var(--text); font: 400 14px/1.55 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased;
+    background: linear-gradient(160deg, #dfe3ea, #cfd5df); }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; font-weight: 500; }
+
+  /* ---- The computer and the browser (drawn by them, not by the app) ---- */
+  .desk { min-height: 100%; padding: 48px 32px 96px; display: flex; justify-content: center; }
+  .window { width: 100%; max-width: 1240px; height: min(820px, calc(100vh - 144px)); min-height: 560px; background: var(--bg); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 24px 64px rgba(20, 24, 40, .22); display: flex; flex-direction: column; position: relative; }
+  .chrome { background: #e9eaee; padding: 8px 8px 0; display: flex; align-items: flex-end; gap: 4px; }
+  .lights { display: flex; gap: 6px; padding: 0 12px 12px 4px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; background: #c8c9ce; }
+  .tab { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px 10px 0 0; font-size: 12px; color: #55555c; width: 240px; min-width: 0; flex: 0 1 240px; }
+  .tab.on { background: #fff; color: var(--text); }
+  .tab .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: left; }
+  .tab .t b { font-weight: 500; }
+  .fav { position: relative; width: 16px; height: 16px; flex: none; }
+  .fav svg { width: 16px; height: 16px; display: block; }
+  .fav i { position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #e9eaee; }
+  .tab.on .fav i { border-color: #fff; }
+  .fav i.ask { background: var(--ask-dot); } .fav i.done { background: var(--ok-dot); } .fav i.stop { background: var(--bad-dot); }
+  .fav.mail { border-radius: 4px; background: #8a93a6; }
+  .addr { background: #fff; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #ececee; }
+  .addr .url { flex: 1; background: #f1f2f4; border-radius: 999px; padding: 4px 12px; font-size: 13px; color: #55555c; display: flex; align-items: center; gap: 8px; }
+  .addr .url svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+  .view { flex: 1; min-height: 0; display: flex; position: relative; }
+
+  /* Another site in front: the person is busy elsewhere */
+  .other { flex: 1; padding: 32px; display: flex; flex-direction: column; gap: 12px; }
+  .other .ln { height: 44px; border-radius: 12px; background: #f3f4f6; }
+  .other .ln:nth-child(odd) { background: #f7f7f9; }
+  .other h1 { color: #55555c; margin-bottom: 8px; }
+
+  /* The desktop notification */
+  .notif { position: fixed; top: 16px; right: 16px; width: 360px; max-width: calc(100% - 32px); background: rgba(250, 250, 252, .96); backdrop-filter: blur(20px);
+    border-radius: 16px; padding: 12px 14px; display: grid; grid-template-columns: 36px 1fr auto; gap: 4px 12px; align-items: start; text-align: left;
+    box-shadow: 0 12px 40px rgba(20, 24, 40, .25); z-index: 8; animation: drop .35s ease-out; }
+  .notif:hover { background: #fff; }
+  .notif .app-ic { grid-row: span 3; width: 36px; height: 36px; }
+  .notif .app-ic svg { width: 36px; height: 36px; display: block; }
+  .notif .src { font-size: 12px; color: var(--muted); }
+  .notif .when { font-size: 12px; color: var(--faint); }
+  .notif .ttl { grid-column: 2 / 4; font-weight: 500; }
+  .notif .msg { grid-column: 2 / 4; color: #3a3a40; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  @keyframes drop { from { transform: translateY(-12px); opacity: 0; } }
+  .hint-click { position: fixed; top: 16px; right: 392px; background: #18181b; color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 999px; z-index: 8; }
+  .hint-click::after { content: ' →'; }
+
+  /* The browser's permission box */
+  .perm { position: absolute; top: 4px; left: 16px; width: 320px; background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.18);
+    z-index: 6; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+  .perm .host { font-weight: 500; }
+  .perm .bell { display: flex; gap: 8px; align-items: center; color: #3a3a40; }
+  .perm .bell svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+  .perm .end { display: flex; justify-content: flex-end; gap: 8px; }
+  .perm .end button { padding: 6px 16px; border-radius: 999px; box-shadow: inset 0 0 0 1px #d6d7dc; color: #1a5fd0; }
+
+  /* ---- The app as it is ---- */
+  .app { flex: 1; display: grid; grid-template-columns: 232px minmax(0, 1fr); min-width: 0; min-height: 0; }
+  .side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 24px; min-height: 0; }
+  .brand { font-weight: 500; font-size: 15px; padding: 0 12px; }
+  .runs { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .runs h3 { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 12px 8px; }
+  .item { display: flex; align-items: center; gap: 8px; text-align: left; padding: 8px 12px; border-radius: 12px; color: var(--muted); width: 100%; }
+  .item:hover, .item.on { background: var(--panel); }
+  .item.on { color: var(--text); }
+  .item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .item i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ask-dot); }
+  .foot { display: flex; flex-direction: column; gap: 4px; }
+  .topnav { display: none; }
+  main { min-width: 0; min-height: 0; overflow: auto; }
+
+  .chat { max-width: 760px; padding: 24px 32px 48px; display: flex; flex-direction: column; gap: 24px; }
+  .chat-head { display: flex; align-items: center; gap: 12px; min-height: 40px; }
+  .chat-head h1 { flex: 1; }
+  .say { max-width: 60ch; }
+  .me { align-self: flex-end; background: var(--panel); border-radius: 12px; padding: 12px 16px; max-width: 60ch; }
+  .card { background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .card.ask, .card.warn { background: var(--warn-bg); }
+  .choices { display: flex; gap: 8px; flex-wrap: wrap; }
+  .filerow { display: flex; align-items: center; gap: 12px; }
+  .filerow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); } .pill.warn { background: var(--warn-bg); color: var(--warn-fg); } .pill.bad { background: var(--bad-bg); color: var(--bad-fg); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
+  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+  .btn.primary:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); background: var(--sheet); }
+  .btn.quiet:hover { background: var(--panel); }
+  .btn.text { padding: 8px 12px; color: var(--muted); }
+  .btn.small { padding: 4px 12px; font-size: 13px; }
+  .card.ask .btn.quiet { box-shadow: none; }
+
+  /* Settings */
+  .narrow { max-width: 704px; margin: 0 auto; padding: 48px 32px; display: flex; flex-direction: column; gap: 24px; }
+  .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+  .rows { background: var(--panel); border-radius: 12px; padding: 4px 16px; }
+  .rows > h2 { padding: 12px 0 4px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; min-height: 56px; flex-wrap: wrap; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row > span:first-child { color: var(--muted); }
+  .row .note { flex-basis: 100%; margin-top: -4px; }
+  .problem { color: var(--bad-fg); }
+  .muted { color: var(--muted); }
+  .seg { display: inline-flex; background: var(--sheet); border-radius: 999px; padding: 4px; }
+  .seg button { padding: 4px 12px; border-radius: 999px; color: var(--muted); }
+  .seg button.on { background: var(--text); color: #fff; }
+  .stepper { display: inline-flex; align-items: center; gap: 4px; background: var(--sheet); border-radius: 999px; padding: 2px; }
+  .stepper button { width: 28px; height: 28px; border-radius: 50%; }
+  .stepper b { font-weight: 400; min-width: 24px; text-align: center; }
+  .unit { display: inline-flex; align-items: center; gap: 8px; background: var(--sheet); border-radius: 12px; padding: 8px 12px; }
+  .unit b { font-weight: 400; min-width: 40px; text-align: right; }
+  .unit span { color: var(--muted); }
+  .switch { width: 36px; height: 20px; border-radius: 999px; background: #cfcfd4; position: relative; flex: none; transition: background .15s; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { transform: translateX(16px); }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: var(--accent-bg); } }
+
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
+  .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
+  .switcher button.on { background: #fff; color: #18181b; }
+
+  @media (max-width: 1000px) {
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .side { display: none; }
+    .topnav { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+    .topnav .brand { padding: 0; margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .topnav .pick { background: var(--panel); border-radius: 999px; padding: 8px 12px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .topnav .pick i { width: 8px; height: 8px; border-radius: 50%; background: var(--ask-dot); }
+    .chat, .narrow { padding: 24px 16px; }
+    .hint-click { display: none; }
+  }
+  @media (max-width: 600px) {
+    .desk { padding: 0 0 152px; }
+    .window { border-radius: 0; height: calc(100vh - 152px); min-height: 480px; box-shadow: none; }
+    .lights, .tab.other-tab .t { display: none; }
+    .tab { flex: 1 1 auto; width: auto; }
+    .tab.other-tab { flex: 0 0 auto; }
+    .notif { top: 8px; right: 8px; left: 8px; width: auto; max-width: none; }
+    .perm { left: 8px; right: 8px; width: auto; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="desk">
+  <div class="window" id="window">
+    <div class="chrome" id="chrome"></div>
+    <div class="addr" id="addr"></div>
+    <div class="view" id="view"></div>
+  </div>
+</div>
+<div id="layer"></div>
+<div class="switcher" id="switcher"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const ICON = '<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#18181b"/><path d="M10 9h8l4 4v10H10z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>';
+const RUN = 'October payroll';
+
+// What each kind of moment says: in the notification, on the tab, and on the run once the person is back.
+const KINDS = {
+  ask: {
+    word: 'Question',
+    title: `${RUN} has a question`,
+    msg: 'Which exchange rate should I use for the Singapore entity: the month-end rate or the October average?',
+    card: () => `<div class="card ask"><p>Which exchange rate should I use for the Singapore entity: the month-end rate or the October average?</p>
+      <div class="choices"><button class="btn quiet small">Month-end rate</button><button class="btn quiet small">October average</button></div></div>`,
+  },
+  done: {
+    word: 'Finished',
+    title: `${RUN} is finished`,
+    msg: 'The workbook is ready to check. 2 rows need a look.',
+    card: () => `<p class="say">The workbook is ready: 1,840 employees across twelve entities. Two Singapore rows need a look; they are marked in the file.</p>
+      <div class="card"><div class="filerow"><span class="name">group_payroll_October_2026.xlsx</span><span class="pill ok">Checked</span></div></div>`,
+  },
+  stop: {
+    word: 'Stopped',
+    title: `${RUN} stopped`,
+    msg: 'It reached the 30 minute time limit. Open the run to give it more time.',
+    card: () => `<div class="card warn"><p>Stopped: the run reached its time limit of 30 minutes. The work so far is kept.</p>
+      <div class="choices"><button class="btn quiet small">Carry on</button></div></div>`,
+  },
+};
+
+let state = {};
+const RESET = { screen: 'other', kind: null, notif: false, setting: 'on', perm: 'granted', dirty: false };
+
+function tabsHtml() {
+  const appOn = state.screen !== 'other';
+  // The mark: a word in front of the title and a dot on the icon, only while the person is away from the tab.
+  const mark = !appOn && state.kind && state.setting !== 'off' ? KINDS[state.kind] : null;
+  const page = state.screen === 'settings' ? 'Settings · ' : `${RUN} · `;
+  const title = `${mark ? `<b>${mark.word}</b> · ` : ''}${page}Document Intelligence`;
+  return `<div class="lights"><i></i><i></i><i></i></div>
+    <button class="tab ${appOn ? 'on' : ''}" data-go="back" title="${title.replace(/<[^>]+>/g, '')}">
+      <span class="fav">${ICON}${mark ? `<i class="${state.kind}"></i>` : ''}</span><span class="t">${title}</span></button>
+    <button class="tab other-tab ${appOn ? '' : 'on'}" data-go="away"><span class="fav mail"></span><span class="t">Inbox · Mail</span></button>`;
+}
+
+function addrHtml() {
+  const url = state.screen === 'other' ? 'mail.example.com/inbox' : `localhost:8003${state.screen === 'settings' ? '/#settings' : '/#run'}`;
+  return `<span class="url"><svg viewBox="0 0 16 16"><path d="M3 5h10M3 8h10M3 11h10"/></svg>${url}</span>`;
+}
+
+function side(active) {
+  const items = [
+    [RUN, state.kind === 'ask' && state.screen === 'other'],
+    ['September payroll', false],
+    ['Q3 expenses', false],
+  ];
+  return `<nav class="side"><div class="brand">Document Intelligence</div>
+    <div><button class="btn primary" style="width:100%">New run</button></div>
+    <div class="runs"><h3>Runs</h3>${items.map(([n, dot], i) => `<button class="item ${active === 'run' && i === 0 ? 'on' : ''}"><span>${n}</span>${dot ? '<i></i>' : ''}</button>`).join('')}</div>
+    <div class="foot"><button class="item">Playbooks</button><button class="item">Clients</button><button class="item ${active === 'settings' ? 'on' : ''}" data-go="settings">Settings</button></div></nav>
+    <div class="topnav"><span class="brand">Document Intelligence</span><span class="pick">${active === 'settings' ? 'Settings' : RUN}</span></div>`;
+}
+
+function runHtml() {
+  const k = KINDS[state.kind || 'ask'];
+  return `<div class="app">${side('run')}<main><div class="chat">
+    <div class="chat-head"><h1>${RUN}</h1></div>
+    <div class="me">Build the October group payroll from the folder. Use last month's workbook as the format.</div>
+    <p class="say">I've read 240 files across twelve entities and filled in eleven of them.</p>
+    ${k.card()}</div></main></div>`;
+}
+
+function settingsHtml() {
+  const on = state.setting === 'on';
+  // What the row says under the switch, only when there is something the person must know or do.
+  const notes = {
+    blocked: '<p class="note problem">Your browser blocks notifications from this app. To allow them, click the icon at the left of the web address, set Notifications to Allow, then reload the page.</p>',
+    unsupported: '<p class="note muted">This browser can\'t show notifications. The tab still shows a mark.</p>',
+  };
+  const note = on ? notes[state.perm] || '' : '';
+  return `<div class="app">${side('settings')}<main><div class="narrow">
+    <div class="page-head"><h1>Settings</h1><button class="btn primary" ${state.dirty ? '' : 'disabled'}>Save</button></div>
+    <section class="rows"><h2>Agent</h2>
+      <div class="row"><span>Helper agents for large folders</span><span class="stepper"><button>−</button><b>3</b><button>+</button></span></div>
+      <div class="row"><span>Second agent reviews the result</span><button class="switch on" role="switch" aria-checked="true" aria-label="Second agent reviews the result"></button></div>
+      <div class="row"><span>Thinking depth</span><span class="seg"><button>Low</button><button class="on">Medium</button><button>High</button></span></div>
+    </section>
+    <section class="rows ${state.flash ? 'flash' : ''}"><h2>Notifications</h2>
+      <div class="row"><span>Tell me when a run asks, finishes or stops</span>
+        <button class="switch ${on ? 'on' : ''}" data-go="toggle" role="switch" aria-checked="${on}" aria-label="Tell me when a run asks, finishes or stops"></button>${note}</div>
+    </section>
+    <section class="rows"><h2>Limits per run</h2>
+      <div class="row"><span>Steps</span><span class="unit"><b>200</b><span>steps</span></span></div>
+      <div class="row"><span>Time</span><span class="unit"><b>30</b><span>minutes</span></span></div>
+      <div class="row"><span>Wait for your answer</span><span class="unit"><b>20</b><span>minutes</span></span></div>
+    </section></div></main></div>`;
+}
+
+function otherHtml() {
+  return `<div class="other"><h1>Inbox</h1>${'<div class="ln"></div>'.repeat(8)}</div>`;
+}
+
+function layerHtml() {
+  let html = '';
+  if (state.notif && state.kind && state.setting === 'on' && state.perm === 'granted') {
+    const k = KINDS[state.kind];
+    html += `<button class="notif" data-go="back" aria-label="Open ${RUN}"><span class="app-ic">${ICON}</span>
+      <span class="src">Document Intelligence · localhost:8003</span><span class="when">now</span>
+      <span class="ttl">${k.title}</span><span class="msg">${k.msg}</span></button>
+      <span class="hint-click">Click to open the run</span>`;
+  }
+  return html;
+}
+
+function permHtml() {
+  return `<div class="perm" role="dialog" aria-label="Permission"><span class="host">localhost:8003 wants to</span>
+    <span class="bell"><svg viewBox="0 0 16 16"><path d="M4 11V7a4 4 0 0 1 8 0v4l1 1H3zM6.5 13.5a1.6 1.6 0 0 0 3 0"/></svg>Show notifications</span>
+    <div class="end"><button data-go="block">Block</button><button data-go="allow">Allow</button></div></div>`;
+}
+
+function draw() {
+  $('#chrome').innerHTML = tabsHtml();
+  $('#addr').innerHTML = addrHtml();
+  const body = { other: otherHtml, run: runHtml, settings: settingsHtml }[state.screen]();
+  $('#view').innerHTML = body + (state.screen === 'settings' && state.perm === 'asking' ? permHtml() : '');
+  $('#layer').innerHTML = layerHtml();
+}
+
+// Clicks inside the drawing: the notification and the app tab bring the person back; the switch and the
+// browser's permission box move between the Settings states.
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-go]');
+  if (!el) return;
+  const go = el.dataset.go;
+  if (go === 'back') { if (state.screen === 'other') Object.assign(state, { screen: 'run', notif: false }); }
+  else if (go === 'away') Object.assign(state, { screen: 'other', notif: false });
+  else if (go === 'settings') Object.assign(state, { screen: 'settings', kind: null });
+  else if (go === 'toggle') {
+    if (state.setting === 'on') Object.assign(state, { setting: 'off', dirty: !state.dirty });
+    else Object.assign(state, { setting: 'on', dirty: !state.dirty, perm: state.perm === 'ask-first' ? 'asking' : state.perm });
+  } else if (go === 'allow') state.perm = 'granted';
+  else if (go === 'block') state.perm = 'blocked';
+  draw();
+});
+
+const STATES = [
+  ['Question, away from the tab', { kind: 'ask', notif: true }],
+  ['Finished, away', { kind: 'done', notif: true }],
+  ['Stopped, away', { kind: 'stop', notif: true }],
+  ['Tab mark only', { kind: 'ask' }],
+  ['Back on the run', { kind: 'ask', screen: 'run' }],
+  ['Settings: on', { screen: 'settings', flash: true }],
+  ['Settings: off', { screen: 'settings', setting: 'off', perm: 'ask-first' }],
+  ['Settings: asking', { screen: 'settings', perm: 'asking', dirty: true }],
+  ['Settings: blocked', { screen: 'settings', perm: 'blocked' }],
+  ['Settings: not supported', { screen: 'settings', perm: 'unsupported' }],
+];
+const bar = $('#switcher');
+STATES.forEach(([name, s], n) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { state = { ...RESET, ...s }; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); };
+  bar.appendChild(b);
+  if (n === 0) b.click();
+});
+</script>
+</body>
+</html>
