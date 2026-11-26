@@ -43,10 +43,13 @@ OPTIONS = {
     'effort': Option('medium', 'Reasoning effort', ('low', 'medium', 'high')),
     'sandbox_memory': Option('4g', 'Sandbox memory', ('1g', '4g', '16g')),
     'max_turns': Option(60, 'Turn limit per run', low=10, high=200),
+    'more_steps': Option(20, 'Steps added by "More steps"', low=5, high=100),
     'time_limit_minutes': Option(30, 'Time limit per run (minutes)', low=5, high=240),
     'token_limit_thousands': Option(3000, 'Token limit per run (thousands)', low=100, high=20000),
     # Every run, replayed test included, counts towards the day. 0 means no limit.
     'daily_token_limit_thousands': Option(30000, 'Token limit per day, all runs (thousands)', low=0, high=500000),
+    # OpenAI condenses the older history once a request reaches this size; tried live at 20 (see PLAN-IMPROVEMENTS).
+    'condense_at_thousands': Option(200, 'Condense history at (thousands of tokens, 0 for never)', low=0, high=1000),
     'question_wait_minutes': Option(10, 'Minutes to hold the sandbox while a question waits', low=1, high=18),
     'replay_tests': Option('large', 'Check playbook changes against past corrections', ('never', 'large', 'every')),
     'litellm_provider': Option('', 'LiteLLM provider header', pattern=r'[A-Za-z0-9_.-]{0,64}'),

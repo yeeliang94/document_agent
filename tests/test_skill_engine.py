@@ -209,7 +209,7 @@ def review_with_fake_sandbox(monkeypatch, spec, tmp_path):
     monkeypatch.setattr(engine.Runner, 'run', run)
     store = RunStore(tmp_path / 'runs')
     job = SimpleNamespace(
-        store=store, settings=Endpoint(api_key='unused'), spec=spec, zip_parts=[spec.zip], files=[], effort='low',
+        store=store, settings=Endpoint(api_key='unused'), spec=spec, zip_parts=[spec.zip], files=[], effort='low', condense_at=0,
         card=goal_card(spec, REMOTE, 'row'), answerer=SimpleNamespace(log=[]), review_usage=[], skills_read={}, added=[],
         skills_packed=engine_skills.load_skills(spec) if spec.skills else b'',
     )  # fmt: skip
@@ -426,3 +426,12 @@ def test_once_the_checks_pass_the_agent_holds_its_work_against_the_house_rules_o
     store, prompts = run(bare, tmp_path / 'plain')
     assert len(prompts) == 1 and 'rules.held' not in [e['event'] for e in events(store)]
     assert service.MESSAGES['rules.held']({}) == 'Checks passed; holding the result against your house rules'
+
+
+def test_the_briefing_names_scouts_only_when_the_run_has_them(tmp_path, monkeypatch):
+    spec = spec_with_skills(tmp_path, skills=())
+    _, seen, _ = run_with_fake_sandbox(monkeypatch, spec, tmp_path, max_scouts=0)
+    assert 'scout' not in seen['agent'].instructions.lower()
+    assert 'scout_folders' not in [getattr(t, 'name', '') for t in seen['agent'].tools]
+    _, seen, _ = run_with_fake_sandbox(monkeypatch, spec, tmp_path, max_scouts=3)
+    assert 'scout_folders profiles folders' in seen['agent'].instructions

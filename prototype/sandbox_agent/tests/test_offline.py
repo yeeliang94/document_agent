@@ -16,7 +16,7 @@ from sandbox_agent.experiment import summary
 from sandbox_agent.score import score, score_questions
 from sandbox_agent.selftest import perfect_outputs, selftest
 
-from app.engine.agent import _slug, _tool_error, ask, digest, folder_zip, run_job, sync_outputs
+from app.engine.agent import MaxTurnsExceeded, _slug, _tool_error, ask, digest, folder_zip, run_job, sync_outputs
 from app.engine.checks import _list_values, describe_template, inventory, parse_rows, run_checks
 from app.engine.endpoint import Settings
 from app.engine.goal import goal_card
@@ -243,7 +243,7 @@ def test_scripted_answers_and_the_question_limit(tmp_path):
     assert asyncio.run(answerer.answer('Which salary is right for e104?')) == 'Use 6,500.'
     assert asyncio.run(answerer.answer('Anything else?')) == DEFAULT_ANSWER
     store = RunStore(tmp_path)
-    job = SimpleNamespace(store=store, answerer=answerer)
+    job = SimpleNamespace(store=store, answerer=answerer, waits=0, clock=None, held=())
     assert asyncio.run(ask(job, 'Third?')) == DEFAULT_ANSWER
     reply = asyncio.run(ask(job, 'Fourth?'))
     assert 'limit' in reply and len(answerer.log) == 3
@@ -625,13 +625,17 @@ class StopAfter(SimpleNamespace):
     def stop_requested(self):
         return self.stop
 
+    def more_turns(self):
+        return 0
+
     def new_messages(self):
         return []
 
 
 def _drive_job(tmp_path, **limits):
-    return SimpleNamespace(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60, files=[],
-                           max_tokens=10_000, tools_running=[], **limits)  # fmt: skip
+    defaults = dict(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60, files=[],
+                    max_tokens=10_000, tools_running=[], warned=set(), clock=None, time_limit=0)  # fmt: skip
+    return SimpleNamespace(**{**defaults, **limits})
 
 
 def test_a_cancel_wins_even_when_the_agent_has_just_finished(tmp_path, monkeypatch):
@@ -693,6 +697,9 @@ class SlowStream(FakeStream):
 class InterruptOnce(SimpleNamespace):
     def stop_requested(self):
         return None
+
+    def more_turns(self):
+        return 0
 
     def interrupt_requested(self):
         return bool(self.waiting)
@@ -832,7 +839,7 @@ class FakeSandbox:
         return 'running'
 
 
-def _run_with_fakes(tmp_path, monkeypatch, box, drive, review=None, **options):
+def _run_with_fakes(tmp_path, monkeypatch, box, drive, review=None, context='', **options):
     import contextlib
 
     import app.engine.agent as engine
@@ -851,7 +858,12 @@ def _run_with_fakes(tmp_path, monkeypatch, box, drive, review=None, **options):
     template = tmp_path / 't.xlsx'
     Workbook().save(template)
     spec = JobSpec(
-        id='j', module='payroll', goal='g', zip=zip_path, deliverables=(Deliverable('o.xlsx', template=template),)
+        id='j',
+        module='payroll',
+        goal='g',
+        zip=zip_path,
+        deliverables=(Deliverable('o.xlsx', template=template),),
+        context=context,
     )
     return asyncio.run(run_job(spec, Settings(api_key='k'), tmp_path / 'runs', echo=lambda _: None, **options))
 
@@ -1673,3 +1685,166 @@ def test_a_packet_whose_skill_holds_a_program_is_proven_only_when_the_program_ra
     )
     assert _proved(spec, {'skills_read': {'main': ['staff-levy']}, 'skills_run': []}, right) is False
     assert _proved(spec, {'skills_run': ['staff-levy/scripts/levy.py']}, {'cell_accuracy': 0.9}) is False
+
+
+class Steps(FakeStream):
+    """A streamed run that takes one step per event, stops after the step it is on when cancelled, and refuses to
+    start a step past its limit, as the SDK does."""
+
+    def __init__(self, limit, steps, final=None):
+        super().__init__(final=None, turns=0, tokens=0)
+        self.limit, self.steps, self.done = limit, steps, final
+        self.new_items = [{'role': 'user', 'content': 'go'}]
+
+    async def stream_events(self):
+        for _ in range(self.steps):
+            self.current_turn += 1
+            if self.current_turn > self.limit:
+                raise MaxTurnsExceeded(f'Max turns ({self.limit}) exceeded')
+            yield SimpleNamespace(type='run_item_stream_event', name='other', item=None)
+            if self.cancelled:
+                return
+        self.final_output = self.done
+
+
+def _events(store):
+    return [json.loads(line) for line in (store.dir / 'events.jsonl').read_text().splitlines()]
+
+
+def test_the_agent_is_warned_once_before_its_step_limit_and_told_to_save(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    done = SimpleNamespace(status='complete')
+    prompts, limits = [], []
+    streams = [Steps(10, 10), Steps(2, 1, final=done)]
+
+    def run(agent, prompt, max_turns, **_):
+        prompts.append(prompt)
+        limits.append(max_turns)
+        return streams.pop(0)
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', run)
+    store = RunStore(tmp_path)
+    job = _drive_job(tmp_path, max_turns=10)
+    result = asyncio.run(engine._drive(None, 'go', job, store, print, StopAfter(stop=None)))
+    assert result.final_output is done and limits == [10, 2] and job.turns_used == 9
+    told = prompts[1][-1]['content']  # after step 8, the step it was on, the agent hears how much is left
+    assert 'used 8 of your 10 steps; 2 are left' in told and 'save_outputs' in told and 'notes.md' in told
+    near = [e for e in _events(store) if e['event'] == 'limit.near']
+    assert [(e['what'], e['said']) for e in near] == [('turns', '2 steps left')]  # once, not at every later step
+
+
+def test_more_steps_given_while_it_runs_let_the_agent_carry_on_in_the_same_conversation(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    done = SimpleNamespace(status='complete')
+    prompts, limits = [], []
+    streams = [Steps(10, 12), Steps(20, 3, final=done)]
+
+    def run(agent, prompt, max_turns, **_):
+        prompts.append(prompt)
+        limits.append(max_turns)
+        return streams.pop(0)
+
+    class Extended(StopAfter):
+        def more_turns(self):  # the user clicks "20 more steps" as the run reaches step 10
+            given = streams and streams[0].current_turn == 0 and self.first.current_turn >= 10 and not self.given
+            self.given = self.given or bool(given)
+            return 20 if given else 0
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', run)
+    store = RunStore(tmp_path)
+    job = _drive_job(tmp_path, max_turns=10, warned={'turns'})
+    control = Extended(stop=None, first=streams[0], given=False)
+    result = asyncio.run(engine._drive(None, 'go', job, store, print, control))
+    assert result.final_output is done and limits == [10, 20] and job.max_turns == 30 and job.turns_used == 13
+    assert prompts[1] == [{'role': 'user', 'content': 'so far'}]  # the conversation so far, not a fresh start
+    assert [e['added'] for e in _events(store) if e['event'] == 'limit.extended'] == [20]
+
+
+def test_the_clock_stops_while_a_question_waits_for_the_user(tmp_path):
+    import app.engine.agent as engine
+
+    async def slow(question, details):
+        await asyncio.sleep(0.3)  # the user takes longer to answer than the whole run may take
+        return 'Use 17 November.'
+
+    job = SimpleNamespace(store=RunStore(tmp_path), answerer=Answerer(ask=slow), waits=0, clock=None, held=())
+
+    async def go():
+        async with asyncio.timeout(0.15) as clock:
+            job.clock = clock
+            before = clock.when()
+            answer = await engine.ask(job, 'Which start date?')
+            assert clock.when() >= before + 0.3  # pushed back by the wait
+            return answer
+
+    assert asyncio.run(go()) == 'Use 17 November.' and job.waits == 0
+
+
+def _limit_in_follow_up(box):
+    import app.engine.agent as engine
+
+    calls = []
+
+    async def drive(*_args, **_kw):
+        calls.append(1)
+        if len(calls) == 1:
+            return FakeStream(final=engine.JobSummary(status='complete', summary='Done.'))
+        box.files[f'{engine.OUTPUT_DIR}/o.xlsx'] = b'half made change'  # never saved
+        raise engine.LimitReached('Reached the 10-turn limit.', 'turns')
+
+    return drive
+
+
+def test_a_limit_reached_after_the_work_passed_keeps_the_run_finished(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    box = FakeSandbox({f'{engine.OUTPUT_DIR}/o.xlsx': b'checked workbook'})
+    monkeypatch.setattr(engine, '_check', lambda job: {'passed': True, 'issues': [], 'template_changes': []})
+    # The limit is reached while the agent holds its passed work against the house rules.
+    store = _run_with_fakes(tmp_path, monkeypatch, box, _limit_in_follow_up(box), context='Dates as DD/MM/YYYY.')
+    record = store.record
+    assert record['status'] == 'complete' and record['error'] is None and record['cut_short'] is None
+    assert record['summary']['summary'] == 'Done.'
+    assert (store.outputs / 'o.xlsx').read_bytes() == b'checked workbook'
+    assert [e['what'] for e in _events(store) if e['event'] == 'limit.after_pass'] == ['turns']
+
+
+def test_a_limit_reached_while_fixing_a_reviewers_doubts_leaves_the_run_partly_done(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    box = FakeSandbox({f'{engine.OUTPUT_DIR}/o.xlsx': b'checked workbook'})
+
+    async def doubts(*_args, **_kw):
+        return {'verdict': 'doubts', 'doubts': [{'issue': 'x', 'evidence': 'y', 'severity': 'high'}], 'usage': {}}
+
+    monkeypatch.setattr(engine, '_check', lambda job: {'passed': True, 'issues': [], 'template_changes': []})
+    store = _run_with_fakes(tmp_path, monkeypatch, box, _limit_in_follow_up(box), doubts, review_on=True)
+    assert store.record['status'] == 'stopped' and store.record['cut_short'] == 'turns'  # the checks cannot judge them
+
+
+def test_an_agent_whose_question_went_unanswered_gets_a_few_steps_to_save_first(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', lambda *a, **k: Steps(60, 10))
+    job = _drive_job(tmp_path)
+    with pytest.raises(engine.RunStopped) as stopped:
+        asyncio.run(engine._drive(None, 'go', job, RunStore(tmp_path), print, StopAfter(stop='waiting')))
+    assert stopped.value.status == 'waiting' and job.turns_used == 1 + engine.WAIT_GRACE_TURNS
+
+
+def test_the_steps_to_save_after_an_unanswered_question_count_across_a_restarted_stream(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    class MessageOnce(StopAfter):
+        def new_messages(self):
+            sent, self.sent = getattr(self, 'sent', False), True
+            return [] if sent else ['One more thing.']
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', lambda *a, **k: Steps(60, 10))
+    job = _drive_job(tmp_path)
+    with pytest.raises(engine.RunStopped) as stopped:
+        asyncio.run(engine._drive(None, 'go', job, RunStore(tmp_path), print, MessageOnce(stop='waiting')))
+    # The message restarts the stream after step 1; the stream's own count starts again, the run's does not.
+    assert stopped.value.status == 'waiting' and job.turns_used == 1 + engine.WAIT_GRACE_TURNS

@@ -29,6 +29,10 @@ class Control:
         """True when the user asked for their waiting messages to be read now, without waiting for the step to end."""
         return False
 
+    def more_turns(self) -> int:
+        """Steps the user added to this run since the last call ("20 more steps"); each is given once."""
+        return 0
+
     can_remember = False  # True when the caller can keep a lesson; the agent then gets the remember tool
 
     def remember(self, comment: str, lesson: str) -> str:
