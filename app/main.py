@@ -511,7 +511,7 @@ def create_app(settings_override: Settings | None = None):
     def job_delete(job_id):
         """Remove a run for good: its record, its events and its folder. A run that is going is refused."""
         j = get(job_id)
-        if j['status'] in jobstatus.ACTIVE or runner.active == job_id:
+        if j['status'] in jobstatus.ACTIVE or runner.is_running(job_id):
             raise HTTPException(409, 'This run is still going. Stop it before you delete it.')
         store.delete(job_id)
         shutil.rmtree(store.path(job_id), ignore_errors=True)
@@ -524,7 +524,7 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
         if j['status'] not in jobstatus.STARTABLE or j.get('legacy'):
             raise HTTPException(409, 'This job cannot start in its current state')
-        if runner.active == job_id:
+        if runner.is_running(job_id):
             raise HTTPException(409, 'The previous operation is still finishing')
         if not j['files']:
             raise HTTPException(400, 'No usable input files')
@@ -562,7 +562,7 @@ def create_app(settings_override: Settings | None = None):
         store.event(job_id, 'user.answer', body.answer, type='user')
         # A run still holding its sandbox picks the answer up itself. Otherwise, or once that run has ended, the
         # runner queues the job; the answer was saved first, so whichever side looks last finds it.
-        if runner.active != job_id:
+        if not runner.is_running(job_id):
             await runner.resume_if_answered(job_id)
         return get(job_id)
 
@@ -606,7 +606,7 @@ def create_app(settings_override: Settings | None = None):
         # is still letting go of it: queuing then would undo a cancel the engine has not seen yet, or be overwritten
         # as that run settles. A finished run needs no wait: the runner starts it again as it lets go
         # (runtime.resume_if_answered).
-        if job['status'] not in jobstatus.ACTIVE | jobstatus.FINISHED and runner.active == job['id']:
+        if job['status'] not in jobstatus.ACTIVE | jobstatus.FINISHED and runner.is_running(job['id']):
             raise HTTPException(409, 'The previous operation is still finishing')
 
     def too_big() -> str:
@@ -743,7 +743,7 @@ def create_app(settings_override: Settings | None = None):
         def claim(job):  # in one write with the check, so a second click or a Start cannot run alongside
             if job['status'] not in jobstatus.STARTABLE | {'completed'} or job.get('legacy'):
                 before['refused'] = 'Stop the run before continuing from a version.'
-            elif runner.active == job_id:
+            elif runner.is_running(job_id):
                 before['refused'] = 'The previous operation is still finishing'
             else:
                 before['status'] = job['status']
@@ -784,7 +784,7 @@ def create_app(settings_override: Settings | None = None):
         def claim(job):  # in one write with the check, so a second click or a Start cannot run alongside
             if job['status'] not in jobstatus.STARTABLE | {'completed'} or job.get('legacy'):
                 before['refused'] = 'Stop the run before starting over.'
-            elif runner.active == job_id:
+            elif runner.is_running(job_id):
                 before['refused'] = 'The previous operation is still finishing'
             else:
                 before['status'] = job['status']
@@ -842,7 +842,7 @@ def create_app(settings_override: Settings | None = None):
         if j['status'] not in jobstatus.ACTIVE:  # a stopped run starts again to act on them
             if not conf.api_key:
                 raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
-            if runner.active == job_id:
+            if runner.is_running(job_id):
                 raise HTTPException(409, 'The previous operation is still finishing')
         if any(not c.text.strip() for c in body.comments):
             raise HTTPException(400, 'Enter a comment')
@@ -854,7 +854,8 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(400, clean(str(error))) from None
         # Queue the job unless a run is going and will pick the comments up itself. The comments were saved first,
         # so whichever side looks last finds them.
-        if not made.get('duplicate') and runner.active != job_id and get(job_id)['status'] not in jobstatus.ACTIVE:
+        going = runner.is_running(job_id) or get(job_id)['status'] in jobstatus.ACTIVE
+        if not made.get('duplicate') and not going:
             await runner.submit(job_id)
         return {'round': made, 'job': get(job_id)}
 

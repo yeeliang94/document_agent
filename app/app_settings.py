@@ -61,6 +61,8 @@ OPTIONS = {
     'condense_at_thousands': Option(200, 'Condense history at (thousands of tokens, 0 for never)', low=0, high=1000),
     # The first save that passes also shows the agent pictures of its deliverables (about 1,000-2,000 tokens each).
     'look_before_finish': Option(True, 'Show the agent its files before it finishes'),
+    # Runs going side by side, replayed tests included; the rest wait in line. Read as each run ends (app/runtime.py).
+    'runs_at_once': Option(2, 'Runs at once', low=1, high=6),
     'versions_kept': Option(20, 'Versions kept per run', low=1, high=100),  # a copy of the outputs at each save
     # Questions the agent may ask over the whole job; each one waits for your answer.
     'max_questions': Option(3, 'Questions it may ask per job', low=0, high=10),

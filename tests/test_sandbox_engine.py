@@ -295,7 +295,7 @@ def test_an_unanswered_question_parks_the_job_and_the_answer_resumes_it(tmp_path
 
 def wait_for_runner_idle(client, timeout=5):
     deadline = time.monotonic() + timeout
-    while client.app.state.runner.active is not None and time.monotonic() < deadline:
+    while client.app.state.runner.running and time.monotonic() < deadline:
         time.sleep(0.02)
 
 

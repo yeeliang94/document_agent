@@ -108,7 +108,7 @@ A client is optional on a run and is chosen on the New run form; the app suggest
 
 ## Runtime and observability
 
-FastAPI serves both the static frontend and the API from one port. SQLite and job files live under `DI_DATA_DIR` (default `./data`). One process runs jobs one at a time and records progress, timings and failures; each run also keeps its scripts and a full record under the job's `engine/` folder. Logs and exports can contain payroll data; treat the data directory as sensitive.
+FastAPI serves both the static frontend and the API from one port. SQLite and job files live under `DI_DATA_DIR` (default `./data`). One process runs jobs, up to the "Runs at once" number on the Settings page side by side, and records progress, timings and failures; each run also keeps its scripts and a full record under the job's `engine/` folder. Logs and exports can contain payroll data; treat the data directory as sensitive.
 
 Pause and stop take effect between steps; an in-flight model request may finish first. Interrupted jobs become paused on restart and can be resumed, which starts a new sandbox from the saved outputs and notes. Repeating work incurs additional model usage.
 
