@@ -220,12 +220,16 @@ export function duration(ms) {
 
 // --- Network ---------------------------------------------------------------
 
-export function toast(message) {
-  $('#toast').textContent = message;
-  $('#toast').classList.add('visible');
+// A short message at the bottom of the screen. `action` is one button's HTML (an Undo), handled like any other click.
+export function toast(message, action = '') {
+  const box = $('#toast');
+  box.innerHTML = `<span>${esc(message)}</span>${action}`;
+  box.classList.toggle('acts', !!action);
+  box.classList.add('visible');
   clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 6000);
+  state.toastTimer = setTimeout(hideToast, action ? 10000 : 6000);
 }
+export const hideToast = () => $('#toast').classList.remove('visible');
 
 export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});

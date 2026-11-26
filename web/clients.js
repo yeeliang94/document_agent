@@ -5,7 +5,7 @@
 
 import { $, api, attr, btn, esc, icon, inGroup, jobTitle, jobUrl, plural, state, toast } from './core.js';
 import { micButton, voiceNote } from './voice.js';
-import { base, dialog, historyHtml, nameField, startDraft, unsaved, versionLabel } from './playbooks.js';
+import { base, dialog, historyBody, nameField, showVersion, startDraft, unsaved, versionClick, versionLabel } from './playbooks.js';
 
 const TABS = [
   ['notes', 'Notes'],
@@ -40,12 +40,13 @@ export function clientsPage() {
 
 // --- One client -------------------------------------------------------------
 
-export async function openClient(id, { keepTab = false } = {}) {
+export async function openClient(id, { keepTab = false, version = null } = {}) {
   state.view = 'client';
   // Notes typed and not saved are kept for the visit, as a playbook's are.
-  state.client = state.clientPages[id] ||= { id, tab: 'notes', data: null, draft: null, versions: [], saved: 0 };
+  state.client = state.clientPages[id] ||= { id, kind: 'client', tab: 'notes', data: null, draft: null, versions: [], saved: 0 };
   if (!keepTab) state.client.tab = 'notes'; // a client opens on its notes, from the list or a run; Back keeps its tab
   await loadClient();
+  await showVersion(state.client, version); // the address names the version on show, or none
 }
 
 async function loadClient(client = state.client) {
@@ -92,7 +93,7 @@ export function clientPage() {
   const client = state.client;
   if (!client?.data) return page('<p class="empty">Loading</p>');
   const tabs = TABS.map(([id, label]) => `<button class="${client.tab === id ? 'on' : ''}" data-client-tab="${id}">${label}</button>`).join('');
-  const body = { notes: notesTab, runs: runsTab, history: (c) => historyHtml(c, 'client-restore') }[client.tab](client);
+  const body = { notes: notesTab, runs: runsTab, history: historyBody }[client.tab](client);
   return page(`<div class="page-head"><button class="icon-btn" data-back="clients" aria-label="Back" title="Back">${icon('back')}</button>
       <h1>${esc(client.data.name)}</h1>${btn('rename-client', 'Rename', 'text')}</div>
     <div class="filter">${tabs}</div>${body}`);
@@ -131,11 +132,12 @@ async function save(client, path, body, submitted) {
   return true;
 }
 
-async function restore(version) {
+async function restore(version, quiet = false) {
   const client = state.client;
-  if (!(await save(client, '/restore', { version, based_on: client.data.version }, client.draft))) return;
+  if (!(await save(client, '/restore', { version, based_on: client.data.version }, client.draft))) return false;
   client.saved = 0;
-  toast(`Restored version ${version}.`);
+  if (!quiet) toast(`Restored version ${version}.`);
+  return true;
 }
 
 export const clientActions = {
@@ -172,6 +174,7 @@ export async function submitClientDialog(form) {
 // Clicks on the client pages. Returns true when it handled the click.
 export async function clientClick(target, draw) {
   let el;
+  if (state.view === 'client' && state.client && (await versionClick(state.client, target, draw, restore))) return true;
   if ((el = target('[data-client]'))) {
     try {
       await openClient(el.dataset.client);
@@ -180,7 +183,7 @@ export async function clientClick(target, draw) {
       draw();
       throw error;
     }
-  } else if ((el = target('[data-client-tab]'))) state.client.tab = el.dataset.clientTab;
+  } else if ((el = target('[data-client-tab]'))) Object.assign(state.client, { tab: el.dataset.clientTab, open: null });
   else if ((el = target('[data-client-restore]'))) await restore(Number(el.dataset.clientRestore));
   else return false;
   draw();

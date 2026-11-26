@@ -2,7 +2,8 @@
 // A playbook is what the agent follows on every run of one kind of work. Every change to its instructions is a
 // version; the agent can propose a rewrite, and nothing is saved until the person accepts it.
 
-import { $, api, attr, btn, esc, icon, jobTitle, money, pill, plural, playbooks, state, toast } from './core.js';
+import { $, api, attr, btn, esc, hideToast, icon, jobTitle, money, pill, plural, playbooks, state, toast } from './core.js';
+import { pageAddress } from './routes.js';
 import { micButton, voiceNote } from './voice.js';
 
 const TABS = [
@@ -32,11 +33,12 @@ export function playbooksPage() {
 
 // --- One playbook -----------------------------------------------------------
 
-export async function openPlaybook(id) {
+export async function openPlaybook(id, { version = null } = {}) {
   state.view = 'playbook';
   // An edit that was typed and not saved is kept for the visit, so looking at another page does not lose it.
   state.book = state.books[id] ||= { id, tab: 'instructions', data: null, draft: null, ask: '', skills: [], versions: [], tune: null, upload: null, added: '', saved: 0 };
   await loadPlaybook();
+  await showVersion(state.book, version); // the address names the version on show, or none
 }
 
 // Loads into the playbook the request was made for, which may no longer be the one on screen.
@@ -150,21 +152,138 @@ export function versionLabel(v) {
   return { edited: 'Edited by you', tuned: 'Tuned with the agent', tidied: 'Tidied by the agent' }[v.source] || v.source;
 }
 
-// Every version, newest first, with Restore on each earlier one. Shared with a client's notes (clients.js), whose
-// buttons carry their own data name so each page handles its own.
-export function historyHtml(book, restore = 'restore') {
-  const latest = book.data.version;
-  const rows = book.versions
+// --- History: every version, and one opened to read before restoring it ---------------------------------------
+// Shared with a client's notes (clients.js): `rec` is a playbook page (state.book) or a client page (state.client),
+// and `rec.open` the version on show ({ version, look }). Restore is only offered from inside an opened version, so
+// nobody brings text back without having seen it. The address names the version (routes.js), so Back, Forward and
+// Refresh keep the place; Older and Newer take the place of the version on show rather than adding to Back.
+
+const KINDS = {
+  playbook: { path: 'playbooks', text: 'instructions', tab: 'Instructions' },
+  client: { path: 'clients', text: 'notes', tab: 'Notes' },
+};
+const kindOf = (rec) => KINDS[rec.kind || 'playbook'];
+const recUrl = (rec, rest) => `/api/${kindOf(rec).path}/${encodeURIComponent(rec.id)}${rest}`;
+const shownChange = (v) => (['restored', 'tuned'].includes(v.source) ? '' : v.change);
+
+// Every version, newest first; each row opens its version.
+function historyHtml(rec) {
+  const latest = rec.data.version;
+  const rows = rec.versions
     .map(
-      (v) => `<div class="row"><span class="name"><span>Version ${v.version} · ${esc(versionLabel(v))}</span>
-          ${v.source !== 'restored' && v.change ? `<span class="desc wrap">${esc(v.change)}</span>` : ''}</span>
-        <div class="val"><span class="when">${day(v.created_at)}</span>
-          ${v.version === latest ? pill('ok', 'Current') : `<button class="btn quiet small" data-${restore}="${v.version}" ${attr('disabled', state.busy || unsaved(book))}>Restore</button>`}</div></div>`,
+      (v) => `<button class="row link" data-version-open="${v.version}" aria-label="Open version ${v.version}"><span class="name"><span>Version ${v.version} · ${esc(versionLabel(v))}</span>
+          ${shownChange(v) ? `<span class="desc">${esc(shownChange(v))}</span>` : ''}</span>
+        <span class="val"><span class="when">${day(v.created_at)}</span>${v.version === latest ? pill('ok', 'Current') : ''}${icon('chev')}</span></button>`,
     )
     .join('');
   return `<div class="rows">${rows}</div>`;
 }
-const historyTab = (book) => historyHtml(book);
+
+// How a version came to be, with the run it came from as a link when that run is still here.
+function howHtml(v) {
+  const job = ['remembered', 'learned'].includes(v.source) && state.jobs.find((j) => j.id === v.detail?.job_id);
+  if (!job) return esc(versionLabel(v));
+  const how = v.source === 'learned' ? 'Learned by the agent from' : 'Remembered from';
+  return `${how} <button class="ref" data-job="${esc(job.id)}">${esc(jobTitle(job))}</button>`;
+}
+
+const fullHtml = (text, words) =>
+  text.trim() ? text.split(/\n{2,}/).filter((p) => p.trim()).map((p) => `<p>${esc(p)}</p>`).join('') : `<p class="empty">No ${words} in this version.</p>`;
+
+function versionHtml(rec) {
+  const { text: words, tab } = kindOf(rec);
+  const all = rec.versions;
+  const at = all.findIndex((v) => v.version === rec.open.version);
+  const v = all[at];
+  const older = all[at + 1];
+  const newer = all[at - 1];
+  const isCurrent = v.version === rec.data.version;
+  const text = rec.texts[v.version];
+  const same = !isCurrent && text === rec.data.text;
+  const look = isCurrent ? 'full' : rec.open.look;
+  const step = (to, label) => `<button class="btn text small" data-version-step="${to?.version || ''}" ${attr('disabled', !to)}>${label}</button>`;
+  const seg = isCurrent
+    ? ''
+    : `<div class="viewbar"><div class="seg" role="group" aria-label="Show">${[['full', 'Full text'], ['diff', 'What Restore changes']]
+        .map(([id, label]) => `<button class="${look === id ? 'on' : ''}" data-version-look="${id}" aria-pressed="${look === id}">${label}</button>`)
+        .join('')}</div>${look === 'diff' && !same ? '<div class="legend"><span class="back">Comes back</span><span class="gone">Goes</span></div>' : ''}</div>`;
+  const shown = look === 'diff' ? (same ? '<p class="empty">Same as now.</p>' : diffHtml(rec.data.text, text)) : fullHtml(text, words);
+  const blocked = unsaved(rec);
+  const hint = blocked ? `Save your edits on ${tab} first.` : same ? 'This is the same as the current text.' : '';
+  const restore = isCurrent ? pill('ok', 'Current') : `<button class="btn primary" data-version-restore ${attr('disabled', state.busy || blocked || same)}>Restore</button>`;
+  const change = shownChange(v);
+  return `<div class="version"><div class="version-head">
+      <button class="icon-btn" data-version-back aria-label="Back to history" title="Back to history">${icon('back')}</button>
+      <div class="title"><h2>Version ${v.version}</h2><p>${howHtml(v)} · ${day(v.created_at)}</p></div>
+      <div class="steps">${step(older, 'Older')}${step(newer, 'Newer')}</div></div>
+    ${change ? `<p class="why">${esc(change)}</p>` : ''}
+    ${v.source === 'tuned' && v.change ? `<p class="why">You asked: “${esc(v.change)}”</p>` : ''}
+    ${seg}
+    <div class="box diff" aria-label="${esc(tab)} in version ${v.version}">${shown}</div>
+    <div class="end">${hint ? `<span class="hint">${esc(hint)}</span>` : ''}<button class="btn text" data-version-back>Back</button>${restore}</div></div>`;
+}
+
+export const historyBody = (rec) => (rec.open ? versionHtml(rec) : historyHtml(rec));
+const historyTab = (book) => historyBody(book);
+
+// Put version `number` on show (null shows the list). Its text is fetched once: a version never changes.
+export async function showVersion(rec, number) {
+  if (!number) return void (rec.open = null);
+  rec.tab = 'history';
+  if (!rec.versions.some((v) => v.version === number)) {
+    rec.open = null;
+    return toast(`Version ${number} is not in the history.`);
+  }
+  rec.texts ||= {};
+  if (!(number in rec.texts)) rec.texts[number] = number === rec.data.version ? rec.data.text : (await api(recUrl(rec, `/versions/${number}`))).text;
+  rec.open = { version: number, look: rec.open?.look || 'full' };
+}
+
+// Back to the list: the browser's Back when the list is the page before, so the two never disagree.
+export function leaveVersion(rec, draw) {
+  if (!rec?.open) return false;
+  if (history.state?.fromList) history.back();
+  else {
+    rec.open = null;
+    history.replaceState({ ...history.state, fromList: false }, '', pageAddress());
+    draw();
+  }
+  return true;
+}
+
+// Clicks inside History. `restore(version, quiet)` saves on the page's own record and says whether it did.
+export async function versionClick(rec, target, draw, restore) {
+  let el;
+  if ((el = target('[data-version-open]'))) {
+    await showVersion(rec, Number(el.dataset.versionOpen));
+    if (!rec.open) return draw(), true;
+    rec.open.look = 'full';
+    // Pushed here, marked as opened from the list, so Back knows the list is the page before.
+    history.pushState({ depth: (history.state?.depth || 0) + 1, fromList: true }, '', pageAddress());
+  } else if (!rec.open && !target('[data-version-undo]')) return false;
+  else if ((el = target('[data-version-step]'))) {
+    if (!el.dataset.versionStep) return true;
+    await showVersion(rec, Number(el.dataset.versionStep));
+    history.replaceState(history.state, '', pageAddress());
+  } else if ((el = target('[data-version-look]'))) rec.open.look = el.dataset.versionLook;
+  else if (target('[data-version-back]')) return leaveVersion(rec, draw);
+  else if (target('[data-version-restore]')) {
+    const from = rec.open.version;
+    const before = rec.data.version;
+    if (!(await restore(from, true))) return draw(), true;
+    leaveVersion(rec, draw);
+    const undo = `<button class="btn text small" data-version-undo="${before}" data-record="${esc(rec.id)}">Undo</button>`;
+    toast(`Restored version ${from} as version ${rec.data.version}.`, undo);
+    return true;
+  } else if ((el = target('[data-version-undo]'))) {
+    hideToast();
+    if (el.dataset.record !== rec.id) return true; // the page it was for is no longer on show
+    const back = Number(el.dataset.versionUndo);
+    if (await restore(back, true)) toast(`Undone. Version ${back}’s text is back.`);
+  } else return false;
+  draw();
+  return true;
+}
 
 // The past corrections kept as tests. The agent keeps the list; the person reads the score.
 function testsTab(book) {
@@ -374,11 +493,12 @@ export async function askTune(ask) {
   }
 }
 
-export async function restoreVersion(version) {
+export async function restoreVersion(version, quiet = false) {
   const book = state.book;
-  if (!(await save(book, '/restore', { version, based_on: book.data.version }, book.draft))) return;
+  if (!(await save(book, '/restore', { version, based_on: book.data.version }, book.draft))) return false;
   book.saved = 0;
-  toast(`Restored version ${version}.`);
+  if (!quiet) toast(`Restored version ${version}.`);
+  return true;
 }
 
 export async function submitDialog(form) {
@@ -434,6 +554,7 @@ export async function uploadSkill(file, draw) {
 // Clicks on the playbook pages that are not plain buttons. Returns true when it handled the click.
 export async function playbookClick(target, draw) {
   let el;
+  if (state.view === 'playbook' && state.book && (await versionClick(state.book, target, draw, restoreVersion))) return true;
   if ((el = target('[data-book]'))) {
     if (!el.dataset.book) return true;
     try {
@@ -445,6 +566,7 @@ export async function playbookClick(target, draw) {
     }
   } else if ((el = target('[data-book-tab]'))) {
     state.book.tab = el.dataset.bookTab;
+    state.book.open = null; // History opens on its list
     state.book.added = '';
     if (state.book.upload?.reason) state.book.upload = null;
     draw();

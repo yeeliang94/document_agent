@@ -22,7 +22,7 @@ import {
   applyPlace, canFind, closeFind, foundFor, loadChanges, locateRow, openFind, revealMarks, stepChange, stepFind, typed,
 } from './review.js'; // prettier-ignore
 import {
-  askTune, openPlaybook, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab,
+  askTune, leaveVersion, openPlaybook, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab,
   startDraft, submitDialog, syncPlaybook, uploadSkill,
 } from './playbooks.js'; // prettier-ignore
 import { askPermission, clearMark, noticeRuns, tabTitle } from './alerts.js';
@@ -291,12 +291,12 @@ function syncAddress() {
   replaceNext = false;
 }
 
-async function goTo({ view, id }) {
+async function goTo({ view, id, version }) {
   if (view === 'run' || view === 'log') {
     if (state.job?.id !== id) await loadJob(id);
     state.view = view;
-  } else if (view === 'playbook') await openPlaybook(id);
-  else if (view === 'client') await openClient(id, { keepTab: true });
+  } else if (view === 'playbook') await openPlaybook(id, { version });
+  else if (view === 'client') await openClient(id, { keepTab: true, version });
   else if (view === 'new') newRun();
   else await openView(view);
 }
@@ -314,7 +314,7 @@ async function followAddress(first = false) {
     toast(page.view === 'run' || page.view === 'log' ? 'That run could not be opened. It may have been deleted.' : error.message);
   } finally {
     // The address now names the page on show, without adding a step to Back.
-    if (first || pageAddress() !== location.hash) history.replaceState({ depth: history.state?.depth || 0 }, '', pageAddress() || '#/new');
+    if (first || pageAddress() !== location.hash) history.replaceState({ ...history.state, depth: history.state?.depth || 0 }, '', pageAddress() || '#/new');
     restoring = starting = false;
     render();
   }
@@ -764,6 +764,9 @@ document.addEventListener('keydown', (e) => {
     state.full = false;
     return render();
   }
+  // Esc on an opened version of a playbook's or client's History goes back to the list, as Back does.
+  const rec = { playbook: state.book, client: state.client }[state.view];
+  if (e.key === 'Escape' && rec?.tab === 'history' && rec.open && !$('#details').open) return void leaveVersion(rec, render);
   // Ctrl/Cmd with +, - or 0 zooms the file on show, in place of the browser's zoom of the whole page.
   const zoomKey = { '=': 'in', '+': 'in', '-': 'out', 0: 'reset' }[e.key];
   if (zoomKey && (e.metaKey || e.ctrlKey) && !e.altKey && state.view === 'run' && state.open && canZoom()) {

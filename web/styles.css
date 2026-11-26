@@ -1855,6 +1855,80 @@ button.frow .name,
   background: var(--ok-bg);
   color: var(--ok-fg);
 }
+/* One version opened from History: how it came to be, its text in full or what Restore changes, then Restore */
+.version {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.version-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.version-head > .icon-btn {
+  margin-left: -8px;
+}
+.version-head .title {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.version-head .title p,
+.version .why,
+.version .hint {
+  color: var(--muted);
+}
+.version-head .title p {
+  font-size: 13px;
+}
+.version-head .steps {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.version .seg {
+  background: var(--panel);
+  font-size: 13px;
+}
+.viewbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.legend {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.legend span::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.legend .back::before {
+  background: var(--ok-bg);
+  box-shadow: inset 0 0 0 1px var(--ok-fg);
+}
+.legend .gone::before {
+  background: var(--bad-bg);
+  box-shadow: inset 0 0 0 1px var(--bad-fg);
+}
+.version .end {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.version .hint {
+  font-size: 13px;
+  text-align: right;
+}
 .dialog-body {
   display: flex;
   flex-direction: column;
@@ -2065,6 +2139,24 @@ dialog > h3 {
 #toast.visible {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+/* A toast with an Undo in it */
+#toast.acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+}
+#toast.acts.visible {
+  pointer-events: auto;
+}
+#toast .btn {
+  color: #c9c9cf;
+  text-decoration: underline;
+}
+#toast .btn:hover {
+  color: #fff;
+  background: none;
 }
 
 .only-narrow {

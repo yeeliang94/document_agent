@@ -49,6 +49,24 @@ def test_a_client_keeps_its_notes_as_versions_and_an_earlier_one_can_be_restored
         assert client.get('/api/clients/nobody').status_code == 404
 
 
+def test_a_past_version_of_the_notes_can_be_read_in_full_before_it_is_restored(tmp_path):
+    """History opens one version: its whole text and how it came to be, without changing anything."""
+    with client_for(tmp_path) as client:
+        acme = client.post('/api/clients', json={'name': 'Acme', 'notes': 'Dates as dd/mm/yyyy.'}).json()['id']
+        client.post(f'/api/clients/{acme}/versions', json={'text': 'Dates as yyyy-mm-dd.', 'based_on': 1})
+        client.post(f'/api/clients/{acme}/restore', json={'version': 1, 'based_on': 2})
+        first = client.get(f'/api/clients/{acme}/versions/1').json()
+        assert (first['version'], first['source'], first['text']) == (1, 'created', 'Dates as dd/mm/yyyy.')
+        restored = client.get(f'/api/clients/{acme}/versions/3').json()
+        assert (restored['source'], restored['change'], restored['detail']) == (
+            'restored', 'Restored version 1', {'restored_from': 1}
+        )
+        assert client.get(f'/api/clients/{acme}').json()['version'] == 3  # reading added no version
+        for missing in (f'/api/clients/{acme}/versions/9', '/api/clients/nobody/versions/1'):
+            assert client.get(missing).status_code == 404
+        assert client.get(f'/api/clients/{acme}/versions/0').status_code == 422
+
+
 def test_undo_from_a_run_brings_back_the_notes_before_and_is_refused_once_they_moved_on(tmp_path):
     # The run's Undo beside a remembered comment or a lesson is a restore of the version before, based on the
     # version that added it (web/comments.js forget).
