@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `73%` (47 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
+**Overall Progress:** `75%` (48 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -365,8 +365,9 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
   - **Verify:** on a live run of the sample packet, notes.md holds findings before the first save, and the final score is unchanged.
   - **Result (2026-11-26):** the briefing asks for notes.md from the start, before the first save (which file wins, where each column comes from, what was left out, open doubts), and for a re-read when told the history was condensed. Not yet done: the live run (paid).
 
-- [ ] 🟥 **Step 50: Offer to keep what a client's first run learned** (prototype first; changed 2026-11-26): when a run finishes for a client with no notes yet, the agent lists the few things from this run worth following next time (which file wins, cut-off dates, rates, what was left out). A slim strip at the top of the run offers them: "First run for Northwind Trading: 4 things worth keeping for next time", folded until opened. One button saves them all to the client's notes as a new version, with Undo; "Not now" hides it for this run. A client with no notes shows a plain notes box, with no explanation around it.
+- [x] 🟩 **Step 50: Offer to keep what a client's first run learned** (prototype first; changed 2026-11-26): when a run finishes for a client with no notes yet, the agent lists the few things from this run worth following next time (which file wins, cut-off dates, rates, what was left out). A slim strip at the top of the run offers them: "First run for Northwind Trading: 4 things worth keeping for next time", folded until opened. One button saves them all to the client's notes as a new version, with Undo; "Not now" hides it for this run. A client with no notes shows a plain notes box, with no explanation around it.
   - **Verify:** tests that the offer appears only for a client without notes, that saving adds exactly the listed items as a version, and that Undo removes them; in a browser: folded, open, saved, Not now, and the empty notes box, at 642 and 1440 wide.
+  - **Result (2026-11-26):** built. The goal card asks the agent, only for a client with no notes, to list up to five lines in its final answer (for_next_time); the run shows "Keep 4 things for Bluefin Foods' next run?" at the top (`web/clients.js` offerHtml); Save adds them to the client's notes as a version (source learned), Undo restores the version before, Not now puts it away for good. 4 tests in `tests/test_first_run_offer.py`; checked in a browser at 1440 and 375 wide: folded, open, saved, View notes, Undo, Not now and after a reload. Not yet seen: a live run producing the list.
 
 ### Phase 15: Carried over from the older plan (`docs/PLAN-NEXT.md`)
 

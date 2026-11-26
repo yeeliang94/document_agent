@@ -10,7 +10,8 @@ import {
   loadRounds, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
 } from './comments.js'; // prettier-ignore
 import {
-  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, openClient, refreshClients,
+  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, offerHtml, offerLocal, offerServer,
+  openClient, refreshClients,
   submitClientDialog, suggestClient, syncClient, typeNotes,
 } from './clients.js'; // prettier-ignore
 import { backFile, closeFile, filesHtml, loadMap, openFile, openSpot, proofHtml, turnPage } from './files.js';
@@ -38,6 +39,7 @@ const RUN = `
     <section class="chat">
       <header class="chat-head" id="chat-head"></header>
       <div class="stages" id="stages"></div>
+      <div id="offer"></div>
       <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-label="Conversation with the agent" aria-live="polite"></div></div>
       <div class="composer" id="composer-wrap"></div>
     </section>
@@ -136,6 +138,7 @@ function render() {
     paint('#notices', noticesHtml());
     paint('#chat-head', headHtml());
     paint('#stages', stagesHtml());
+    paint('#offer', offerHtml());
     const box = $('#scroll');
     const first = box.__job !== state.job.id;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
@@ -351,11 +354,13 @@ const localActions = {
   'hide-versions': () => (state.showVersions = false),
   ...playbookDialogs,
   ...clientDialogs,
+  ...offerLocal,
 };
 localActions['back-file'] = () => backFile(render);
 
 // Actions that call the server; buttons are held while they run.
 const serverActions = {
+  ...offerServer,
   'refresh-config': refreshConfig,
   connection: async () => {
     const result = await api('/api/connection-check', { method: 'POST' });

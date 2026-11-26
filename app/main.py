@@ -507,6 +507,33 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(400, f'Use a name of at most {MAX_NAME} characters')
         return store.update(job_id, name=name or None)
 
+    class KeepInput(BaseModel):
+        action: Literal['save', 'undo', 'dismiss']
+
+    @api.post('/api/jobs/{job_id}/keep-for-client')
+    def keep_for_client(job_id, body: KeepInput):
+        """What a client's first run found worth keeping (report.for_next_time), offered on the run: save adds it to
+        the client's notes as a new version, undo brings back the version before, dismiss puts the offer away."""
+        job = get(job_id)
+        client_id = (job.get('client') or {}).get('id')
+        keep = (job.get('report') or {}).get('for_next_time') or []
+        if not client_id or not keep:
+            raise HTTPException(400, 'This run has nothing to keep for a client.')
+        offer = job.get('offer') or {}
+        if body.action == 'dismiss':
+            return store.update(job_id, offer={'dismissed': True})
+        if body.action == 'save':
+            if offer.get('saved'):
+                return job  # a second click
+            text = '\n'.join(f'- {line}' for line in keep)
+            client = client_call(lambda: clients.save(client_id, text, 'learned', f'From the run {job_id[:8]}', append=True, run=job_id))
+            return store.update(job_id, offer={'saved': client['version']})
+        saved = offer.get('saved')
+        if not saved:
+            raise HTTPException(400, 'Nothing was saved from this run to undo.')
+        client_call(lambda: clients.restore(client_id, saved - 1, based_on=saved))
+        return store.update(job_id, offer={})
+
     @api.delete('/api/jobs/{job_id}', status_code=204)
     def job_delete(job_id):
         """Remove a run for good: its record, its events and its folder. A run that is going is refused."""

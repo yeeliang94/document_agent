@@ -3,7 +3,7 @@
 // A client's notes apply to all of their work, on top of the playbook. They are kept as versions the way a
 // playbook's instructions are, so this page reuses the playbook page's pieces (playbooks.js).
 
-import { $, api, attr, btn, esc, icon, jobTitle, plural, state, toast } from './core.js';
+import { $, api, attr, btn, esc, icon, inGroup, jobTitle, jobUrl, plural, state, toast } from './core.js';
 import { micButton, voiceNote } from './voice.js';
 import { base, dialog, historyHtml, nameField, startDraft, unsaved, versionLabel } from './playbooks.js';
 
@@ -234,3 +234,44 @@ export function followingHtml(job) {
 
 // The run's client as listed, for its latest version.
 export const runClient = (job = state.job) => clients().find((c) => c.id === job?.client?.id);
+
+// --- After a client's first run --------------------------------------------------------------------------------
+// What the agent found worth keeping for a client with no notes yet (the run's report.for_next_time), offered in
+// one slim line at the top of the run; opened, it lists them, and one click saves them all as the client's notes.
+
+const hidden = new Set(); // runs whose "Saved" line was closed
+let open = false;
+
+export function offerHtml() {
+  const job = state.job;
+  const keep = job?.report?.for_next_time || [];
+  const offer = job?.offer || {};
+  if (!keep.length || !job.client?.id || offer.dismissed || !inGroup('finished', job.status) || hidden.has(job.id)) return '';
+  const name = esc(job.client.name) + (/s$/i.test(job.client.name) ? "'" : "'s"); // Bluefin Foods', Acme's
+  if (offer.saved) {
+    return `<div class="offer"><div class="offer-line"><span class="what">Saved to ${name} notes.</span>
+      ${btn('offer-undo', 'Undo', 'text small', state.busy)}<button class="btn text small" data-client="${esc(job.client.id)}">View notes</button>
+      <button class="icon-btn" data-action="offer-hide" aria-label="Close">${icon('x')}</button></div></div>`;
+  }
+  const body = open
+    ? `<div class="offer-body"><ul>${keep.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
+        <div class="end">${btn('offer-save', 'Save to notes', 'primary small', state.busy)}${btn('offer-dismiss', 'Not now', 'text small', state.busy)}</div></div>`
+    : '';
+  return `<div class="offer"><div class="offer-line">
+      <button class="open" data-action="offer-toggle" aria-expanded="${open}">${icon('chev')}<span>Keep ${plural(keep.length, 'thing')} for ${name} next run?</span></button>
+      <button class="icon-btn" data-action="offer-dismiss" aria-label="Not now" title="Not now">${icon('x')}</button></div>${body}</div>`;
+}
+
+const keepFor = async (action) => {
+  state.job = await api(jobUrl('/keep-for-client'), { method: 'POST', body: JSON.stringify({ action }) });
+  await refreshClients(); // the client's notes and version changed
+};
+export const offerLocal = {
+  'offer-toggle': () => (open = !open),
+  'offer-hide': () => hidden.add(state.job.id),
+};
+export const offerServer = {
+  'offer-save': () => keepFor('save'),
+  'offer-undo': () => keepFor('undo'),
+  'offer-dismiss': () => keepFor('dismiss'),
+};

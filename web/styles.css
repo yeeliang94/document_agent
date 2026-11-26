@@ -363,6 +363,67 @@ body.loading #main {
   color: var(--bad-fg);
 }
 
+/* After a client's first run: one slim line, opened to list what to keep (clients.js offerHtml) */
+.offer {
+  margin: 0 32px 12px;
+  background: var(--panel);
+  border-radius: 12px;
+}
+.offer-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 16px;
+  min-height: 44px;
+  font-size: 13px;
+}
+.offer-line .open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.offer-line .open svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+.offer-line .open[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+.offer-line .what {
+  margin-right: auto;
+}
+.offer-body {
+  padding: 0 16px 16px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.offer-body ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.offer-body .end {
+  display: flex;
+  gap: 8px;
+}
+@media (max-width: 1000px) {
+  .offer {
+    margin: 0 16px 12px;
+  }
+  .offer-body {
+    padding-left: 16px;
+  }
+}
+
 /* Run view: conversation and files */
 .work {
   flex: 1;

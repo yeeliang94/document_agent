@@ -22,4 +22,8 @@ def from_answer(answer: dict | None) -> dict | None:
         return None
     headline = ' '.join(str(answer.get('headline') or answer.get('summary') or '').split())
     report = {'headline': headline, **{key: _lines(answer.get(key)) for key, _ in PARTS}}
-    return report if any(report.values()) else None
+    if not any(report.values()):
+        return None
+    # What a client's first run found worth keeping, offered to the person as the client's notes (plan Step 50).
+    keep = _lines(answer.get('for_next_time'))[:5]
+    return report | ({'for_next_time': keep} if keep else {})
