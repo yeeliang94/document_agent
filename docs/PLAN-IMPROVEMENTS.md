@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `95%` (37 of 39 steps) (Phases 1-10 done; Phase 11 left)
+**Overall Progress:** `88%` (37 of 42 steps) (Phases 1-10 done; Phases 11-12 left)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7 (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -274,7 +274,7 @@ From the study of Claude's document panel (26 Nov). A comment gets an answer, wh
   - **Verify:** create a client, start a run with it suggested, and see a remembered comment appear in its notes with Undo.
   - **Result:** `web/clients.js`: the Clients page, one client's Notes, Runs and History, the client row on New run with its suggestion and Use, "Following the notes for X" on the run, Undo for lessons and comments remembered to a client. The "Ask the agent to change these notes" box is left out: there is no backend for it yet.
 
-**How Phase 10 was checked (2026-11-27):** each batch was checked in a browser on pretend runs (a scratch data folder with no API key, states written straight into the store), at desktop and phone widths; no live agent run was started, so a continue or start over that really runs, and answers written by the real model, are not yet seen on screen. A review (8 specialists, Codex, an independent checker) kept seven findings, all fixed: a row-0 cell name broke every link; a cancelled run deleted while still queued stopped the job worker; Start over could lose files newer than the last version (it now keeps them as a version first and asks to confirm); a client's runs were matched by name, not id; "Questions it may ask per run" counts the whole job, so it now says "per job"; the save tool and the round message disagreed on which comments to answer; and Continue could not restore a version kept before files had their own folder (that fix touches the other uncommitted work's version layout).
+**How Phase 10 was checked (2026-11-27):** each batch was checked in a browser on pretend runs (a scratch data folder with no API key, states written straight into the store), at desktop and phone widths; no live agent run was started, so a continue or start over that really runs, and answers written by the real model, are not yet seen on screen. A review (8 specialists, Codex, an independent checker) kept seven findings, all fixed: a row-0 cell name broke every link; a cancelled run deleted while still queued stopped the job worker; Start over could lose files newer than the last version (it now keeps them as a version first and asks to confirm); a client's runs were matched by name, not id; "Questions it may ask per run" counts the whole job, so it now says "per job"; the save tool and the round message disagreed on which comments to answer; and Continue could not restore a version kept before files had their own folder (that fix touches the other uncommitted work's version layout). A second Codex review found two more, also fixed: the stopped card's main Continue restored the last version and could discard newer files (it now carries on from the current files; going back to a version first keeps the current files as a version unless they match the newest one), and the report hid questions the agent left open (now under "Still open").
 
 ### Phase 11: Keep it from drifting
 
@@ -283,6 +283,19 @@ From the study of Claude's document panel (26 Nov). A comment gets an answer, wh
 
 - [ ] 🟥 **Step 39: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
   - **Verify:** I report the test and build results, the review verdict, and the git state.
+
+### Phase 12: Speak instead of type (its own branch, after Phase 11)
+
+Asked for 2026-11-27. A microphone button on every box people write in, like Codex and Claude Code have: press, speak, press again, and the words land in the box to edit before sending. The words come from OpenAI's transcription endpoint through the same gateway as the agent.
+
+- [ ] 🟥 **Step 40: Try transcription through the gateway** — one short synthetic recording sent to `/audio/transcriptions` with the gateway's model alias, before building on it.
+  - **Verify:** I report whether the gateway passes it, which alias works, the time and the cost of one minute of speech. If it does not pass, we stop here and choose again.
+
+- [ ] 🟥 **Step 41: A transcription route** — `POST /api/transcribe` takes a short recording and returns the text. The model alias and a length limit are Settings values; the key stays in `.env`. The recording is not kept.
+  - **Verify:** tests with a fake model: text comes back, a recording past the limit is refused with a plain sentence, and nothing is written to disk.
+
+- [ ] 🟥 **Step 42: The microphone button** (prototype first) — one shared button on every text box: the message box, comment and reply boxes, New run's goal, playbook and client notes, and Settings' text fields where it helps. Recording state, then "Transcribing", then the words added where the cursor was. A plain message when the browser blocks the microphone.
+  - **Verify:** I check each box in a browser, plus a blocked microphone and a gateway that refuses.
 
 ## Risks
 
