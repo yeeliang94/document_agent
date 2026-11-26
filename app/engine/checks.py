@@ -734,7 +734,8 @@ def check_provenance(
         f['path'] for f in files
         if f['path'] not in cited and normal_decision((entry_for(entries or {}, f['path']) or {}).get('decision')) == 'used'
     )  # fmt: skip
-    counts['used_not_cited'] = uncited[:10] + ([f'... and {len(uncited) - 10} more'] if len(uncited) > 10 else [])
+    counts['used_not_cited'] = uncited[:10]
+    counts['used_not_cited_more'] = max(0, len(uncited) - 10)  # how many more, kept apart so the list is only paths
     return issues, counts
 
 
@@ -827,17 +828,20 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         'totals_problems': len(totals_issues),
         'looks_right': not looks,
     }
-    provenance_issues, used_not_cited = [], []
+    provenance_issues, used_not_cited, uncited_more = [], [], 0
     if proof == 'row':
         provenance_issues, counts = check_provenance(outputs, written, files, entries)
         summary |= {'rows_sourced': counts['sourced'], 'rows_written': counts['written']}
         used_not_cited = counts.get('used_not_cited', [])
+        uncited_more = counts.get('used_not_cited_more', 0)
     issues = deliverable_issues + totals_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
     result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps,
-              'totals': totals_lines, 'looks': looks, 'summary': summary}  # fmt: skip
+              'totals': totals_lines, 'looks': looks, 'summary': summary, 'issue_count': len(issues)}  # fmt: skip
     if used_not_cited:
         result['used_not_cited'] = used_not_cited
+    if uncited_more:
+        result['used_not_cited_more'] = uncited_more
     if unsupported:
         result['totals_not_worked_out'] = (
             f'{len(unsupported)} formula(s) use something this machine cannot work out: {some(unsupported)}. Check '

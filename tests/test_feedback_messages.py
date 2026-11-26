@@ -93,7 +93,7 @@ def test_lists_cut_short_say_how_many_were_left_out(tmp_path):
     entries = {f['path']: {'path': f['path'], 'decision': 'used', 'reason': 'r'} for f in files}
     (tmp_path / checks.PROVENANCE).write_text('[]', encoding='utf-8')
     _, counts = checks.check_provenance(tmp_path, {}, files, entries)
-    assert len(counts['used_not_cited']) == 11 and counts['used_not_cited'][-1] == '... and 2 more'
+    assert len(counts['used_not_cited']) == 10 and counts['used_not_cited_more'] == 2  # the list holds only paths
 
 
 def test_the_resume_card_says_how_many_issues_it_left_out(tmp_path):
@@ -108,6 +108,9 @@ def test_the_resume_card_says_how_many_issues_it_left_out(tmp_path):
     card = service.resume_card(store, store.get(job['id']))
     assert '- problem 19\n- ... and 35 more.' in card and 'problem 20' not in card
     assert service.some_issues(['a', 'b']) == ['a', 'b']
+    # with the real count kept by the checks, the card counts from it, not from the text of their last line
+    assert service.some_issues([*issues[:40], '... and 15 more.'], total=55)[-1] == '... and 35 more.'
+    assert service.some_issues(['a', 'b', 'c'], limit=2, total=3) == ['a', 'b', '... and 1 more.']
 
 
 @pytest.mark.parametrize(
@@ -118,6 +121,7 @@ def test_the_resume_card_says_how_many_issues_it_left_out(tmp_path):
         ({'status': 'stopped', 'cut_short': 'service', 'error': 'The AI service stopped answering (APIError).'},
          'because the AI service stopped answering'),
         ({'status': 'paused'}, 'because the user paused it'),
+        ({'status': 'waiting'}, 'because it was waiting for an answer to its question'),
         ({'status': 'cancelled'}, 'because the user stopped it'),
         ({'status': 'failed', 'error': 'RuntimeError: disk full'}, 'because of a fault (RuntimeError: disk full)'),
     ],
@@ -136,9 +140,11 @@ def test_the_forced_fix_pass_carries_the_whole_check():
     check = {'passed': False, 'issues': ['Payroll row 9 duplicates row 5.'], 'template_changes': ['moved'],
              'empty_rows': ['Payroll row 7 is empty'], 'totals': [], 'looks': ['B4 shows ####'], 'summary': {}}  # fmt: skip
     told = agent.fix_pass_follow_up(check)
-    head, body = told.split('\n', 1)
-    assert 'Fix them, call save_outputs until it passes' in head
-    assert json.loads(body) == check
+    fix, rest = told.split('rightly stay):\n')
+    assert '- Payroll row 9 duplicates row 5.\nFix them, call save_outputs until it passes' in fix
+    # the rest of the check comes apart from the problems to fix, without the empty parts
+    wanted = {'template_changes': ['moved'], 'empty_rows': ['Payroll row 7 is empty'], 'looks': ['B4 shows ####']}
+    assert json.loads(rest) == wanted
 
 
 def test_the_reviewer_names_a_place_and_the_agent_hears_of_the_low_doubts_left_out():

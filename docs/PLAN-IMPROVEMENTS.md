@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `67%` (41 of 61 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phases 14-17 to build)
+**Overall Progress:** `72%` (44 of 61 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15 and 17 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -336,7 +336,7 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
 - [ ] 🟥 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
   - **Verify:** in a browser, with the tab in the background, a question, a finish and a stop each raise one notification. With the switch off, none is raised. A blocked permission shows a plain sentence on the Settings page.
 
-- [ ] 🟥 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
+- [ ] 🟨 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
   - When a tool fails, say which tool failed and with what input, not only the error (agent.py `_tool_error`).
   - When a file is missing, point to `/mnt/data/outputs/`, where outputs belong, not `/mnt/data/` (sandbox.py `download`).
   - When the checks themselves crash, say the fault is in the checks, not in the agent's work. Tell it to save again once, then carry on and note it (agent.py, near the `check.crashed` event).
@@ -348,9 +348,21 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
   - The reviewer is asked to name a file and cell for each doubt. The agent is told how many low-severity doubts were left out.
   - The agent is told, in one line, when its history has been condensed, and to re-read notes.md.
   - **Verify:** a test for each message above. One replay of a lesson test passes with the same score. Every changed message is shown here, before and after.
+  - **Result (2026-11-26):** built; 17 tests in `tests/test_feedback_messages.py`. Not yet done: the replay of a lesson test (a paid run). Before and after:
+    - A tool fails: "The tool failed with {error}…" → "{tool} failed on the input {input, cut at 300 characters}: {error}. Fix the cause if it is yours (the input, or a file it names); otherwise try once more or carry on without it."
+    - A file is missing: "…Save it under /mnt/data/ first." → "…Outputs belong under /mnt/data/outputs/: save the file there first, or check its name."
+    - The checks crash: "The checks could not run…" → "The checks themselves crashed (…). This is a fault in the checks, not in your work. Call save_outputs once more; if they crash again, carry on without them and say in notes.md that the checks could not run." A crash no longer takes the run's one fix pass.
+    - Duplicate rows: "Payroll row 9 duplicates row 5." → "…Remove one; if both are real records, keep both and say why in notes.md." (Open: the check still fails a kept duplicate; the owner decides the wording.)
+    - Formulas the app can't work out: a count only → the count, the first 10 cells, and "… and N more".
+    - Lists cut short (document map, used-but-not-cited, the resume card's issues) now say how many were left out; the counts are kept as numbers, not read back from text.
+    - The resume card adds why the last run stopped: a limit, the AI service, a question waiting, the person pausing or stopping it, or a fault.
+    - The forced fix pass lists the problems to fix, then the rest of the check apart, "to handle as your instructions say (some of it may rightly stay)".
+    - The reviewer names the file and cell or row for each doubt; the agent is told how many low-severity doubts were left out.
+    - New: one line when the history is condensed: "…Re-read notes.md for the details you wrote down, then carry on."
 
-- [ ] 🟥 **Step 49: Working notes from the start.** The briefing asks the agent to write what it finds into notes.md as it goes (which file wins, where each column comes from, open doubts), not only at the end. It re-reads the file after history is condensed. This is one briefing change, with no new tool.
+- [ ] 🟨 **Step 49: Working notes from the start.** The briefing asks the agent to write what it finds into notes.md as it goes (which file wins, where each column comes from, open doubts), not only at the end. It re-reads the file after history is condensed. This is one briefing change, with no new tool.
   - **Verify:** on a live run of the sample packet, notes.md holds findings before the first save, and the final score is unchanged.
+  - **Result (2026-11-26):** the briefing asks for notes.md from the start, before the first save (which file wins, where each column comes from, what was left out, open doubts), and for a re-read when told the history was condensed. Not yet done: the live run (paid).
 
 - [ ] 🟥 **Step 50: A new client's first screen** (prototype first): a client with no notes yet shows what notes are for and how they grow (typed here, or kept from a comment with "Remember"), instead of a blank box. When the "what I learned" list is built, this screen points to it.
   - **Verify:** in a browser, a new client, a client with notes, and a client whose notes were all removed each show the right state.
@@ -368,12 +380,15 @@ Two steps from the older plan were never built. They move here so one plan holds
 
 The design is `prototype/full-screen-files/index.html` on the `prototypes` branch (commit dd32a0b), drawn with 240 files.
 
-- [ ] 🟥 **Step 53: A file list that copes with many files** — outputs and the agent's notes on top, the checks folded into one line, then sources: a find box, filter chips with counts (all, used, reference, excluded), folders folded when there are more than 40 files, short folder paths, and long names cut in the middle so the end stays readable.
+- [x] 🟩 **Step 53: A file list that copes with many files** — outputs and the agent's notes on top, the checks folded into one line, then sources: a find box, filter chips with counts (all, used, reference, excluded), folders folded when there are more than 40 files, short folder paths, and long names cut in the middle so the end stays readable.
   - **Verify:** in a browser with 240 files: find, each filter, folding and unfolding, and a run with only a few files.
-- [ ] 🟥 **Step 54: A one-row file bar** — back, the name, one Comment button, a More menu (find, zoom, download), full screen and close on one row; sheet tabs (scrolling), the status pill and the Changes switch on the row below.
+  - **Result (2026-11-26):** built; checked in a browser with a 227-source run and an 11-source run: find (with its match marked), each filter, folding, no match, the checks line, and phone width.
+- [x] 🟩 **Step 54: A one-row file bar** — back, the name, one Comment button, a More menu (find, zoom, download), full screen and close on one row; sheet tabs (scrolling), the status pill and the Changes switch on the row below.
   - **Verify:** in a browser at 642 and 1440 wide: a long name, many sheets, a PDF, a text file, comment on and off, each More item.
-- [ ] 🟥 **Step 55: Full screen with the file list beside it** — full screen for the list and for an open file, with a list of all files down the left (340px, can be hidden). Moving between sources, outputs and notes stays in full screen; Esc leaves it.
+  - **Result (2026-11-26):** built; checked at 1440, 642 and 375 wide: a long name cut in the middle, many sheets, a text file, Comment on and off (and the C key), each More item.
+- [x] 🟩 **Step 55: Full screen with the file list beside it** — full screen for the list and for an open file, with a list of all files down the left (340px, can be hidden). Moving between sources, outputs and notes stays in full screen; Esc leaves it.
   - **Verify:** in a browser: enter and leave, open three files in a row from the side list, hide the list, Esc, and a narrow window (full screen is not offered below 1000px).
+  - **Result (2026-11-26):** built; checked: full screen from the list and from a file, three files in a row from the side list, hiding it, Esc (which first clears the find box), and leaving full screen when the window narrows below 1000px.
 
 ### Phase 17: Leftovers from the exploratory test (2026-11-26)
 

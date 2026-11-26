@@ -381,7 +381,7 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
         )
     check = last.get('final_check') or {}
     if check.get('issues'):
-        parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in some_issues(check['issues'])))
+        parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in some_issues(check['issues'], total=check.get('issue_count'))))
     notes = root / 'outputs' / 'notes.md'
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
@@ -399,6 +399,8 @@ def why_stopped(last: dict) -> str:
         return f', because it reached a limit ({error or cut})'
     if cut == 'service':
         return ', because the AI service stopped answering'
+    if status == 'waiting':
+        return ', because it was waiting for an answer to its question'
     if status == 'paused':
         return ', because the user paused it'
     if status == 'cancelled':
@@ -408,14 +410,15 @@ def why_stopped(last: dict) -> str:
     return ''
 
 
-def some_issues(issues: list[str], limit: int = CARD_ISSUES) -> list[str]:
-    """The first issues, and how many were left out. The checks may already end the list with their own
-    '... and N more.' line; that count is added in."""
-    if len(issues) <= limit:
-        return issues
-    more = MORE.fullmatch(issues[-1])
-    left = len(issues) - limit - (1 if more else 0) + (int(more.group(1)) if more else 0)
-    return [*issues[:limit], f'... and {left} more.']
+def some_issues(issues: list[str], limit: int = CARD_ISSUES, total: int | None = None) -> list[str]:
+    """The first issues, and how many were left out. `total` is how many the checks found (issue_count); a record
+    from before it was kept is read from the checks' own closing '... and N more.' line."""
+    more = MORE.fullmatch(issues[-1]) if issues else None
+    real = issues[:-1] if more else issues
+    if total is None:
+        total = len(real) + (int(more.group(1)) if more else 0)
+    shown = real[:limit]
+    return shown + ([f'... and {total - len(shown)} more.'] if total > len(shown) else [])
 
 
 def _still_holds(job: dict, new, fresh: bool = False) -> list[str]:

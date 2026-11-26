@@ -205,7 +205,7 @@ How to work:
 - Never manufacture certainty: do not invent values, guess identities or treat a blank as zero or "No". Keep what you confirmed apart from what still needs checking, and say which is which.
 - Build template deliverables by loading the template with openpyxl and writing into it, never with pandas to_excel, which drops formulas, validation and formatting. Write numbers as numbers and dates as dates. openpyxl's insert_rows moves cells only: when you insert rows, move or stretch the data-validation rules, merged cells and formula ranges yourself.
 - Check the outcome, not just that a script ran. Before finishing, re-open what you saved and check it against the sources: rows per group, totals, duplicates, and anything that should have been excluded. Then look at each finished sheet as the person receiving it would, with look_at_output, which draws it as Excel shows it: every record inside the table it belongs to, totals covering them, nothing stranded below the template's notes, instructions and labels intact, headers, column widths (#### means a number does not fit), number and date formats.
-- Call save_outputs to copy your outputs to the user's run folder. It checks them on the user's machine and lists any problems. Fix them and call it again. You are done when save_outputs passes. It also lists template_changes: template content that moved or is no longer there as it was. Moves caused by rows you inserted are expected. Explain every other change in notes.md, or undo it if it was not deliberate. It also lists empty_rows: rows left empty among your records, with what each one holds. Fill each one, or say in notes.md why the template means it to stay empty; rows you have explained stay on the list. It also lists totals: each total formula with the value it comes to, worked out on the user's machine; check them against your own sums. A formula that shows an error, or a total whose range leaves out a row of numbers next to it, is a problem to fix. It also lists looks: what will look wrong in Excel in the cells you wrote (#### where a number does not fit, numbers or dates stored as text, numbers with no number format, hidden rows of data). Fix each, or say in notes.md why it stays. It may list used_not_cited: files your document_map.json marks "used" that no row in provenance.json cites. Cite each on the rows it feeds; if it fed something other than rows (a memo, a heading), say what in its reason; if nothing was taken from it, mark it not_relevant.
+- Call save_outputs to copy your outputs to the user's run folder. It checks them on the user's machine and lists any problems. Fix them and call it again. You are done when save_outputs passes. It also lists template_changes: template content that moved or is no longer there as it was. Moves caused by rows you inserted are expected. Explain every other change in notes.md, or undo it if it was not deliberate. It also lists empty_rows: rows left empty among your records, with what each one holds. Fill each one, or say in notes.md why the template means it to stay empty; rows you have explained stay on the list. It also lists totals: each total formula with the value it comes to, worked out on the user's machine; check them against your own sums. A formula that shows an error, or a total whose range leaves out a row of numbers next to it, is a problem to fix. It also lists looks: what will look wrong in Excel in the cells you wrote (#### where a number does not fit, numbers or dates stored as text, numbers with no number format, hidden rows of data). Fix each, or say in notes.md why it stays. It may list used_not_cited: files your document_map.json marks "used" that no row in provenance.json cites. Cite each on the rows it feeds; if it fed something other than rows (a memo, a heading), say what in its reason; if nothing was taken from it, mark it not_relevant. When more than ten, used_not_cited_more says how many more.
 
 Finish with status "complete" only if save_outputs passed on your final files. Your final answer is the report the user reads first, written for a finance user who will act on it, short and plain, naming files plainly and cells as Sheet!B4, or 'Sheet name'!B4 when the name has spaces (the screen turns both into links to that spot), without sandbox paths or links: a headline (the result, and the answer to anything they asked you), what you did, the decisions you made where the files left room (each with its reason; your assumptions are decisions), and what they should check before sending the work on. The report always covers the whole job, also when you finish again after a later check or review. List anything unresolved in open_questions.
 
@@ -673,7 +673,8 @@ def _check(job: Job) -> dict:
             'your work. Call save_outputs once more; if they crash again, carry on without them and say in notes.md '
             'that the checks could not run.'
         )
-        return {'passed': False, 'issues': [problem], 'template_changes': [], 'empty_rows': [], 'summary': {}}
+        crashed = {'passed': False, 'crashed': True, 'issues': [problem]}
+        return crashed | {'template_changes': [], 'empty_rows': [], 'summary': {}}
 
 
 class CommentAnswer(BaseModel):
@@ -1053,6 +1054,7 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
             prompt = await _carry_on(job, store, echo, history, messages, warning, interrupted=True, running=running)
             continue
         if not messages and (not warning or result.final_output is not None):
+            job.condensed_unsaid = False  # a finished pass has nothing left to re-read its notes for
             return result  # finished; a warning that came as it finished has nothing left to warn about
         prompt = await _carry_on(job, store, echo, result.to_input_list(), messages, warning)
 
@@ -1078,12 +1080,19 @@ async def _upload_outputs(box: Sandbox, outputs: Path) -> str:
 
 
 def fix_pass_follow_up(check: dict) -> str:
-    """What the lead agent is told when it finished as complete but its saved files fail the check: the whole check
-    (issues, template_changes, empty_rows, totals, looks and the rest), as save_outputs would have shown it."""
-    return (
-        'You finished as complete, but the check of your saved files lists these problems. Fix them, call '
-        'save_outputs until it passes, then finish. The whole check:\n' + json.dumps(check, indent=1)
+    """What the lead agent is told when it finished as complete but its saved files fail the check: the problems to
+    fix, then the rest of the check (template_changes, empty_rows, totals, looks and so on), as save_outputs would
+    have shown it, to handle as the briefing says: some of those may rightly stay."""
+    rest = {k: v for k, v in check.items() if k not in ('passed', 'issues') and v not in ([], {}, None)}
+    told = (
+        'You finished as complete, but the check of your saved files lists these problems:\n'
+        + '\n'.join(f'- {i}' for i in check['issues'])
+        + '\nFix them, call save_outputs until it passes, then finish.'
     )
+    if rest:
+        told += ' The rest of the check, to handle as your instructions say (some of it may rightly stay):\n'
+        told += json.dumps(rest, separators=(',', ':'))
+    return told
 
 
 def review_follow_up(serious: list[dict], minor: int) -> str:
@@ -1349,7 +1358,8 @@ async def run_job(
                         job.saved = True
                         check = await asyncio.to_thread(_check, job)
                         if not check['passed']:
-                            if not fixes_left:
+                            # A fault in the checks is not the agent's to fix, so it gets no fix pass.
+                            if not fixes_left or check.get('crashed'):
                                 break
                             fixes_left -= 1
                             store.event('check.returned', issues=check['issues'][:20])
