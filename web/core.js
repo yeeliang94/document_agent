@@ -15,6 +15,7 @@ const icons = {
   x: 'M6 6l12 12M18 6L6 18',
   back: 'M15 6l-6 6 6 6',
   chev: 'M9 6l6 6-6 6',
+  tick: 'M5 12.5l4.5 4.5L19 7',
   down: 'M12 4v12M7 11l5 5 5-5M5 20h14',
   clip: 'M20 11l-8.5 8.5a5 5 0 01-7-7L13 4a3.5 3.5 0 015 5l-8.5 8.5a2 2 0 01-3-3L14 7',
   up: 'M12 20V8M7 13l5-5 5 5M5 4h14',
@@ -94,7 +95,11 @@ export const state = {
   jobs: [],
   events: [],
   seen: 0, // highest event number already drawn, so only newer items animate in
-  toggled: new Set(), // work blocks the user opened or closed by hand
+  toggled: new Set(), // work blocks, stages and thinking notes the user opened or closed by hand
+  act: null, // the action opened in full, by its event number; see thread.js
+  actCode: false, // the opened action shows its code
+  scripts: {}, // each opened action's code and what it printed, as fetched: { code, output } or { error }
+  planOpen: null, // the plan at the top of the run, opened or closed by hand; null: as the run's state suggests
   wrapped: new Set(), // near-limit cards answered with Let it wrap up, as "job id:event number"
   files: [],
   template: null,

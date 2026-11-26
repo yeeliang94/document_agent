@@ -24,6 +24,7 @@ from .. import clients, feedback, lessons, plain_errors, preview
 from ..jobstatus import FINISHED, stop_status
 from ..modules import MODULE_LABELS
 from ..store import clean
+from . import plan as plans
 from . import report as finish
 from .agent import Control, run_job
 from .endpoint import Settings as Endpoint
@@ -45,7 +46,7 @@ MESSAGES = {
     'run.started': lambda d: f'Started on {count(d.get("files"), "file")}',
     'sandbox.ready': lambda d: 'Set up the workspace and copied in the files',
     'code.started': lambda d: 'Working on the files',
-    'tool.called': lambda d: f'Using {d.get("tool")}',
+    'tool.called': lambda d: None if d.get('tool') in OWN_LINE else f'Using {d.get("tool")}',
     'tool.failed': lambda d: tool_failure(d.get('error')),
     'scout.started': lambda d: f'A helper is reading {d.get("folder")} ({count(d.get("files"), "file")})',
     'scout.finished': lambda d: f'The helper finished reading {d.get("folder")}',
@@ -88,12 +89,34 @@ MESSAGES = {
     'model.unavailable': lambda d: 'The AI service stopped answering; saved work is kept',
     'outputs.versioned': lambda d: f'Kept version {d.get("number")}: {d.get("description")}',
     'output.looked': lambda d: f'Looking at {d.get("file")} as Excel shows it',
+    # Kept in the Technical log; the run itself shows no thinking then, and the Settings page says why that can be.
+    'thinking.refused': lambda d: (
+        "The AI service does not send summaries of the agent's thinking; carrying on without them"
+    ),
     'outputs.pictured': lambda d: (
         f'Showed the agent {count(d.get("pictures"), "picture")} of its files before it finishes '
         f'(about {d.get("tokens") or 0:,} tokens)'
     ),
 }
-WARNINGS = {'limit.near', 'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable'}
+WARNINGS = {'limit.near', 'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable',
+            'thinking.refused'}  # fmt: skip
+# Tools whose work the feed already says in its own words (a save, a look at a file, the plan), so "Using ..." is not.
+OWN_LINE = {'update_plan', 'save_outputs', 'look_at_output'}
+STAGE_NAMES = {'reading': 'Reading files', 'filling': 'Filling in', 'checking': 'Checking'}
+
+
+def plan_message(data: dict) -> str:
+    """What the feed says when the agent writes or changes its plan."""
+    if data.get('first'):
+        return f'Made a plan: {plans.counted(data.get("steps") or [])}'
+    said = [f'added "{s}"' for s in data.get('added') or []]
+    said += [f'changed "{c["was"]}" to "{c["step"]}"' for c in data.get('changed') or []]
+    said += [f'dropped "{s}"' for s in data.get('removed') or []]
+    if said:
+        return 'Changed its plan: ' + '; '.join(said)
+    return f'Updated its plan: {plans.counted(data.get("steps") or [])}'
+
+
 DAY_USED_UP = (
     "Today's token limit is used up. Saved work is kept. Continue tomorrow, or raise the limit on the Settings page."
 )
@@ -385,6 +408,12 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
     notes = root / 'outputs' / 'notes.md'
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
+    steps = (job.get('plan') or {}).get('steps')
+    if steps:
+        parts.append(
+            'Your plan from the earlier run, as you left it. Carry on from it with update_plan: tick what is done, and '
+            'change it, saying why, if the work now is different:\n' + plans.as_text(steps)
+        )
     return '\n\n'.join(parts + _still_holds(job, new))
 
 
@@ -536,6 +565,27 @@ class SandboxEngine:
             if name == 'run.progress':  # how far the run has got, on the job for the screen; not a feed line
                 store.update(job_id, progress={**data, 'run': attempt})
                 return
+            if name == 'plan.updated':
+                # Kept on the job, so the plan shows at the top of the run and a later run picks it up.
+                store.update(job_id, plan={'steps': data['steps'], 'why': data.get('why') or '', 'run': attempt})
+                keep = {k: data.get(k) for k in ('steps', 'added', 'changed', 'removed', 'why', 'first')}
+                store.event(job_id, 'engine.plan.updated', plan_message(data), type='engine', run=attempt, **keep)
+                return
+            if name == 'stage.changed':  # where the work moves on; the run screen folds the work by stage
+                stage = data.get('stage')
+                store.event(job_id, 'engine.stage.changed', STAGE_NAMES.get(stage, stage), type='engine', run=attempt,
+                            stage=stage)  # fmt: skip
+                return
+            if name == 'thinking':
+                parts = data.get('parts') or []
+                store.event(job_id, 'engine.thinking', parts[0]['title'] if parts else '', type='engine', run=attempt,
+                            parts=parts, detail=options['thinking_summaries'])  # fmt: skip
+                return
+            if name == 'code.ran' and data.get('shown'):
+                # The script is already in the feed: this says only where its code and output are kept.
+                store.event(job_id, 'engine.code.saved', 'Kept the script', type='engine', run=attempt,
+                            code=data.get('file'), item=data.get('item'))  # fmt: skip
+                return
             message = MESSAGES.get(name)
             text = message(data) if message is not None else None
             if text:
@@ -546,6 +596,12 @@ class SandboxEngine:
                     extra.update(what=data.get('what'), said=data.get('said'))
                 if data.get('interrupted'):
                     extra['interrupted'] = True  # the thread says the step was stopped only once it was
+                if data.get('item'):  # which script, so the screen can open its code and what it printed
+                    extra['item'] = data['item']
+                if name == 'code.ran' and data.get('file'):
+                    extra['code'] = data['file']
+                if name == 'outputs.saved':  # what came back, for the action opened in full
+                    extra.update(passed=bool(data.get('passed')), issues=list(data.get('issues') or [])[:20])
                 store.event(job_id, 'engine.' + name, text, type='engine', level=level, run=attempt, **extra)
 
         one_question = asyncio.Lock()  # the agent may call tools in parallel; the user sees one question at a time
@@ -655,6 +711,8 @@ class SandboxEngine:
                 versions_kept=options['versions_kept'],
                 max_questions=options['max_questions'],
                 timeout_seconds=options['time_limit_minutes'] * 60,
+                thinking=options['thinking_summaries'],
+                plan=None if job.get('start_over') else (job.get('plan') or {}).get('steps'),
                 echo=lambda _: None,
             )
         ).record

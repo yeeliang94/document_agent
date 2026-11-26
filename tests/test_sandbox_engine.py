@@ -175,9 +175,10 @@ def test_a_script_is_described_while_it_streams_in_and_shown_once():
         ('code.started', {}),
         ('code.writing', {'summary': 'Check the bank file'}),  # once, as soon as its first line is written
         ('code.running', {'summary': 'Check the bank file', 'files': ['Bank.csv']}),
-        ('code.finished', {'summary': 'Check the bank file', 'files': ['Bank.csv']}),
+        # Both name the script by its id, so the screen can open the code and what it printed.
+        ('code.finished', {'summary': 'Check the bank file', 'files': ['Bank.csv'], 'item': 'ci_1'}),
         ('code.ran', {'file': '001-main.py', 'chars': len(code), 'summary': 'Check the bank file',
-                      'files': ['Bank.csv'], 'shown': True}),
+                      'files': ['Bank.csv'], 'shown': True, 'item': 'ci_1'}),
     ]  # fmt: skip
     assert set(live) == {'ci_1'}  # other streamed events leave no trace
 
@@ -204,8 +205,11 @@ def test_the_feed_shows_each_script_live_and_once(tmp_path, monkeypatch):
             ('engine.code.writing', 'Check the bank file', 'INFO', None),
             ('engine.code.running', 'Reading', 'INFO', ['Bank.csv']),
             ('engine.code.finished', 'Check the bank file', 'INFO', ['Bank.csv']),
+            # The end-of-reply copy of a script already shown is not repeated; it says only where its code is kept.
+            ('engine.code.saved', 'Kept the script', 'INFO', None),
             ('engine.code.finished', 'Worked on the files', 'INFO', []),
-        ]  # the end-of-reply copy of a script already shown is not repeated
+        ]
+        assert events[4]['code'] == '001-main.py'
 
 
 def test_a_question_is_answered_in_the_app_while_the_sandbox_waits(tmp_path, monkeypatch):

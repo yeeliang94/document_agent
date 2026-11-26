@@ -31,6 +31,7 @@ from .engine import versions
 from .engine.agent import UPLOAD_LIMIT
 from .engine.checks import normal_decision, read_map
 from .engine.rules import check_format_definition
+from .engine.runstore import lead_scripts, read_code
 from .engine.service import DAY_USED_UP
 from .files import add_file, add_zip, added_name, is_junk, within
 from .playbooks import MAX_NAME, MAX_TEXT, StaleVersion
@@ -868,7 +869,7 @@ def create_app(settings_override: Settings | None = None):
         except OSError as error:
             store.update(job_id, status=before['status'])
             raise HTTPException(409, plain_errors.sentence(error)) from None
-        store.update(job_id, start_over=True, resume_from=None, error=None, artifacts=[])
+        store.update(job_id, start_over=True, resume_from=None, error=None, artifacts=[], plan=None)
         store.event(job_id, 'user.start_over', 'Starting over from the beginning', type='user')
         await runner.enqueue(job_id)
         return get(job_id)
@@ -975,6 +976,25 @@ def create_app(settings_override: Settings | None = None):
     async def events(job_id, after: int = 0):
         get(job_id)
         return store.events(job_id, after)
+
+    @api.get('/api/jobs/{job_id}/script')
+    def script(
+        job_id, run: int = Query(ge=1, le=999), name: str = '', index: int = Query(0, ge=0), of: int = Query(0, ge=0)
+    ):
+        """One of the lead agent's scripts in a run, with what it printed, for an action opened on the run screen.
+        A run made before each action named its script gives its place instead: the index-th of the `of` scripts the
+        screen shows, used only when the run kept exactly that many."""
+        get(job_id)
+        folder = store.path(job_id) / 'engine' / f'run-{run:02d}' / 'code'
+        if not name:
+            kept = lead_scripts(folder)
+            if not index or len(kept) != of or index > len(kept):
+                raise HTTPException(404, 'The code of this step was not kept.')
+            name = kept[index - 1]
+        try:
+            return read_code(folder, name)
+        except KeyError:
+            raise HTTPException(404, 'The code of this step was not kept.') from None
 
     @api.get('/api/jobs/{job_id}/stream')
     async def stream(job_id, request: Request, after: int = 0):

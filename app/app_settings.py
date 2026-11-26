@@ -50,6 +50,9 @@ OPTIONS = {
     'reviewer': Option(False, 'Independent reviewer'),
     'proof': Option('row', 'Proof level', ('row', 'none')),
     'effort': Option('medium', 'Reasoning effort', ('low', 'medium', 'high')),
+    # Short summaries of the lead agent's thinking above the work they led to (app/engine/plan.py). Some services do
+    # not send them; the run then shows none and carries on.
+    'thinking_summaries': Option('short', "Show the agent's thinking", ('off', 'short', 'detailed')),
     'sandbox_memory': Option('4g', 'Sandbox memory', ('1g', '4g', '16g')),
     'max_turns': Option(60, 'Turn limit per run', low=10, high=200),
     'more_steps': Option(20, 'Steps added by "More steps"', low=5, high=100),
