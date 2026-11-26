@@ -27,6 +27,7 @@ import {
 import { confirmStartOver, deleteRun, renameRun, runItems, submitRun } from './runs.js';
 import { composerHtml, headHtml, nearLimits, stagesHtml, threadHtml } from './thread.js';
 import { continueFrom, loadVersions } from './versions.js';
+import { dismissVoiceNote, initVoice, rememberCaret, syncVoice, toggleVoice } from './voice.js';
 import { applyZoom, canZoom, wheelZoom, zoomAction } from './zoom.js';
 
 const RUN = `
@@ -159,6 +160,7 @@ function render() {
   paint('#pop-root', popHtml());
   syncPop();
   syncReply();
+  syncVoice(); // the recording clock, and the box it writes into locked while it listens
   loadLinks(render); // cells and files named in what was just drawn become links once the server has checked them
 
   const el = focused && $('#' + focused);
@@ -474,6 +476,8 @@ document.addEventListener('click', async (e) => {
   try {
     let spot;
     if (target('[data-close]')) $('#details').close();
+    else if ((el = target('[data-mic]'))) await toggleVoice(el.dataset.mic);
+    else if (target('[data-voice-dismiss]')) dismissVoiceNote();
     else if ((el = target('[data-menu]'))) {
       state.menu = state.menu === el.dataset.menu ? null : el.dataset.menu;
       render();
@@ -1016,6 +1020,20 @@ async function poll() {
   setTimeout(poll, isActive() || (jobStatus() === 'waiting' && state.job?.answer) ? 1500 : state.book?.tests?.running ? 3000 : 8000);
 }
 
+initVoice(render);
+// The microphone button takes the focus on a click, so the cursor's place in the box is noted first.
+document.addEventListener('pointerdown', (e) => {
+  const mic = e.target.closest?.('[data-mic]');
+  if (mic) rememberCaret(mic.dataset.mic);
+}, true); // prettier-ignore
+// Ctrl+M in a box with a microphone starts or stops speaking into it.
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== 'm' || !e.target.id) return;
+  if (!document.getElementById(`mic-${e.target.id}`)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleVoice(e.target.id);
+}, true); // prettier-ignore
 render();
 setInterval(tick, 1000);
 (async () => {

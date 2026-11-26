@@ -5,6 +5,7 @@ import {
   attr, baseName, btn, duration, esc, fmtTime, icon, inGroup, isActive, isWarning, jobStatus, jobTitle, pill, playbooks,
   plural, state, STATUS, storedPath,
 } from './core.js'; // prettier-ignore
+import { micButton, voiceNote } from './voice.js';
 import { followingHtml } from './clients.js';
 import { learnedHtml, roundHtml } from './comments.js';
 import { linked } from './links.js';
@@ -233,7 +234,7 @@ function questionCard(q) {
   const hint = choices.length ? 'Something else' : 'Type your answer';
   const own = `<form id="composer" class="own"><kbd>${choices.length ? choices.length + 1 : '›'}</kbd>
     <textarea id="msg" rows="1" aria-label="${hint}" placeholder="${hint}" ${attr('disabled', locked)}></textarea>
-    <button class="send" aria-label="Send" disabled>${icon('send')}</button></form>`;
+    ${micButton('msg', locked)}<button class="send" aria-label="Send" disabled>${icon('send')}</button></form>${voiceNote('msg')}`;
   const keys = choices.length ? `<span class="keys">Press 1–${choices.length + 1} to choose</span>` : '';
   return `<section class="question" aria-label="Question from the agent"><h2>${esc(q.text)}</h2>${facts}
     <div class="opts" role="group" aria-label="Choices">${picks}${own}</div>
@@ -458,5 +459,5 @@ export function composerHtml() {
   return `<form id="composer">${chips}<div class="line">
     <button type="button" class="icon-btn" data-action="attach" aria-label="Add files" title="Add files" ${attr('disabled', !usable)}>${icon('clip')}</button>
     <textarea id="msg" rows="1" aria-label="${hint}" placeholder="${hint}" ${attr('disabled', !usable)}></textarea>
-    <button class="send" aria-label="Send" disabled>${icon('send')}</button></div></form>`;
+    ${micButton('msg', !usable)}<button class="send" aria-label="Send" disabled>${icon('send')}</button></div>${voiceNote('msg')}</form>`;
 }

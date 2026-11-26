@@ -4,6 +4,7 @@
 
 import { runClient } from './clients.js';
 import { $, api, attr, baseName, esc, icon, inGroup, jobUrl, playbooks, plural, state } from './core.js';
+import { micButton, voiceNote } from './voice.js';
 import { linked } from './links.js';
 
 export const canComment = () => !!state.job && !state.job.legacy && inGroup('accepts_comments');
@@ -96,7 +97,7 @@ export function popHtml() {
   return `<div class="catch" data-comment="away"></div>
     <form class="pop" id="comment-form" style="${place}" role="dialog" aria-label="Comment">
       <h2>${esc(label(d))}</h2>${isBox(d) ? snipHtml(d) : ''}
-      <textarea id="note" aria-label="Comment" placeholder="What should change?" maxlength="2000"></textarea>
+      <div class="mic-box"><textarea id="note" aria-label="Comment" placeholder="What should change?" maxlength="2000"></textarea>${micButton('note')}</div>${voiceNote('note')}
       ${rememberHtml(d)}
       <div class="end">${d.id ? '<button type="button" class="btn text" data-comment="delete">Delete</button>' : ''}
         <button type="button" class="btn text" data-comment="cancel">Cancel</button><button class="btn quiet">${d.id ? 'Save' : 'Add comment'}</button></div></form>`;
@@ -379,7 +380,7 @@ export function sentHtml(path) {
       .map((r) => `<div class="answer you"><span class="who">You</span><p>${esc(r.c.text)}</p></div>${answerHtml(r)}`)
       .join('');
     const box = replying
-      ? `<form class="reply" id="reply-form"><textarea id="reply-text" placeholder="Reply" aria-label="Reply to the agent" maxlength="2000"></textarea>
+      ? `<form class="reply" id="reply-form"><div class="mic-box"><textarea id="reply-text" placeholder="Reply" aria-label="Reply to the agent" maxlength="2000"></textarea>${micButton('reply-text')}</div>${voiceNote('reply-text')}
           <div class="row"><button type="button" class="btn text" data-reply-cancel>Cancel</button><button class="btn primary small" ${attr('disabled', state.busy)}>Send</button></div></form>`
       : waiting || !canReply ? '' : `<div class="c-act"><button class="btn text small" data-reply="${last.key}">Reply</button></div>`;
     return `<div class="c ${t.items.some((x) => x.key === state.activeComment) ? 'on' : ''}">

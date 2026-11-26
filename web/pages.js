@@ -3,6 +3,7 @@
 import {
   attr, btn, bytes, currentPlaybook, esc, fmtTime, isWarning, playbooks, state,
 } from './core.js'; // prettier-ignore
+import { micButton, voiceNote } from './voice.js';
 import { clientRow } from './clients.js';
 
 const page = (width, body) => `<div class="page"><div class="${width}">${body}</div></div>`;
@@ -45,7 +46,7 @@ export function setupPage() {
   return page(
     'narrow',
     `<div class="page-head"><h1>New run</h1></div>
-    <div class="box"><textarea id="run-instructions" aria-label="What should the agent produce?" placeholder="What should the agent produce?">${esc(state.instructions[currentPlaybook()?.id] || '')}</textarea></div>
+    <div class="box"><textarea id="run-instructions" aria-label="What should the agent produce?" placeholder="What should the agent produce?">${esc(state.instructions[currentPlaybook()?.id] || '')}</textarea>${micButton('run-instructions')}</div>${voiceNote('run-instructions')}
     <div class="rows">
       ${row('Source files', `<div class="val">${picked}${btn('folder', state.files.length ? 'Change folder' : 'Choose folder', 'quiet', false, 'clip')}${btn('files', 'Choose files or ZIP', 'text')}</div>`)}
       ${row('Playbook', playbookSelect())}
@@ -80,6 +81,7 @@ const UNITS = {
   condense_at_thousands: ['thousand tokens'],
   versions_kept: ['versions'],
   daily_token_limit_thousands: ['million tokens', 1000],
+  voice_max_minutes: ['minutes'],
 };
 const scaleOf = (name) => UNITS[name]?.[1] || 1;
 const shownNumber = (n) => n.toLocaleString('en', { maximumFractionDigits: 3 });
@@ -138,6 +140,8 @@ export function settingsPage() {
     const choices = options[name].choices;
     return field(name, label, toggle(name, label, choices.length ? v[name] === choices[0] : v[name]));
   };
+  const text = (name, label, placeholder = '') =>
+    field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" value="${esc(v[name])}" placeholder="${esc(placeholder)}" autocomplete="off" spellcheck="false" aria-label="${esc(label)}" ${invalid(name)}></label>`);
   const panel = (title, rows) => `<section class="rows"><h2>${esc(title)}</h2>${rows}</section>`;
   const millions = (thousands) => shownNumber(Math.round(thousands / 100) / 10);
   const daily = state.settings.values.daily_token_limit_thousands;
@@ -173,10 +177,17 @@ export function settingsPage() {
           field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
       ) +
       panel(
+        'Voice',
+        choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) +
+          text('voice_live_model', 'Live model') +
+          text('voice_file_model', 'Recording model') +
+          number('voice_max_minutes', 'Longest recording'),
+      ) +
+      panel(
         'Connection',
         field('', 'Model', `<span class="value">${esc(connection.model)}</span>`) +
           field('', 'Service address', `<span class="value">${esc(connection.base_url)}</span>`) +
-          field('litellm_provider', 'LiteLLM provider header', `<label class="unit ${errors.litellm_provider ? 'bad' : ''}"><input id="setting-litellm_provider" data-setting="litellm_provider" value="${esc(v.litellm_provider)}" placeholder="None" autocomplete="off" aria-label="LiteLLM provider header" ${invalid('litellm_provider')}></label>`) +
+          text('litellm_provider', 'LiteLLM provider header', 'None') +
           onOff('model_on_create', 'Name the model when creating a workspace') +
           field('', 'Connection', btn('connection', 'Test', 'quiet small', state.busy)) +
           (connection.warning ? `<p class="problem row">${esc(connection.warning)}</p>` : ''),

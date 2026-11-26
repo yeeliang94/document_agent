@@ -4,6 +4,7 @@
 // playbook's instructions are, so this page reuses the playbook page's pieces (playbooks.js).
 
 import { $, api, attr, btn, esc, icon, jobTitle, plural, state, toast } from './core.js';
+import { micButton, voiceNote } from './voice.js';
 import { base, dialog, historyHtml, nameField, startDraft, unsaved, versionLabel } from './playbooks.js';
 
 const TABS = [
@@ -72,7 +73,7 @@ function notesTab(client) {
     client.saved === client.data.version && client.saved > 1
       ? `<div class="saved"><span>Saved as version ${client.saved}</span><button class="btn text small" data-client-restore="${client.saved - 1}">Undo</button></div>`
       : '';
-  return `<div class="box tall book"><textarea id="client-notes" aria-label="Notes for ${esc(client.data.name)}" placeholder="What to follow for ${esc(client.data.name)}"></textarea></div>
+  return `<div class="box tall book"><textarea id="client-notes" aria-label="Notes for ${esc(client.data.name)}" placeholder="What to follow for ${esc(client.data.name)}"></textarea>${micButton('client-notes')}</div>${voiceNote('client-notes')}
     ${saved}${addedHtml(client)}
     <div class="end">${btn('client-save', 'Save', 'primary', state.busy || !unsaved(client))}</div>`;
 }

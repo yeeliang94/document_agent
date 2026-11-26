@@ -26,6 +26,9 @@ const icons = {
   down1: 'M6 9l6 6 6-6',
   more: 'M7 12a1 1 0 11-2 0 1 1 0 012 0zM13 12a1 1 0 11-2 0 1 1 0 012 0zM19 12a1 1 0 11-2 0 1 1 0 012 0z',
   side: 'M4 5h16v14H4zM9 5v14',
+  mic: 'M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4',
+  stop: 'M8 8h8v8H8z',
+  spin: 'M12 4a8 8 0 108 8',
 };
 export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"/></svg>`;
 export const btn = (action, label, kind = 'quiet', disabled = false, glyph = '') =>
@@ -176,10 +179,12 @@ export function toast(message) {
   state.toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 6000);
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
+  // JSON unless the body says otherwise: a form or a file (a recording) carries its own type.
+  if (options.body && !(options.body instanceof FormData) && !(options.body instanceof Blob) && !headers.has('Content-Type'))
+    headers.set('Content-Type', 'application/json');
   let res = await fetch(path, { ...options, headers });
   if (res.status === 401) {
     const token = window.prompt('Application access token');

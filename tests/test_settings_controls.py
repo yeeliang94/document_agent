@@ -10,7 +10,7 @@ from pathlib import Path
 from app.app_settings import OPTIONS
 
 PAGES = Path(__file__).resolve().parents[1] / 'web' / 'pages.js'
-CONTROL = re.compile(r"\b(?:steps|number|onOff|choice|field)\('([a-z_]+)'")
+CONTROL = re.compile(r"\b(?:steps|number|onOff|choice|field|text)\('([a-z_]+)'")
 
 
 def settings_page() -> str:

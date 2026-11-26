@@ -10,20 +10,22 @@ import os
 import re
 import shutil
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import InvalidStatus
 
-from . import app_settings, cases, feedback, jobstatus, links, plain_errors, preview, replay, tuning
+from . import app_settings, cases, feedback, jobstatus, links, plain_errors, preview, replay, tuning, voice
 from .config import ROOT, Settings, settings
 from .engine import versions
 from .engine.agent import UPLOAD_LIMIT
@@ -81,18 +83,22 @@ def create_app(settings_override: Settings | None = None):
     api.state.store = store
     api.state.runner = runner
     api.state.settings = conf
+    api.state.voice_connect = ws_connect  # where the live voice relay opens its session; tests put a fake here
 
     trusted_hosts = conf.trusted_hosts()
     allowed_origins = {o.rstrip('/') for o in conf.allowed_origins}
 
-    @api.middleware('http')
-    async def boundary(request: Request, call_next):
+    def known_host(header: str) -> bool:
         # A DNS-rebinding page sends its own name as Host, so reject unknown hosts.
         try:
-            host = urlparse('//' + request.headers.get('host', '')).hostname or ''
+            host = urlparse('//' + header).hostname or ''
         except ValueError:
             host = ''
-        if '*' not in trusted_hosts and host not in trusted_hosts:
+        return '*' in trusted_hosts or host in trusted_hosts
+
+    @api.middleware('http')
+    async def boundary(request: Request, call_next):
+        if not known_host(request.headers.get('host', '')):
             return JSONResponse({'detail': 'Unknown host name. Add it to DI_ALLOWED_HOSTS.'}, 400)
         if request.url.path.startswith('/api/'):
             origin = (request.headers.get('origin') or '').rstrip('/')
@@ -1041,6 +1047,107 @@ def create_app(settings_override: Settings | None = None):
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
         return FileResponse(found, filename=found.name)
+
+    # --- Voice: speak instead of type (app/voice.py) ---------------------------------------------------------
+    # The HTTP boundary above does not see WebSockets, so the live route checks host, origin and token itself.
+    # A browser cannot add headers to a WebSocket, so the access token comes in the first message, not the address.
+
+    def same_origin(ws: WebSocket) -> bool:
+        origin = (ws.headers.get('origin') or '').rstrip('/')
+        if origin in allowed_origins:
+            return True
+        parts = urlparse(origin)
+        return parts.scheme in ('http', 'https') and parts.netloc == ws.headers.get('host', '')
+
+    @api.websocket('/api/voice/live')
+    async def voice_live(ws: WebSocket):
+        if not known_host(ws.headers.get('host', '')) or not same_origin(ws):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+
+        async def refuse(message: str, action: str = ''):
+            with suppress(Exception):
+                await ws.send_json({'type': 'error', 'message': message, 'action': action})
+                await ws.close(code=1011)
+
+        try:
+            first = json.loads(await asyncio.wait_for(ws.receive_text(), 10))
+            token = str(first.get('token') or '') if isinstance(first, dict) else ''
+        except (TimeoutError, ValueError, KeyError, WebSocketDisconnect):
+            return await refuse('The voice connection did not start properly. Try again.', 'retry')
+        if conf.access_token and not hmac.compare_digest(token.encode(), conf.access_token.encode()):
+            return await refuse('Access token required.')
+        if not conf.api_key:
+            return await refuse('Add OPENAI_API_KEY to .env and restart the application.')
+        values = store.settings()
+        minutes = values['voice_max_minutes']
+        opened = False
+        try:
+            async with api.state.voice_connect(
+                voice.live_url(conf.base_url),
+                additional_headers=voice.headers(conf.api_key, values['litellm_provider']),
+                open_timeout=10,
+                max_size=None,
+            ) as upstream:
+                await upstream.send(json.dumps(voice.session_update(values['voice_live_model'])))
+                await ws.send_json({'type': 'ready'})
+                opened = True
+                # A page that opens a session and then sends nothing does not hold it open past the longest recording.
+                await asyncio.wait_for(voice.relay(ws, upstream, minutes), minutes * 60 + voice.SETTLE_SECONDS + 30)
+        except WebSocketDisconnect:
+            return
+        except voice.VoiceError as error:
+            return await refuse(str(error), error.action)
+        except TimeoutError:
+            if opened:
+                return await refuse(voice.limit_message(minutes))
+            return await refuse('The transcription service did not answer in time. Try again.', 'retry')
+        except InvalidStatus as error:
+            code = error.response.status_code
+            return await refuse(f'The transcription service refused the live connection (HTTP {code}). If your gateway '
+                                'does not allow it, choose "After you stop" for voice in Settings.', 'settings')  # fmt: skip
+        except Exception as error:
+            return await refuse(f'Could not reach the transcription service ({type(error).__name__}). Try again.', 'retry')
+        with suppress(Exception):
+            await ws.close()
+
+    @api.get('/api/voice')
+    def voice_config():
+        values = store.settings()
+        minutes = values['voice_max_minutes']
+        return {'mode': values['voice_mode'], 'max_minutes': minutes, 'limit_message': voice.limit_message(minutes)}
+
+    @api.post('/api/voice/transcribe')
+    async def voice_transcribe(request: Request):
+        """The recording arrives as the request body, read into memory up to the limit and never written to disk."""
+        if not conf.api_key:
+            raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
+        values = store.settings()
+        minutes = values['voice_max_minutes']
+        # A browser recording is compressed far below this: 16-bit audio at 24 kHz, for the longest recording set.
+        limit = min(voice.FILE_LIMIT_BYTES, minutes * 60 * voice.BYTES_PER_SECOND)
+        if int(request.headers.get('content-length') or 0) > limit:
+            raise HTTPException(413, voice.too_long_message(minutes))
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > limit:
+                raise HTTPException(413, voice.too_long_message(minutes))
+        if not data:
+            raise HTTPException(400, 'The recording was empty.')
+        client = runner.engine.endpoint(values).client().with_options(timeout=120, max_retries=0)
+        name = voice.file_name(request.headers.get('content-type', ''))
+
+        async def lines():
+            try:
+                async for part in voice.transcribe_file(client, values['voice_file_model'], name, bytes(data)):
+                    yield json.dumps(part) + '\n'
+            except Exception as error:
+                failed = voice.refused(getattr(error, 'message', None) or str(error))
+                yield json.dumps({'type': 'error', 'message': str(failed), 'action': failed.action}) + '\n'
+
+        return StreamingResponse(lines(), media_type='application/x-ndjson')
 
     @api.post('/api/connection-check')
     async def connection_check():

@@ -2755,3 +2755,136 @@ button.chip:hover {
   text-align: right;
   font-size: 13px;
 }
+
+/* Speak instead of type (web/voice.js): one microphone button on every box. Grey at rest; while listening it is a
+   stop button in the accent colour with a soft ring; while the words are written out it spins. */
+.mic {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  flex: none;
+  position: relative;
+}
+.mic:hover:not(:disabled) {
+  background: var(--grey-bg);
+  color: var(--text);
+}
+.mic:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.mic svg {
+  width: 18px;
+  height: 18px;
+}
+.mic.listening,
+.mic.listening:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.mic.listening svg path {
+  fill: currentColor;
+}
+.mic.listening {
+  animation: mic-ring 1.2s ease-in-out infinite;
+}
+.mic.working {
+  color: var(--accent);
+}
+.mic.working svg {
+  animation: mic-spin 1s linear infinite;
+}
+@keyframes mic-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--accent-bg);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--accent-bg);
+  }
+}
+@keyframes mic-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.mic-time {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  align-self: center;
+}
+.composer .line .mic,
+.own .mic {
+  height: 34px;
+  width: 34px;
+}
+/* Inside a writing box the button sits in the top-right corner, clear of the text and the resize grip. */
+.box {
+  position: relative;
+}
+.box > .mic {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+}
+.box > .mic-time {
+  position: absolute;
+  right: 8px;
+  top: 44px;
+  width: 32px;
+  text-align: center;
+}
+.box > textarea {
+  padding-right: 32px;
+}
+/* The comment and reply boxes: the same corner, inside the box's own frame. */
+.mic-box {
+  position: relative;
+}
+.mic-box > .mic {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+}
+.mic-box > textarea {
+  padding-right: 40px;
+}
+.mic-box > .mic-time {
+  position: absolute;
+  right: 4px;
+  top: 40px;
+  width: 32px;
+  text-align: center;
+}
+/* A note sits close under its own box, not halfway to the next section. */
+.narrow > .voice-note,
+.wide > .voice-note {
+  margin-top: -16px;
+}
+.voice-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 12px;
+  padding: 8px 8px 8px 16px;
+  margin-top: 8px;
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+  font-size: 13px;
+}
+.voice-note.hint {
+  background: none;
+  color: var(--muted);
+  padding-left: 16px;
+}
+.voice-note p {
+  flex: 1;
+  margin: 0;
+}
+.voice-note .icon-btn {
+  color: inherit;
+}

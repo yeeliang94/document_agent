@@ -3,6 +3,7 @@
 // version; the agent can propose a rewrite, and nothing is saved until the person accepts it.
 
 import { $, api, attr, btn, esc, icon, jobTitle, pill, plural, playbooks, state, toast } from './core.js';
+import { micButton, voiceNote } from './voice.js';
 
 const TABS = [
   ['instructions', 'Instructions'],
@@ -108,11 +109,11 @@ function instructionsTab(book) {
   const saved = book.saved === book.data.version && book.saved > 1
     ? `<div class="saved"><span>Saved as version ${book.saved}</span><button class="btn text small" data-restore="${book.saved - 1}">Undo</button></div>`
     : '';
-  return `<div class="box tall book"><textarea id="playbook-text" aria-label="Instructions the agent follows on every ${esc(book.data.name)} run" ${attr('disabled', waiting)}></textarea></div>
+  return `<div class="box tall book"><textarea id="playbook-text" aria-label="Instructions the agent follows on every ${esc(book.data.name)} run" ${attr('disabled', waiting)}></textarea>${micButton('playbook-text', waiting, 'the instructions')}</div>${voiceNote('playbook-text')}
     ${saved}
     ${waiting ? `<div class="me">${esc(tune.ask)}</div><div class="live"><i></i><b>Rewriting the instructions</b></div>` : ''}
     <form class="ask" id="tune-form"><input id="tune" aria-label="Ask the agent to change the instructions" placeholder="Ask the agent to change the instructions" autocomplete="off" ${attr('disabled', waiting || !state.config?.configured)}>
-      <button class="send" aria-label="Send" ${attr('disabled', waiting || !state.config?.configured)}>${icon('send')}</button></form>
+      ${micButton('tune', waiting || !state.config?.configured, 'the request')}<button class="send" aria-label="Send" ${attr('disabled', waiting || !state.config?.configured)}>${icon('send')}</button></form>${voiceNote('tune')}
     <div class="end">${btn('playbook-save', 'Save', 'primary', state.busy || waiting)}</div>`;
 }
 
@@ -245,6 +246,8 @@ export function syncPlaybook() {
   // The agent rewrites the saved text, so it is asked once the person's own edits are saved.
   const blocked = waiting || !state.config?.configured || unsaved();
   ask.disabled = blocked;
+  const mic = $('[data-mic="tune"]');
+  if (mic && !mic.classList.contains('listening')) mic.disabled = blocked;
   ask.placeholder = unsaved() ? 'Save your edits to ask the agent' : 'Ask the agent to change the instructions';
   $('#tune-form .send').disabled = blocked || !state.book.ask.trim();
 }
