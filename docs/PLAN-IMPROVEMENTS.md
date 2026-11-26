@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `89%` (41 of 46 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 proposed)
+**Overall Progress:** `67%` (41 of 61 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phases 14-17 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -306,7 +306,9 @@ The browser never holds the key. It sends its audio to this app, which opens the
   - **Verify:** I check each box in a browser, plus a blocked microphone and a gateway that refuses.
   - **Result:** prototype approved 2026-11-27 (`prototype/voice-input/index.html` on the `prototypes` branch). `web/voice.js` draws one button (also Ctrl+M in the box) on the message box, the question card, comment and reply boxes, New run's goal, playbook instructions and its ask box, and client notes. Words go where the cursor was; a recording belongs to the screen it started on and stops, keeping its words, when that screen is left or the box is changed under it. Checked in a browser with a spoken clip in place of a microphone, using real clicks: each box listed except the reply box and the question card (same code, not seen), both modes, blocked and missing microphone, an insecure address, a wrong model name, a dropped connection with Try again. One difference from the prototype: words still being heard cannot be grey inside a plain text box, so they appear in the normal colour.
 
-### Phase 13: Getting to know a new client (proposed 2026-11-27; not yet approved)
+### Phase 13: Getting to know a new client (paused 2026-11-26, more thinking first)
+
+Paused by the owner on 2026-11-26 to think it through further. Nothing here is built until it is picked up again.
 
 Asked 2026-11-27. Today a client's notes are written by hand, or grow from remembered comments. For a new client, the person often already has last month's files: the deliverables someone made before, and the inputs behind them. Those files show how this client is done, including where it differs from the playbook and from other clients. The agent should notice those differences and offer them, as a helpful assistant would, rather than wait to be told or apply them silently.
 
@@ -326,6 +328,69 @@ Open questions for you before this starts:
 - Should the scout also run for a known client whenever new earlier runs appear, or only the first time?
 - "Different from the rest of the clients": comparing against the playbook keeps each client's files private from the others. Comparing against other clients' notes as well would catch more, but lets one client's practice inform another's. I'd start with the playbook only.
 - This fits beside the existing scouts (helpers for large folders, Settings: "Helper agents for large folders"), which are off by default. The new scout would be its own switch.
+
+### Phase 14: Small wins (approved 2026-11-26)
+
+These come from `reports/Small wins - agent tools and user experience.md`. These are the first, cheapest batch. Each one is a general fix, not a rule for one kind of document.
+
+- [ ] 🟥 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
+  - **Verify:** in a browser, with the tab in the background, a question, a finish and a stop each raise one notification. With the switch off, none is raised. A blocked permission shows a plain sentence on the Settings page.
+
+- [ ] 🟥 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
+  - When a tool fails, say which tool failed and with what input, not only the error (agent.py `_tool_error`).
+  - When a file is missing, point to `/mnt/data/outputs/`, where outputs belong, not `/mnt/data/` (sandbox.py `download`).
+  - When the checks themselves crash, say the fault is in the checks, not in the agent's work. Tell it to save again once, then carry on and note it (agent.py, near the `check.crashed` event).
+  - Duplicate rows: add what to do. Remove one, or if both are real, say why in notes.md (checks.py `_duplicates`).
+  - Formulas the app can't work out: name the cells, the first 10 plus a count (checks.py summary).
+  - Every list that is cut short says how many were left out: document-map entries, used-but-not-cited files, and the issues in the resume card.
+  - The resume card says why the last run stopped: a limit reached, the service failing, or the user stopping it (service.py resume).
+  - The forced fix pass carries every part of the failed check, not only `issues` (agent.py).
+  - The reviewer is asked to name a file and cell for each doubt. The agent is told how many low-severity doubts were left out.
+  - The agent is told, in one line, when its history has been condensed, and to re-read notes.md.
+  - **Verify:** a test for each message above. One replay of a lesson test passes with the same score. Every changed message is shown here, before and after.
+
+- [ ] 🟥 **Step 49: Working notes from the start.** The briefing asks the agent to write what it finds into notes.md as it goes (which file wins, where each column comes from, open doubts), not only at the end. It re-reads the file after history is condensed. This is one briefing change, with no new tool.
+  - **Verify:** on a live run of the sample packet, notes.md holds findings before the first save, and the final score is unchanged.
+
+- [ ] 🟥 **Step 50: A new client's first screen** (prototype first): a client with no notes yet shows what notes are for and how they grow (typed here, or kept from a comment with "Remember"), instead of a blank box. When the "what I learned" list is built, this screen points to it.
+  - **Verify:** in a browser, a new client, a client with notes, and a client whose notes were all removed each show the right state.
+
+### Phase 15: Carried over from the older plan (`docs/PLAN-NEXT.md`)
+
+Two steps from the older plan were never built. They move here so one plan holds all open work.
+
+- [ ] 🟥 **Step 51: Cost per run** — a money figure for each run, from its token use and a price per million tokens (input and output, Settings values), shown on the run and summed per playbook. Time and token use are already shown in the Technical log.
+  - **Verify:** tests for the sum on a run, a replay and a playbook total; a price of 0 shows no money figure; the run and playbook screens checked in a browser.
+- [ ] 🟥 **Step 52: Several runs at once** — a Settings number, default 2; runs past the limit wait in line and say so; replays share the same limit.
+  - **Verify:** tests for two runs side by side, a third that waits and then starts, pause and resume of one, and a restart with both running.
+
+### Phase 16: Full-screen file panel (prototype approved 2026-11-26)
+
+The design is `prototype/full-screen-files/index.html` on the `prototypes` branch (commit dd32a0b), drawn with 240 files.
+
+- [ ] 🟥 **Step 53: A file list that copes with many files** — outputs and the agent's notes on top, the checks folded into one line, then sources: a find box, filter chips with counts (all, used, reference, excluded), folders folded when there are more than 40 files, short folder paths, and long names cut in the middle so the end stays readable.
+  - **Verify:** in a browser with 240 files: find, each filter, folding and unfolding, and a run with only a few files.
+- [ ] 🟥 **Step 54: A one-row file bar** — back, the name, one Comment button, a More menu (find, zoom, download), full screen and close on one row; sheet tabs (scrolling), the status pill and the Changes switch on the row below.
+  - **Verify:** in a browser at 642 and 1440 wide: a long name, many sheets, a PDF, a text file, comment on and off, each More item.
+- [ ] 🟥 **Step 55: Full screen with the file list beside it** — full screen for the list and for an open file, with a list of all files down the left (340px, can be hidden). Moving between sources, outputs and notes stays in full screen; Esc leaves it.
+  - **Verify:** in a browser: enter and leave, open three files in a row from the side list, hide the list, Esc, and a narrow window (full screen is not offered below 1000px).
+
+### Phase 17: Leftovers from the exploratory test (2026-11-26)
+
+The tester's first batch (source links, runs told apart, Settings errors in view, the source panel's wording, "used" counts) was fixed in commit 9bbcc64. These are the rest. Steps that change a screen get a prototype first.
+
+- [ ] 🟥 **Step 56: The page address follows the screen** — each run, playbook, client and Settings has its own address, so Refresh and Back keep your place; a run that is opening shows a loading sign, not the old page.
+  - **Verify:** in a browser: Refresh and Back on each screen, an address for a run that no longer exists, and a slow run opening.
+- [ ] 🟥 **Step 57: Delete a playbook** (prototype first) — with a confirmation that names what goes with it; its past runs stay and still open. Long names show in full on hover and are not cut mid-word. Then remove the "QA test playbook" the tester left in the scratch data.
+  - **Verify:** tests that a deleted playbook's runs still open and its clients are unaffected; the flow checked in a browser.
+- [ ] 🟥 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.
+  - **Verify:** in a browser at both widths.
+- [ ] 🟥 **Step 59: No "What should change?" on input files** (prototype first) — input files the agent does not edit get a note or a question, not a change request; the comment box no longer covers the cell it is about.
+  - **Verify:** in a browser: a comment on an input file and an output file, at 642 and 1440 wide.
+- [ ] 🟥 **Step 60: Look at a past playbook version before restoring it** (prototype first).
+  - **Verify:** in a browser: open two past versions, then restore one.
+- [ ] 🟥 **Step 61: Polish** (one prototype for the lot) — names cut short in the chat file card, step chips and the mobile file title; long step text readable in full; the blank-rename message shown inside the dialog and cleared on Cancel; one number format per column in the workbook view; the total time moved off the Notes row; "run" used everywhere instead of "job"; plainer Settings labels; the Playbook dropdown sized like Client; one accent colour; a hint on why Start is greyed out; placeholder text for empty playbook instructions.
+  - **Verify:** each item checked in a browser at 375, 642 and 1440 wide.
 
 ## Risks
 
