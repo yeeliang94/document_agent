@@ -523,6 +523,121 @@ body.loading #main {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* The agent's plan, pinned under the stage line */
+.plan-wrap {
+  padding: 0 32px 12px;
+}
+.plan-wrap:empty {
+  display: none;
+}
+.plan {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--panel);
+  border-radius: 12px;
+}
+.plan-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 16px;
+  text-align: left;
+  min-width: 0;
+}
+.plan-head h2 {
+  font-size: 14px;
+}
+.plan-head .count,
+.plan-head .now-line {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.plan-head .now-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-head svg {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  flex: none;
+  color: var(--faint);
+  transition: transform 0.2s;
+}
+.plan.open .plan-head svg {
+  transform: rotate(90deg);
+}
+.plan ol {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0 16px 12px;
+  flex-direction: column;
+  gap: 4px;
+}
+.plan.open ol {
+  display: flex;
+}
+.plan li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  font-size: 13px;
+}
+.plan li .mark {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid #cfcfd4;
+  display: grid;
+  place-items: center;
+}
+.plan li.done .mark {
+  background: var(--ok-fg);
+  border-color: var(--ok-fg);
+  color: #fff;
+}
+.plan li .mark svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+}
+.plan li.done > span:nth-child(2),
+.plan li.later > span:nth-child(2) {
+  color: var(--muted);
+}
+.plan li.now .mark {
+  border-color: var(--accent);
+}
+.plan li.now .mark::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.plan li s {
+  display: block;
+  color: var(--faint);
+}
+.plan li .pill {
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 8px;
+}
+.pill.new {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
 .scroll {
   flex: 1;
   overflow: auto;
@@ -688,6 +803,208 @@ button.file:hover {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
   flex: none;
+}
+/* A run's work folded by stage, each action readable in full */
+.work-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stage-head {
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  text-align: left;
+}
+.stage-head svg {
+  width: 14px;
+  height: 14px;
+  align-self: center;
+  color: var(--muted);
+  transition: transform 0.2s;
+}
+.stage.open > .stage-head svg {
+  transform: rotate(90deg);
+}
+.stage-head .name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.stage-head .sum {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage.open > .stage-head .sum {
+  visibility: hidden;
+}
+.stage-head:hover .sum {
+  color: var(--text);
+}
+.stage-head .flagged {
+  color: var(--warn-fg);
+}
+.stage-head time {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.stage-body {
+  display: none;
+  margin: 4px 0 4px 6px;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+  flex-direction: column;
+  gap: 4px;
+}
+.stage.open > .stage-body {
+  display: flex;
+}
+.thought {
+  margin-top: 8px;
+}
+.stage-body > .thought:first-child {
+  margin-top: 0;
+}
+.th-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 2px 0;
+  text-align: left;
+}
+.th-head svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--faint);
+  transition: transform 0.2s;
+}
+.thought.open .th-head svg {
+  transform: rotate(90deg);
+}
+.th-head:hover svg {
+  color: var(--text);
+}
+.th-text {
+  display: none;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px 0 4px 18px;
+  max-width: 62ch;
+}
+.th-text p + p {
+  margin-top: 8px;
+}
+.th-text .th-sub {
+  color: var(--text);
+}
+.thought.open .th-text {
+  display: block;
+}
+.acts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.acts:empty {
+  display: none;
+}
+.acts.under {
+  padding-left: 18px;
+}
+.change {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 0 4px;
+}
+.change b {
+  font-weight: 400;
+  color: var(--text);
+}
+.step.act {
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+.step.act:hover,
+.step.act.on {
+  background: var(--panel);
+  color: var(--text);
+}
+.step.act.on {
+  border-radius: 8px 8px 0 0;
+}
+.step.act .file {
+  flex: 0 100 auto;
+  min-width: 48px;
+}
+.detail {
+  background: var(--panel);
+  border-radius: 0 0 12px 12px;
+  margin: 0 -8px 8px;
+  padding: 4px 16px 16px;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px 16px;
+  font-size: 13px;
+}
+.detail dt {
+  color: var(--muted);
+}
+.detail dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.detail .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0;
+}
+.detail .chip {
+  max-width: 100%;
+  padding: 2px 10px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+.detail pre {
+  margin: 0;
+  background: var(--sheet);
+  border-radius: 12px;
+  padding: 12px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow: auto;
+}
+.detail .back {
+  margin: 0;
+  padding-left: 18px;
+}
+.detail .faint {
+  color: var(--faint);
+}
+.detail .code {
+  color: var(--muted);
+}
+.detail .code:hover {
+  color: var(--text);
 }
 @keyframes sweep {
   from {
@@ -2133,6 +2450,7 @@ dialog > h3 {
     flex-basis: 100%;
   }
   .stages,
+  .plan-wrap,
   .scroll {
     padding-left: 16px;
     padding-right: 16px;
@@ -2156,8 +2474,17 @@ dialog > h3 {
 }
 @media (max-width: 560px) {
   .live .file,
-  .q-foot .keys {
+  .q-foot .keys,
+  .step.act .file,
+  .step.act .more {
     display: none;
+  }
+  .detail {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .detail dd + dt {
+    margin-top: 8px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

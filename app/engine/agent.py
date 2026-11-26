@@ -46,6 +46,7 @@ from openai import APIConnectionError, APIError
 from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
 
+from . import plan as plans
 from . import versions
 from .checks import inventory, run_checks
 from .control import Control, added_files, user_content, without_pictures
@@ -184,6 +185,7 @@ class Job:
     calls: int = 0  # model calls in the current stream; with turns_used, the step the run is on
     stage: str = 'reading'  # reading, filling, checking: how far the work has got, for the screen
     condensed_unsaid: bool = False  # the lead's history was condensed and it has not been told yet
+    plan: list = field(default_factory=list)  # the agent's checklist, [{'step', 'status'}]; see plan.py
 
 
 COORDINATOR = """You are a document-processing agent with a Python sandbox (the code interpreter). You own one job from start to finish: decide what matters, do the work, check it, and hand back a result a finance team can trust. The goal card at the end says what this job needs.
@@ -200,6 +202,7 @@ Besides the deliverables, save under {out}/:
 
 How to work:
 - Start from the goal: work out what the deliverables need, then which files can supply it.
+- Once you have had a first look at the files, write your plan with update_plan: three to eight steps in plain words, each a piece of work the person would recognise ("Match each employee to the bank file"), not a single script. As you go, tick each step done and mark the one you are on, in the same reply as your next piece of work, so it costs no extra step. When the plan changes, send the new plan and say why in a sentence. The person sees the plan at the top of the run, and it is kept with the run: after the conversation is condensed, or when a run continues later, you are given it back.
 - Keep notes.md from the start, not only at the end: write each finding there in a line when you reach it, before your first save (which file wins where two compete, where each output column comes from, what you excluded and why, each open doubt). Keep it short: a person should read it in a minute, and the time goes into the work, not the notes. In a long run the older part of this conversation is condensed and keeps only the gist, and a run that stops early continues in a fresh sandbox; your notes keep every word for both. When you are told the conversation was condensed, re-read notes.md before you carry on.
 - Read the real files before you decide anything. Extract the packet zip (every part, if it comes in parts) into /mnt/data/packet and explore with code: walk the tree, open workbooks with openpyxl (hidden sheets too) and pandas, read documents (python-docx, pypdf), open nested zips, and print compact summaries. Never print whole large sheets. A scan or a photo has no text to pull out: recognise its text with code (OCR) to find the pages that matter, then look at those pages yourself (show the page, or the part you need enlarged, as an image) and take names, dates and figures from what you see. OCR misreads digits and drops faint or handwritten marks, so it finds the page; your eyes read it. Cover a lot of ground per call; one script can profile many files. Open each script with a one-line comment that says in plain words what it is for; the user sees that line as your progress.
 - Read each template the same way before you fill it: where its instructions, tables, totals and lookup lists sit, and what is example or leftover content. Templates vary and can be messy; decide from what you see.
@@ -302,18 +305,25 @@ def _record_code(store: RunStore, who: str, raw) -> str | None:
 RUN_CONFIG = RunConfig(call_model_input_filter=model_input)
 
 
-def _settings(effort: str, cache_key: str | None = None, condense_at: int = 0) -> ModelSettings:
+def _settings(
+    effort: str, cache_key: str | None = None, condense_at: int = 0, summary: str | None = None
+) -> ModelSettings:
     """cache_key groups calls that share a prompt prefix, so OpenAI routes them to the same cache: one key per job and
     role, kept when a run continues or retries a dropped stream (the SDK's own key changes each time). A resume opens a
     fresh sandbox, whose new container id changes the prefix, so it starts cold either way.
 
     condense_at: once a request reaches this many tokens, OpenAI condenses the older history into one encrypted item
     and later requests send only what follows it (0: never). It keeps the gist, not every detail, so the briefing
-    tells the agent to keep what matters in notes.md."""
+    tells the agent to keep what matters in notes.md.
+
+    summary: ask for a summary of the model's thinking ('auto' or 'detailed', see plan.SUMMARY), shown on the run
+    screen. Only the lead asks; a service that refuses it is asked again without it (see _drive)."""
     return ModelSettings(
         context_management=[{'type': 'compaction', 'compact_threshold': condense_at}] if condense_at else None,
         parallel_tool_calls=True,
-        reasoning=Reasoning(effort=effort) if effort != 'none' else None,
+        reasoning=(Reasoning(effort=effort, summary=summary) if summary else Reasoning(effort=effort))
+        if effort != 'none'
+        else None,
         store=False,  # OpenAI keeps no copy of responses; reasoning travels encrypted in the request instead
         response_include=['code_interpreter_call.outputs', 'reasoning.encrypted_content'],
         extra_args={'prompt_cache_key': cache_key} if cache_key else None,
@@ -561,6 +571,26 @@ async def remember(
     return await asyncio.to_thread(ctx.context.control.remember, comment, lesson, scope)
 
 
+class PlanStep(BaseModel):
+    step: str = Field(description='The step in a few plain words, e.g. "Match each employee to the bank file".')
+    status: Literal['pending', 'in_progress', 'done']
+
+
+@function_tool(failure_error_function=_tool_error)
+async def update_plan(ctx: RunContextWrapper[Job], steps: list[PlanStep], why: str = '') -> str:
+    """Write your plan as a short checklist, or update it: tick steps done, mark the step you are on, or change the
+    steps. Send the whole plan each time. The person sees it at the top of the run. Call it alongside your next piece
+    of work rather than on its own.
+
+    Args:
+        steps: The whole plan in order, three to eight steps, each under 120 characters: "done", "in_progress"
+            (the one step you are on) or "pending".
+        why: When you add, drop or reword a step: why, in one plain sentence the person reads. Empty when you only
+            tick steps off.
+    """
+    return plans.keep(ctx.context, [s.model_dump() for s in steps], why)
+
+
 @function_tool(failure_error_function=_tool_error)
 async def look_at_output(ctx: RunContextWrapper[Job], file: str, sheet: str = '', cells: str = '') -> list:
     """Look at one of your output workbooks as the person receiving it will see it in Excel: a picture drawn from the
@@ -793,6 +823,7 @@ def _set_stage(job: Job, stage: str) -> None:
     """Move the run on to a later stage (never back), and say so on the screen."""
     if STAGES.index(stage) > STAGES.index(job.stage):
         job.stage = stage
+        job.store.event('stage.changed', stage=stage)  # where the work moves on, so the screen can fold by stage
         progress(job)
 
 
@@ -1003,7 +1034,7 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
                     if near := _near_limits(job, job.turns_used + result.current_turn, result.context_wrapper.usage):
                         warning = _warn(job, store, near)
                     if getattr(job, 'condensed_unsaid', False):
-                        warning = f'{warning} {CONDENSED_NOTE}'.strip()
+                        warning = f'{warning} {CONDENSED_NOTE}{plans.reminder(job)}'.strip()
                 if stop or messages or warning:
                     result.cancel(mode='after_turn')  # finish the current turn, so no tool call is left half done
         except MaxTurnsExceeded:
@@ -1017,7 +1048,14 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
             # run; a request it refuses outright (400, 401, 403, 404) is not worth retrying.
             item = refused_item(error)
             sent = result.to_input_list() if result.new_items else prompt
-            if item and item not in job.refused and is_sandbox_step(sent, item):
+            if _asked_for_summary(agent) and plans.summary_refused(error):
+                # The service does not take the request for a summary of the model's thinking (some gateways do
+                # not): ask again without it. The run carries on as before, only with no thinking on the screen.
+                plain = Reasoning(effort=agent.model_settings.reasoning.effort)
+                agent.model_settings = replace(agent.model_settings, reasoning=plain)
+                store.event('thinking.refused', error=f'{type(error).__name__}: {error}'[:300])
+                echo('  the AI service does not send summaries of its thinking; carrying on without them')
+            elif item and item not in job.refused and is_sandbox_step(sent, item):
                 job.refused.add(item)
                 store.event('model.item_refused', item=item, error=f'{type(error).__name__}: {error}'[:300])
                 echo(f'  OpenAI could not find an earlier step ({item}); sending it as a note and carrying on')
@@ -1063,6 +1101,11 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
             job.condensed_unsaid = False  # a finished pass has nothing left to re-read its notes for
             return result  # finished; a warning that came as it finished has nothing left to warn about
         prompt = await _carry_on(job, store, echo, result.to_input_list(), messages, warning)
+
+
+def _asked_for_summary(agent) -> bool:
+    reasoning = getattr(getattr(agent, 'model_settings', None), 'reasoning', None)
+    return bool(getattr(reasoning, 'summary', None))
 
 
 async def _carry_on(job: Job, store: RunStore, echo, base, messages: list, warning: str, **cut) -> list:
@@ -1199,10 +1242,14 @@ async def run_job(
     versions: Path | None = None,
     versions_kept: int = 20,
     max_questions: int = MAX_QUESTIONS,
+    thinking: str = 'off',
+    plan: list | None = None,
 ) -> RunStore:
     """Run one job. outputs, on_event and control let the app keep outputs in the job folder, show events and steer
     the run. resume, for a run that continues an earlier one in a fresh sandbox, replaces the opening prompt (with
-    resume_images as its pictures, each {'name', 'data'}); the earlier outputs are uploaded so the agent can pick up from them."""
+    resume_images as its pictures, each {'name', 'data'}); the earlier outputs are uploaded so the agent can pick up from them.
+    thinking: 'off', 'short' or 'detailed', whether the lead asks for summaries of its thinking (plan.SUMMARY).
+    plan: the agent's plan from the run this one continues, kept as it was (plan.py)."""
     set_tracing_disabled(True)  # keep traces local; the run folder is the record
     shape_settings = SHAPES[shape]
     max_scouts = shape_settings['max_scouts'] if max_scouts is None else max_scouts
@@ -1231,6 +1278,7 @@ async def run_job(
         condense_at=condense_at,
         look_before_finish=look_before_finish,
         max_questions=max_questions,
+        thinking=thinking,
         input_zip=spec.zip.name,
         deliverables=[d.name for d in spec.deliverables],
     )
@@ -1292,7 +1340,10 @@ async def run_job(
                 max_questions=max_questions,
                 skills_packed=packed,
                 control=control,
+                plan=list(plan or []),
             )
+            if job.plan:  # carried over from the run this one continues
+                store.write_json('plan.json', {'steps': job.plan, 'why': '', 'carried_over': True})
             inputs_text = '\n'.join(
                 f'- {"template" if d.template else "format"} for {d.name}: {remote[(d.template or d.format_path).name]}'
                 for d in spec.deliverables
@@ -1312,7 +1363,7 @@ async def run_job(
                 tools.append(remember)
             if spec.known_clients and not spec.client:
                 tools.append(follow_client)
-            tools.append(save_outputs)
+            tools += [update_plan, save_outputs]
             lead = Agent[Job](
                 name='lead',
                 model=settings.model_for(),
@@ -1335,7 +1386,9 @@ async def run_job(
                 ),
                 tools=tools,
                 output_type=JobSummary,
-                model_settings=_settings(effort, cache_key(settings, spec.id, 'lead'), condense_at),
+                model_settings=_settings(
+                    effort, cache_key(settings, spec.id, 'lead'), condense_at, plans.SUMMARY.get(thinking)
+                ),
             )
             restoring = bool(resume) and any(store.outputs.iterdir())
             keepalive = asyncio.create_task(_keepalive(main, store))
@@ -1343,6 +1396,7 @@ async def run_job(
             try:
                 async with asyncio.timeout(timeout_seconds) as clock:
                     job.clock, job.time_limit = clock, timeout_seconds
+                    store.event('stage.changed', stage=job.stage)  # the screen folds this run's work by stage
                     progress(job)
                     opening = 'Start the job.'
                     if restoring:
@@ -1549,7 +1603,13 @@ def _log_stream(event, store: RunStore, echo, files=(), live: dict | None = None
             # The item says nothing about whether the script raised an error: its outputs hold only what it printed.
             code = data.item.code or ''
             live.setdefault(data.item.id, {})['shown'] = True
-            store.event('code.finished', summary=code_summary(code), files=code_files(code, files))
+            store.event('code.finished', summary=code_summary(code), files=code_files(code, files), item=data.item.id)
+        elif kind == 'response.output_item.done' and getattr(data.item, 'type', '') == 'reasoning':
+            # A summary of the model's thinking, when one was asked for and the service sends it. It ends before
+            # the work it led to starts, so the screen puts it above that work.
+            parts = plans.thought_parts(data.item)
+            if parts:
+                store.event('thinking', parts=parts)
         return
     if event.type != 'run_item_stream_event':
         return
@@ -1566,6 +1626,7 @@ def _log_stream(event, store: RunStore, echo, files=(), live: dict | None = None
                 summary=code_summary(raw.code),
                 files=code_files(raw.code, files),
                 shown=bool(live.get(getattr(raw, 'id', None) or '', {}).get('shown')),  # the feed already has it
+                item=getattr(raw, 'id', None),
             )
             echo(f'  code  {name}: {first[:90]}')
         else:

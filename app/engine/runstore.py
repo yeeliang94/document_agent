@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -108,6 +109,32 @@ class RunStore:
         self.record.update(updates)
         self.record['elapsed_seconds'] = round(time.monotonic() - self.started, 1)
         self.write_json('run.json', self.record)
+
+
+OUTPUT_MARK = '\n\n# ---- output ----\n'
+CODE_NAME = re.compile(r'\d{3}-[A-Za-z0-9_.-]+\.py')
+SHOWN_CHARS = 20_000  # of a script's code, and of what it printed, sent to the screen
+
+
+def _cut(text: str) -> str:
+    return text if len(text) <= SHOWN_CHARS else text[:SHOWN_CHARS] + '\n...'
+
+
+def read_code(folder: Path, name: str) -> dict:
+    """One saved script as save_code wrote it, split back into its code and what it printed. folder is the run's
+    code/ folder. Raises KeyError for a name that is not a saved script."""
+    path = folder / name
+    if not CODE_NAME.fullmatch(name) or not path.is_file():
+        raise KeyError(name)
+    text = path.read_text(encoding='utf-8', errors='replace')
+    code, _, printed = text.partition(OUTPUT_MARK)
+    output = '\n'.join(line[2:] if line.startswith('# ') else line.lstrip('#') for line in printed.splitlines())
+    return {'name': name, 'code': _cut(code.rstrip()), 'output': _cut(output.rstrip())}
+
+
+def lead_scripts(folder: Path) -> list[str]:
+    """The lead agent's saved scripts, in the order they ran."""
+    return sorted(p.name for p in folder.glob('*-main.py')) if folder.is_dir() else []
 
 
 def _rename(source: Path, target: Path, attempts: int = 3):

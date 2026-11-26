@@ -10,11 +10,14 @@ import { followingHtml } from './clients.js';
 import { learnedHtml, roundHtml } from './comments.js';
 import { linked } from './links.js';
 import { versionRows, versionWhat } from './versions.js';
+import { stageSummary, stagesOf, stepFiles } from './stages.js';
 
 // Engine events that are housekeeping, or that another item already shows.
 const QUIET = new Set([
   'engine.question.answered', 'engine.run.finished', 'engine.instructions.delivered', 'engine.model.retry',
+  'engine.thinking.refused', // the Settings page says some services send no thinking; the log keeps the warning
 ]); // prettier-ignore
+export const STAGE_NAMES = { reading: 'Reading files', filling: 'Filling in', checking: 'Checking' };
 const ENDINGS = ['job.completed', 'job.partial', 'job.failed'];
 
 const sentence = (text) => {
@@ -68,18 +71,37 @@ export function threadItems() {
   let group = null;
   const running = []; // work blocks holding a script that has started but not yet reported what it was for
   let script = null; // the script running now, as far as it has streamed in
+  // A run that says where its work moves on folds that work by stage, with the agent's thinking above the actions it
+  // led to; a run made before then shows one block of work.
+  const staged = new Set(events.filter((e) => e.name === 'engine.stage.changed').map((e) => e.run || 0));
+  const kept = new Map(events.filter((e) => e.item && e.code).map((e) => [e.item, e.code])); // script id -> its file
+  let stage = null; // the stage of the run going now, in a staged run
+  let lastRun = 0; // the run the latest engine event came from, for the events that name none
+  let thought = null; // the latest summary of the agent's thinking, for the actions after it
+  let ticked = new Set(); // the plan steps done so far
+  const scripts = []; // every action that is a script, to tell each how many scripts its run kept
+  const counts = {}; // scripts per run
   const push = (item) => {
     group = null;
+    thought = null;
     items.push(item);
   };
   const step = (s) => {
     if (!group) {
-      group = { kind: 'group', id: s.seq, seq: s.seq, from: s.at, steps: [], code: 0 };
+      group = { kind: 'group', id: s.seq, seq: s.seq, from: s.at, steps: [], entries: [], code: 0 };
       items.push(group);
     }
-    if (s.verb) group.steps.push(s);
+    if (s.verb) {
+      group.steps.push(s);
+      group.entries.push({ kind: 'step', seq: s.seq, at: s.at, stage: s.stage, step: s });
+    }
     group.to = s.at;
     group.seq = s.seq;
+  };
+  // A thinking note, a plan change or steps ticked: part of the block of work, not an action of its own.
+  const mark = (entry) => {
+    step({ seq: entry.seq, at: entry.at, stage: entry.stage });
+    group.entries.push(entry);
   };
   if (job.instructions) items.push({ kind: 'me', seq: 0, text: job.instructions });
 
@@ -92,11 +114,33 @@ export function threadItems() {
   const near = nearLimits(); // drawn as one card, where the first of them came in
 
   for (const e of events) {
-    const base = { seq: e.seq, at: time(e) };
+    if (e.name === 'engine.run.started') stage = null;
+    if (e.name === 'engine.stage.changed') {
+      stage = e.stage;
+      thought = null;
+    }
+    if (e.run) lastRun = e.run;
+    const run = e.run || lastRun;
+    const base = { seq: e.seq, at: time(e), stage: staged.has(run) ? stage || 'reading' : null };
     // A script cut short: the run stopped, or OpenAI dropped the reply it was part of.
     if (['engine.run.started', 'engine.model.retry', 'job.paused', 'job.cancelled', ...ENDINGS].includes(e.name)) {
       script = null;
       running.length = 0;
+    }
+    if (['engine.stage.changed', 'engine.code.saved'].includes(e.name)) continue; // read above, and for `kept`
+    if (e.name === 'engine.thinking') {
+      thought = { seq: e.seq, parts: e.parts || [], detail: e.detail };
+      if (thought.parts.length) mark({ kind: 'thought', ...base, thought });
+      continue;
+    }
+    if (e.name === 'engine.plan.updated') {
+      const done = (e.steps || []).filter((s) => s.status === 'done').map((s) => s.step);
+      const newly = done.filter((s) => !ticked.has(s));
+      ticked = new Set(done);
+      if (newly.length) mark({ kind: 'tick', ...base, steps: newly });
+      const changed = !e.first && [e.added, e.changed, e.removed].some((list) => list?.length);
+      if (changed) mark({ kind: 'change', ...base, event: e });
+      continue;
     }
     if (near.includes(e)) {
       if (e === near[0]) push({ kind: 'limit', ...base });
@@ -126,20 +170,21 @@ export function threadItems() {
         if (e.name === 'engine.code.writing' || !script.text || e.message !== 'Reading') script.text = e.message;
         if (e.files) script.files = e.files;
       }
-    } else if (e.name === 'engine.code.finished') {
-      const secs = script ? Math.round((base.at - script.at) / 1000) : undefined;
-      step({ ...base, verb: sentence(e.message), files: e.files || [], plain: true, secs });
+    } else if (e.name === 'engine.code.finished' || e.name === 'engine.code.ran') {
+      const secs = script && e.name === 'engine.code.finished' ? Math.round((base.at - script.at) / 1000) : undefined;
+      // Where its code is kept: named by newer runs; an older run's scripts are found by their place in the run.
+      counts[run] = (counts[run] || 0) + 1;
+      const code = { run, name: kept.get(e.item) || e.code || '', index: counts[run] };
+      scripts.push(code);
+      step({ ...base, verb: sentence(e.message), files: e.files || [], plain: true, secs, thought, code });
       const started = running.shift();
       if (started) started.code -= 1;
-      script = null;
-    } else if (e.name === 'engine.code.ran') {
-      step({ ...base, verb: sentence(e.message), files: e.files || [], plain: true });
-      const started = running.shift();
-      if (started) started.code -= 1;
+      if (e.name === 'engine.code.finished') script = null;
     } else if (e.type === 'engine') {
       // A limit coming close is a warning, not a problem with the work.
       const problem = isWarning(e) && e.name !== 'engine.limit.near';
-      if (!QUIET.has(e.name)) step({ ...base, verb: sentence(e.message), plain: true, flag: isWarning(e), problem });
+      const back = e.name === 'engine.outputs.saved' && e.issues ? { passed: e.passed, issues: e.issues } : null;
+      if (!QUIET.has(e.name)) step({ ...base, verb: sentence(e.message), plain: true, flag: isWarning(e), problem, thought, back });
     } else if (ENDINGS.includes(e.name)) {
       if (e.seq !== settled) push({ kind: e.name === 'job.failed' ? 'note' : 'say', ...base, text: e.message });
     } else if (e.seq === stoppedAt) continue;
@@ -147,6 +192,7 @@ export function threadItems() {
     else if (e.name === 'job.cancelled') push({ kind: 'note', ...base, text: state.job.legacy ? e.message : 'Stopped. Everything so far is kept.' });
     else if (isWarning(e)) step({ ...base, verb: sentence(e.message), plain: true, flag: true });
   }
+  for (const code of scripts) code.of = counts[code.run];
   items.script = script;
   return items;
 }
@@ -161,30 +207,82 @@ function fileButton(path) {
     : `<span class="file" title="${esc(path)}">${name}</span>`;
 }
 
+const fileName = (path) => `<span class="file" title="${esc(path)}">${esc(baseName(path))}</span>`;
+
+// One action: a line that opens to show it in full. File names on the line are only named; the opened action
+// lists them as buttons that open each file.
 function stepHtml(s) {
-  const files = s.file ? fileButton(s.file) : (s.files || []).slice(0, 2).map(fileButton).join('');
-  const extra = (s.files || []).length > 2 ? `and ${s.files.length - 2} more` : '';
+  const names = stepFiles(s);
+  const files = names.slice(0, 2).map(fileName).join('');
+  const extra = names.length > 2 ? `and ${names.length - 2} more` : '';
   const more = [s.more, extra, s.times > 1 ? `${s.times} times` : ''].filter(Boolean).join(', ');
   const took = s.secs !== undefined && !(s.times > 1) ? `<time>${duration(s.secs * 1000)}</time>` : '';
-  return `<div class="step ${s.flag ? 'flag' : ''} ${s.plain ? 'plain' : ''} ${fresh(s.seq)}">
-    <span>${esc(s.verb)}</span>${files}${more ? `<span class="more">${esc(more)}</span>` : ''}${took}</div>`;
+  const on = state.act === s.seq;
+  const code = s.code ? Object.entries({ run: s.code.run, name: s.code.name, index: s.code.index, of: s.code.of }).map(([k, v]) => `data-script-${k}="${esc(v)}"`).join(' ') : '';
+  const line = `<button class="step act ${s.flag ? 'flag' : ''} ${s.plain ? 'plain' : ''} ${on ? 'on' : ''} ${fresh(s.seq)}" data-act="${s.seq}" aria-expanded="${on}" ${code}>
+    <span>${esc(s.verb)}</span>${files}${more ? `<span class="more">${esc(more)}</span>` : ''}${took}</button>`;
+  return on ? line + detailHtml(s) : line;
 }
 
-// live: the live line, when this is the block of work going on now; it sits under the last step, as one list.
-function groupHtml(g, live = '') {
-  // Repeats of the same plain step ("Made a note") fold into one line.
+// Where an action's code is kept, as the key its fetched code is kept under (app.js fetches it on opening).
+export const scriptKey = (jobId, code) => `${jobId}:${code.run}:${code.name || `${code.index}/${code.of}`}`;
+
+function chip(path) {
+  const stored = storedPath(path);
+  return stored
+    ? `<button class="chip" data-open="${esc(stored)}" title="${esc(path)}">${esc(baseName(path))}</button>`
+    : `<span class="chip" title="${esc(path)}">${esc(baseName(path))}</span>`;
+}
+
+// What came back from an action: what a script printed, or what the checks said of a save.
+function cameBack(s) {
+  if (s.back) {
+    if (s.back.passed && !s.back.issues.length) return '<span>All checks passed.</span>';
+    return `<ul class="back">${s.back.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`;
+  }
+  if (!s.code) return '';
+  const got = state.scripts[scriptKey(state.job.id, s.code)];
+  if (!got) return '<span class="faint">Loading</span>';
+  if (got.error) return `<span class="faint">${esc(got.error)}</span>`;
+  return got.output ? `<pre>${esc(got.output)}</pre>` : '<span class="faint">Nothing was printed.</span>';
+}
+
+function detailHtml(s) {
+  const names = stepFiles(s);
+  const back = cameBack(s);
+  const got = s.code ? state.scripts[scriptKey(state.job.id, s.code)] : null;
+  const code = !s.code || got?.error ? '' : state.actCode && got ? `<pre>${esc(got.code)}</pre>` : '<button class="code" data-act-code>Show the code</button>';
+  const rows = [
+    [s.code ? 'What it was for' : 'What happened', `<span>${esc(s.verb)}</span>`],
+    ['Files', names.length ? `<div class="chips">${names.map(chip).join('')}</div>` : '<span class="faint">None</span>'],
+    back ? ['What came back', back] : null,
+    s.secs !== undefined ? ['Took', duration(s.secs * 1000)] : null,
+    code ? ['', code] : null,
+  ].filter(Boolean);
+  return `<dl class="detail">${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join('')}</dl>`;
+}
+
+// Repeats of the same plain step ("Made a note") fold into one line.
+function folded(list) {
   const steps = [];
-  for (const s of g.steps) {
+  for (const s of list) {
     const last = steps[steps.length - 1];
-    if (last && !s.file && !s.files?.length && !s.more && !last.file && last.verb === s.verb && !s.flag) {
+    if (last && !s.file && !s.files?.length && !s.more && !last.file && !last.files?.length && last.verb === s.verb && !s.flag && !s.code && !last.code) {
       last.times = (last.times || 1) + 1;
       last.seq = s.seq;
     } else steps.push({ ...s });
   }
+  return steps;
+}
+
+// live: the live line, when this is the block of work going on now; it sits under the last step, as one list.
+function groupHtml(g, live = '') {
+  if (g.entries.some((en) => en.stage)) return stagedHtml(g, live);
+  const steps = folded(g.steps);
   // Scripts whose purpose was not reported (older runs, or a reply still in progress).
   if (g.code > 0 && !live) steps.push({ seq: g.seq, verb: 'Worked on the files', times: g.code, plain: true });
   if (!steps.length) return live; // just begun: the live line alone, with no block around it yet
-  const names = new Set(g.steps.flatMap((s) => (s.file ? [s.file] : s.files || [])));
+  const names = new Set(g.steps.flatMap(stepFiles));
   const flags = g.steps.filter((s) => s.problem).length;
   const title = names.size ? `Worked through ${plural(names.size, 'file')}` : plural(Math.max(steps.length, 1), 'step');
   const open = state.toggled.has(g.id) ? !live : Boolean(live);
@@ -192,6 +290,115 @@ function groupHtml(g, live = '') {
     <button class="grp-head" data-group="${g.id}" aria-expanded="${open}">${icon('chev')}<span>${title}</span>
       ${flags ? `<span class="flagged">${plural(flags, 'problem')}</span>` : ''}<time>${duration(g.to - g.from)}</time></button>
     <div class="grp-body">${steps.map(stepHtml).join('')}${open ? live : ''}</div></div>${open ? '' : live}`;
+}
+
+// --- Work folded by stage ------------------------------------------------------
+
+// The plan step the agent is on now, for the stage going on now.
+const doingNow = () => (state.job.plan?.steps || []).find((s) => s.status === 'in_progress')?.step || '';
+
+const thinkingShown = () => (state.settings?.values?.thinking_summaries ?? 'short') !== 'off';
+
+// A summary of the agent's thinking: its heading, and the text under it when opened. "Short" shows the first
+// paragraph of each part.
+function thoughtHtml(t) {
+  const id = -t.seq; // thinking notes are toggled by the negative of their event number, stages by the positive
+  const open = state.toggled.has(id);
+  const clean = (text) => String(text || '').replace(/\*\*/g, '').trim();
+  const paras = t.parts.flatMap((p, i) => {
+    const text = clean(p.text).split(/\n\s*\n/).filter(Boolean);
+    const shown = (state.settings?.values?.thinking_summaries ?? t.detail) === 'short' ? text.slice(0, 1) : text;
+    return [...(i > 0 ? [`<p class="th-sub">${esc(clean(p.title))}</p>`] : []), ...shown.map((x) => `<p>${esc(x)}</p>`)];
+  });
+  return `<div class="thought ${open ? 'open' : ''} ${fresh(t.seq)}"><button class="th-head" data-group="${id}" aria-expanded="${open}">${icon('chev')}<span>${esc(clean(t.parts[0].title))}</span></button>
+    <div class="th-text">${paras.join('')}</div></div>`;
+}
+
+function changeHtml(e) {
+  const said = [
+    ...(e.added || []).map((s) => `added “${esc(s)}”`),
+    ...(e.changed || []).map((c) => `changed “${esc(c.was)}” to “${esc(c.step)}”`),
+    ...(e.removed || []).map((s) => `dropped “${esc(s)}”`),
+  ];
+  return `<div class="change ${fresh(e.seq)}"><b>Changed its plan: ${said.join('; ')}.</b>${e.why ? `<span>${esc(e.why)}</span>` : ''}</div>`;
+}
+
+function sectionHtml(g, sec, live, last) {
+  const here = Boolean(live) && last;
+  const open = state.toggled.has(sec.id) ? !here : here;
+  const think = thinkingShown();
+  // The stage's work: each thinking note heads the actions after it, up to the next note.
+  const parts = [];
+  let part = { thought: null, items: [] };
+  parts.push(part);
+  for (const en of sec.entries) {
+    if (en.kind === 'thought') parts.push((part = { thought: think ? en.thought : null, items: [] }));
+    else part.items.push(en);
+  }
+  if (last && g.code > 0 && !live) part.items.push({ kind: 'step', step: { seq: g.seq, verb: 'Worked on the files', times: g.code, plain: true } });
+  const body = parts
+    .map((p, i) => {
+      const html = [];
+      let run = [];
+      const flush = () => {
+        html.push(...folded(run).map(stepHtml));
+        run = [];
+      };
+      for (const it of p.items) {
+        if (it.kind === 'change') {
+          flush();
+          html.push(changeHtml(it.event));
+        } else run.push(it.step);
+      }
+      flush();
+      if (here && i === parts.length - 1) html.push(live);
+      if (!html.length && !p.thought) return '';
+      return `${p.thought ? thoughtHtml(p.thought) : ''}<div class="acts ${p.thought ? 'under' : ''}">${html.join('')}</div>`;
+    })
+    .join('');
+  const flags = sec.entries.filter((en) => en.kind === 'step' && en.step.problem).length;
+  const since = here ? state.events.find((e) => e.seq === sec.id)?.timestamp || '' : '';
+  const took = since ? `<time data-since="${esc(since)}"></time>` : `<time>${duration(sec.to - sec.from)}</time>`;
+  return `<div class="stage ${open ? 'open' : ''} ${fresh(sec.id)}"><button class="stage-head" data-group="${sec.id}" aria-expanded="${open}">${icon('chev')}
+    <span class="name">${STAGE_NAMES[sec.stage] || sentence(sec.stage)}</span><span class="sum">${esc(stageSummary(sec, here ? doingNow() : ''))}${flags ? ` <span class="flagged">${plural(flags, 'problem')}</span>` : ''}</span>${took}</button>
+    <div class="stage-body">${body}</div></div>`;
+}
+
+function stagedHtml(g, live) {
+  const sections = stagesOf(g.entries);
+  if (!sections.length) return live; // just begun: the live line alone
+  const html = sections.map((sec, i) => sectionHtml(g, sec, live, i === sections.length - 1)).join('');
+  // The live line shows even when the person folded the stage going on now.
+  const last = sections[sections.length - 1];
+  const hidden = live && state.toggled.has(last.id);
+  return `<div class="work-stages ${fresh(g.id)}">${html}</div>${hidden ? live : ''}`;
+}
+
+// --- The agent's plan, pinned at the top of the run ------------------------------
+
+const phone = () => window.matchMedia('(max-width: 560px)').matches;
+
+export function planHtml() {
+  const steps = state.job?.plan?.steps;
+  if (!steps?.length) return '';
+  const going = isActive() || jobStatus() === 'waiting';
+  const open = state.planOpen ?? (going && !phone());
+  // The latest change shows on its steps while the run goes: New, or Changed with what the step said before.
+  const change = going ? state.events.findLast((e) => e.name === 'engine.plan.updated' && !e.first && (e.run || 0) === latestRun()) : null;
+  const added = new Set(change?.added || []);
+  const was = new Map((change?.changed || []).map((c) => [c.step, c.was]));
+  const done = steps.filter((s) => s.status === 'done').length;
+  const now = steps.find((s) => s.status === 'in_progress') || (going ? steps.find((s) => s.status === 'pending') : null);
+  const count = done === steps.length ? `All ${steps.length} done` : `${done} of ${steps.length} done`;
+  const rows = steps
+    .map((s) => {
+      const cls = s.status === 'done' ? 'done' : s === now && going ? 'now' : 'later';
+      const tag = added.has(s.step) ? pill('new', 'New') : was.has(s.step) ? pill('new', 'Changed') : '<span></span>';
+      return `<li class="${cls}"><span class="mark">${s.status === 'done' ? icon('tick') : ''}</span><span>${esc(s.step)}${was.has(s.step) ? `<s>${esc(was.get(s.step))}</s>` : ''}</span>${tag}</li>`;
+    })
+    .join('');
+  return `<section class="plan ${open ? 'open' : ''}" aria-label="The agent's plan"><button class="plan-head" data-plan aria-expanded="${open}">
+    <h2>Plan</h2><span class="count">${count}</span><span class="now-line">${now && !open ? '· ' + esc(now.step) : ''}</span>${icon('chev')}</button><ol>${rows}</ol></section>`;
 }
 
 // What the agent is doing this second, from the latest event.
@@ -212,6 +419,7 @@ function liveLine(script) {
     since = script.since;
     file = (script.files || []).slice(0, 1).map(fileButton).join('');
   } else if (['engine.scout.started', 'engine.review.started'].includes(last?.name)) text = sentence(last.message);
+  else if (last?.name === 'engine.thinking' && last.message && thinkingShown()) text = String(last.message).replace(/\*\*/g, '');
   return `<div class="live"><i></i><b>${esc(text)}</b>${file}<time data-since="${esc(since)}"></time></div>`;
 }
 

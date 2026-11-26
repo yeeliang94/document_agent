@@ -28,7 +28,7 @@ import {
 import { askPermission, clearMark, noticeRuns, tabTitle } from './alerts.js';
 import { pageAddress, parseAddress } from './routes.js';
 import { confirmStartOver, deleteRun, renameRun, runItems, submitRun } from './runs.js';
-import { composerHtml, headHtml, nearLimits, stagesHtml, threadHtml } from './thread.js';
+import { composerHtml, headHtml, nearLimits, planHtml, scriptKey, stagesHtml, threadHtml } from './thread.js';
 import { continueFrom, loadVersions } from './versions.js';
 import { dismissVoiceNote, initVoice, rememberCaret, syncVoice, toggleVoice } from './voice.js';
 import { applyZoom, canZoom, wheelZoom, zoomAction } from './zoom.js';
@@ -39,6 +39,7 @@ const RUN = `
     <section class="chat">
       <header class="chat-head" id="chat-head"></header>
       <div class="stages" id="stages"></div>
+      <div class="plan-wrap" id="plan"></div>
       <div id="offer"></div>
       <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-label="Conversation with the agent" aria-live="polite"></div></div>
       <div class="composer" id="composer-wrap"></div>
@@ -138,6 +139,7 @@ function render() {
     paint('#notices', noticesHtml());
     paint('#chat-head', headHtml());
     paint('#stages', stagesHtml());
+    paint('#plan', planHtml());
     paint('#offer', offerHtml());
     const box = $('#scroll');
     const first = box.__job !== state.job.id;
@@ -201,6 +203,26 @@ function showSettingError() {
   });
 }
 
+// An action opened in full, or closed again. A script's code and what it printed are fetched once, on opening.
+async function openAct(el) {
+  const seq = Number(el.dataset.act);
+  const job = state.job.id;
+  state.act = state.act === seq ? null : seq;
+  state.actCode = false;
+  render();
+  const { scriptRun: run, scriptName: name, scriptIndex: index, scriptOf: of } = el.dataset;
+  if (state.act !== seq || !run) return;
+  const key = scriptKey(job, { run, name, index, of });
+  if (state.scripts[key]) return;
+  const query = new URLSearchParams(name ? { run, name } : { run, index, of });
+  try {
+    state.scripts[key] = await api(jobUrl(`/script?${query}`));
+  } catch (e) {
+    state.scripts[key] = { error: e.status === 404 ? 'The code of this step was not kept.' : `It could not be loaded: ${e.message}` };
+  }
+  if (state.job?.id === job) render();
+}
+
 async function refreshSettings() {
   try {
     state.settings = await api('/api/settings');
@@ -225,6 +247,7 @@ function leaveRun() {
   Object.assign(state, { reply: null, activeComment: '', showResolved: false, menu: null });
   Object.assign(state.changes, { since: null, step: 0, jump: false }); // version numbers belong to one run
   state.toggled.clear();
+  Object.assign(state, { act: null, actCode: false, scripts: {}, planOpen: null });
 }
 
 let loads = 0; // each run opened counts one; a load another page or run has overtaken is dropped
@@ -681,6 +704,13 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('[data-group]'))) {
       const id = Number(el.dataset.group);
       state.toggled.has(id) ? state.toggled.delete(id) : state.toggled.add(id);
+      render();
+    } else if ((el = target('[data-act]'))) await openAct(el);
+    else if ((el = target('[data-act-code]'))) {
+      state.actCode = true;
+      render();
+    } else if ((el = target('[data-plan]'))) {
+      state.planOpen = el.getAttribute('aria-expanded') !== 'true';
       render();
     } else if ((el = target('[data-segment]'))) {
       const { segment: name, value } = el.dataset;

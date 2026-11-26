@@ -137,8 +137,9 @@ export function settingsPage() {
     const value = typeof v[name] === 'string' ? v[name] : shownNumber(v[name] / scaleOf(name)).replace(/,/g, '');
     return field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" inputmode="decimal" autocomplete="off" value="${esc(value)}" aria-label="${esc(label)}" ${invalid(name)}><span>${esc(unit)}</span></label>`, note);
   };
-  const choice = (name, label, labels) =>
-    field(name, label, `<div class="seg" role="group" aria-label="${esc(label)}">${options[name].choices.map((c) => segment(name, c, labels[c] ?? c, v[name] === c)).join('')}</div>`);
+  const choice = (name, label, labels, note = '') =>
+    field(name, label, `<div class="seg" role="group" aria-label="${esc(label)}" ${note ? `aria-describedby="setting-${name}-note"` : ''}>${options[name].choices.map((c) => segment(name, c, labels[c] ?? c, v[name] === c)).join('')}</div>`,
+      note && `<p class="muted row-note" id="setting-${name}-note">${esc(note)}</p>`);
   const steps = (name, label) => field(name, label, stepper(name, label, v[name], options[name].low, options[name].high));
   // A two-way choice reads as on or off: its first choice is on.
   const onOff = (name, label, note = '') => {
@@ -163,6 +164,8 @@ export function settingsPage() {
           onOff('proof', 'Record a source for every row') +
           onOff('look_before_finish', 'Show the agent its files before it finishes') +
           choice('effort', 'Thinking depth', { low: 'Low', medium: 'Medium', high: 'High' }) +
+          choice('thinking_summaries', "Show the agent's thinking", { off: 'Off', short: 'Short', detailed: 'Detailed' },
+            "Short notes on what the agent is weighing up, shown above the work they led to. Some AI services don't send them; then the run shows none.") +
           steps('max_questions', 'Questions it may ask per job') +
           steps('runs_at_once', 'Runs at once') +
           choice('replay_tests', 'Re-check past corrections', { never: 'Never', large: 'Big changes', every: 'Every change' }),
