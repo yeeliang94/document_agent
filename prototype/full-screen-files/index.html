@@ -1,23 +1,28 @@
 <!doctype html>
-<!-- PROTOTYPE ONLY: the file panel at full screen, with every file of the run a click away. Made-up data. Open this
-     file in a browser; no server needed. The dark bar at the bottom jumps between states; it is not part of the
-     design. Nothing here is wired to the app.
-     Drawn to sit with the app as it is: the file panel, its View / Comment switch, sheet tabs and Changes switch are
-     the app's own. New: Full screen is offered for the Files list too (not only an open file), and at full screen a
-     list of the run's files sits on the left, so another output, a source or the agent's notes opens without leaving
-     full screen. -->
+<!-- PROTOTYPE ONLY: the file panel with many files, a calmer top bar, and full screen with every file a click away.
+     Made-up data: a group payroll packet of 240 source files in nested folders. Open this file in a browser; no
+     server needed. The dark bar at the bottom jumps between states; it is not part of the design.
+     Drawn to sit with the app as it is (its panel, View / Comment switch, sheet tabs, Changes switch and pills).
+     What changes:
+     - The Files list: outputs and the agent's notes stay on top; the checks fold into one line; sources get a find
+       box, filters by decision with counts, and folders that fold, folded when there are many files.
+     - An open file's top bar: one line (back, name cut in the middle so the end stays readable, one Comment button
+       lit while commenting, More, full screen, close). The status pill moves to the sheet-tab line; sheet tabs scroll sideways rather than
+       wrap.
+     - Full screen works for the list and for a file. At full screen the list sits on the left, so any file opens
+       without leaving full screen. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Full screen files prototype</title>
+<title>File panel with many files prototype</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #ffffff; --panel: #f5f5f6; --sheet: #ffffff; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab;
     --line: #e7e7ea; --accent: #2f6fdb; --accent-bg: #e8f0fd; --ok-bg: #e6f3e6; --ok-fg: #24592a;
-    --grey-bg: #ececee; --grey-fg: #55555c;
+    --warn-bg: #fbf0dc; --warn-fg: #6b4206; --grey-bg: #ececee; --grey-fg: #55555c;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -28,64 +33,95 @@
   h1, h2, h3, p { margin: 0; }
   h1 { font-size: 22px; font-weight: 500; }
   h2 { font-size: 15px; font-weight: 500; }
-  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
   .icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
   .icon-btn:hover { background: var(--grey-bg); color: var(--text); }
   .icon-btn[aria-pressed="true"] { color: var(--text); }
-  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .comment-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .comment-btn[aria-pressed="true"]:hover { background: var(--accent); color: #fff; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; flex: none; }
   .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
-  .modes { background: var(--grey-bg); border-radius: 999px; padding: 2px; display: flex; }
+  .pill.warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .modes { background: var(--grey-bg); border-radius: 999px; padding: 2px; display: flex; flex: none; }
   .modes button { padding: 2px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); }
   .modes button[aria-pressed="true"] { background: var(--sheet); color: var(--text); }
 
-  /* The app as it is: sidebar, chat, file panel */
+  /* The app as it is */
   .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100%; }
   .side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 16px; }
   .brand { font-weight: 500; padding: 0 12px; }
   .item { display: block; padding: 8px 12px; border-radius: 12px; color: var(--muted); text-align: left; width: 100%; }
   .item.on { background: var(--panel); color: var(--text); }
-  .work { display: grid; grid-template-columns: minmax(320px, 1fr) 16px minmax(460px, 1.2fr); min-width: 0; min-height: 0; padding: 16px 16px 16px 0; }
+  .work { display: grid; grid-template-columns: minmax(320px, 1fr) 16px 424px; min-width: 0; min-height: 0; padding: 16px 16px 16px 0; }
   .chat { padding: 16px 32px; display: flex; flex-direction: column; gap: 24px; min-width: 0; }
-  .say { color: var(--text); max-width: 60ch; }
+  .say { max-width: 60ch; }
   .card { display: flex; align-items: center; gap: 12px; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
   .card span:first-child { flex: 1; }
   .grip { display: grid; place-items: center; }
   .grip::after { content: ''; width: 2px; height: 32px; border-radius: 2px; background: var(--line); }
 
   .files { background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .files-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 8px 24px; min-height: 60px; }
-  .files-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .files-body { flex: 1; overflow: auto; padding: 8px 24px 24px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .files-head { display: flex; align-items: center; gap: 4px; padding: 12px 12px 4px 16px; min-height: 52px; }
+  .files-head h2 { flex: 1; min-width: 0; display: flex; white-space: nowrap; }
+  /* A long name is cut in the middle, so the end (the month, the version, the extension) stays readable. */
+  .files-head h2 .start { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .files-head h2 .end { flex: none; }
+  .files-head .modes { margin: 0 4px; }
+  .files-body { flex: 1; overflow: auto; padding: 4px 16px 24px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
 
-  /* Full screen: the panel fills the window. A list of the run's files sits on its left. */
+  /* Full screen */
   .app.full .side, .app.full .chat, .app.full .grip { display: none; }
   .app.full { grid-template-columns: 1fr; }
   .app.full .work { grid-template-columns: 1fr; padding: 0; }
-  .app.full .files { border-radius: 0; display: grid; grid-template-columns: 264px minmax(0, 1fr); grid-template-rows: auto 1fr; }
-  .app.full.no-rail .files { grid-template-columns: minmax(0, 1fr); }
-  .app.full .files-head { grid-column: 1 / -1; padding: 16px 24px 12px 24px; }
+  .app.full .files { border-radius: 0; display: grid; grid-template-columns: 340px minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .app.full.no-rail .files, .app.full.list .files { grid-template-columns: minmax(0, 1fr); }
+  .app.full .files-head { grid-column: 1 / -1; padding: 12px 24px 8px; }
   .rail { display: none; }
-  .app.full .rail { display: flex; flex-direction: column; gap: 16px; padding: 8px 12px 24px 16px; overflow: auto; min-height: 0; }
-  .app.full.no-rail .rail { display: none; }
-  .app.full .files-body { padding: 8px 32px 24px 16px; }
-  .rail input { width: 100%; border: 0; background: var(--sheet); border-radius: 12px; padding: 6px 12px; outline: none; font-size: 13px; }
-  .rail h3 { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 8px 4px; }
-  .rail .f { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px; font-size: 13px; color: var(--muted); }
-  .rail .f span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rail .f:hover { background: var(--grey-bg); color: var(--text); }
-  .rail .f[aria-current="true"] { background: var(--sheet); color: var(--text); }
-  .rail .folder { font-size: 12px; color: var(--faint); padding: 8px 8px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rail .count { font-size: 12px; color: var(--faint); }
-  .rail .more { font-size: 13px; color: var(--muted); padding: 4px 8px; text-align: left; }
+  .app.full:not(.list):not(.no-rail) .rail { display: flex; }
+  .rail { flex-direction: column; gap: 16px; padding: 4px 8px 24px 16px; overflow: auto; min-height: 0; border-right: 1px solid var(--line); }
+  .app.full .files-body { padding: 4px 32px 24px 24px; }
+  .app.full.list .files-body { max-width: 880px; width: 100%; margin: 0 auto; }
 
-  /* A file on show */
-  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .bar .spacer { flex: 1; }
-  .tabs { display: flex; gap: 4px; }
-  .tabs button { padding: 2px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); }
+  /* The list of files: in the panel, at full screen, and as the rail */
+  .group h3 { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 8px 4px; display: flex; gap: 8px; align-items: baseline; }
+  .group h3 .count { color: var(--faint); font-weight: 400; }
+  .f { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 5px 8px; border-radius: 8px; font-size: 13px; color: var(--text); }
+  .f .kind { font-size: 10px; color: var(--faint); width: 28px; flex: none; letter-spacing: .02em; }
+  .f .name { flex: 1; min-width: 0; display: flex; white-space: nowrap; }
+  .f .name .start { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .f .name .end { flex: none; }
+  .f:hover { background: var(--grey-bg); }
+  .f[aria-current="true"] { background: var(--sheet); }
+  .f.dim .name { color: var(--muted); }
+  .find { display: flex; align-items: center; gap: 8px; background: var(--sheet); border-radius: 12px; padding: 4px 12px; color: var(--faint); }
+  .find input { flex: 1; border: 0; outline: none; background: none; font-size: 13px; color: var(--text); min-width: 0; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chips button { padding: 2px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+  .chips button[aria-pressed="true"] { background: var(--sheet); color: var(--text); }
+  .folder { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 5px 8px; border-radius: 8px; font-size: 13px; color: var(--muted); }
+  .folder:hover { background: var(--grey-bg); }
+  .folder svg { width: 12px; height: 12px; transition: transform .12s; }
+  .folder[aria-expanded="true"] svg { transform: rotate(90deg); }
+  .folder .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folder .count { font-size: 12px; color: var(--faint); }
+  .inside { padding-left: 14px; }
+  .checks { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px; border-radius: 8px; font-size: 13px; }
+  .checks:hover { background: var(--grey-bg); }
+  .checks .name { flex: 1; }
+  .checks svg { width: 12px; height: 12px; color: var(--muted); }
+  .check-list { padding: 0 8px 0 22px; font-size: 13px; }
+  .check-list div { display: flex; justify-content: space-between; padding: 4px 0; }
+  .none { font-size: 13px; color: var(--muted); padding: 8px; }
+  mark { background: #fff3bf; color: inherit; border-radius: 2px; }
+
+  /* An open file */
+  .bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; min-width: 0; flex: 1; mask-image: linear-gradient(90deg, #000 85%, transparent); }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { padding: 2px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); white-space: nowrap; }
   .tabs button.on { background: var(--sheet); color: var(--text); }
-  .sheet { background: var(--sheet); border-radius: 12px; overflow: auto; }
+  .sheet { background: var(--sheet); border-radius: 12px; overflow: auto; position: relative; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   .grid td, .grid th { padding: 8px 12px; text-align: left; box-shadow: inset 0 -1px 0 var(--line); white-space: nowrap; }
   .grid th { color: var(--faint); font-weight: 400; }
@@ -95,11 +131,9 @@
   .grid td.ring { box-shadow: inset 0 0 0 2px var(--accent); }
   .doc { background: var(--sheet); border-radius: 12px; padding: 24px 32px; max-width: 760px; }
   .doc h3 { font-size: 15px; font-weight: 500; margin: 16px 0 4px; }
-  .doc p { color: var(--text); }
-  .list-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px; }
-  .list-row:hover { background: var(--grey-bg); }
-  .list-row span:first-child { flex: 1; }
-
+  .menu { position: absolute; z-index: 6; background: var(--bg); border-radius: 12px; padding: 4px; box-shadow: 0 8px 32px rgba(0,0,0,.12); display: flex; flex-direction: column; min-width: 200px; }
+  .menu button { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; font-size: 13px; text-align: left; }
+  .menu button:hover { background: var(--panel); }
   .pop { position: absolute; width: 300px; background: var(--bg); border-radius: 12px; padding: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.12); display: flex; flex-direction: column; gap: 12px; z-index: 5; }
   .pop textarea { border: 0; background: var(--panel); border-radius: 12px; padding: 8px 12px; min-height: 64px; resize: none; font: inherit; outline: none; }
   .pop .end { display: flex; justify-content: flex-end; gap: 8px; }
@@ -107,7 +141,7 @@
   .btn.primary { background: var(--text); color: #fff; }
   .btn.text { color: var(--muted); }
 
-  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 999px; padding: 4px; display: flex; gap: 2px; font-size: 12px; z-index: 9; }
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
   .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
   .switcher button.on { background: #fff; color: #18181b; }
 </style>
@@ -121,11 +155,11 @@
   <div class="work">
     <section class="chat">
       <h1>October 2026 payroll</h1>
-      <p class="say">The workbook is ready: 215 employees across five entities, with the October UK leaver cut off and the Singapore joiners prorated.</p>
-      <div class="card"><span>output_template_output.xlsx</span><span class="pill ok">Checked</span></div>
+      <p class="say">The workbook is ready: 1,840 employees across twelve entities, with the October UK leavers cut off and the Singapore joiners prorated.</p>
+      <div class="card"><span>group_payroll_October_2026_final_v3.xlsx</span><span class="pill ok">Checked</span></div>
     </section>
     <div class="grip"></div>
-    <section class="files" id="files">
+    <section class="files" id="files" style="position:relative">
       <header class="files-head" id="head"></header>
       <aside class="rail" id="rail" aria-label="Files in this run"></aside>
       <div class="files-body" id="body"></div>
@@ -142,72 +176,142 @@ const I = {
   x: '<path d="M4 4l8 8M12 4l-8 8"/>',
   side: '<path d="M2.5 3.5h11v9h-11zM6.5 3.5v9"/>',
   find: '<path d="M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM10.5 10.5 14 14"/>',
+  more: '<path d="M4 8h.01M8 8h.01M12 8h.01" stroke-width="2.4"/>',
+  chev: '<path d="M6 4l4 4-4 4"/>',
   down: '<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/>',
+  comment: '<path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/>',
+  zoom: '<path d="M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM10.5 10.5 14 14M5 7h4M7 5v4"/>',
 };
 const svg = (n) => `<svg viewBox="0 0 16 16">${I[n]}</svg>`;
 const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-const FILES = {
-  outputs: [{ name: 'output_template_output.xlsx', pill: ['ok', 'Checked'] }],
-  records: [{ name: 'notes.md' }, { name: 'document_map.json' }, { name: 'provenance.json' }],
-  sources: [
-    ['Region_APAC / Singapore', ['SG01_Payroll_Oct2026_FINAL.xlsx', 'SG01_Payroll_Oct2026_v1_DRAFT_superseded.xlsx']],
-    ['Region_APAC / Malaysia', ['MY Payroll October.xlsx']],
-    ['Region_AMER / USA', ['us01_payroll_register_2026-10.csv']],
-    ['Group Finance', ['October close instructions.txt', 'fx_rates_2026.xlsx']],
-  ],
+// --- Made-up packet: 240 sources in nested folders --------------------------------------------------------------
+const ENTITIES = [['APAC', 'Singapore', 'SG01'], ['APAC', 'Malaysia', 'MY01'], ['APAC', 'Australia', 'AU01'], ['APAC', 'Japan', 'JP01'],
+  ['EMEA', 'United Kingdom', 'UK01'], ['EMEA', 'Germany', 'DE01'], ['EMEA', 'France', 'FR01'], ['EMEA', 'Netherlands', 'NL01'],
+  ['AMER', 'USA', 'US01'], ['AMER', 'Canada', 'CA01'], ['AMER', 'Brazil', 'BR01'], ['AMER', 'Mexico', 'MX01']];
+const KINDS = [['payroll_register', 'xlsx', 'used'], ['timesheets_wk40', 'csv', 'used'], ['timesheets_wk41', 'csv', 'used'], ['timesheets_wk42', 'csv', 'used'],
+  ['timesheets_wk43', 'csv', 'used'], ['joiners_leavers', 'xlsx', 'used'], ['allowances', 'xlsx', 'used'], ['bank_file', 'txt', 'not_relevant'],
+  ['payslips', 'pdf', 'reference'], ['payroll_register_DRAFT_superseded', 'xlsx', 'not_relevant'], ['tax_table_2026', 'pdf', 'reference'],
+  ['overtime_approvals', 'pdf', 'used'], ['benefits_enrolment', 'xlsx', 'used'], ['payroll_register_2026-09', 'xlsx', 'not_relevant'],
+  ['cost_centres', 'xlsx', 'reference'], ['email_export_Oct', 'msg', 'unclear'], ['scan_0412', 'png', 'unclear'], ['pension_contributions', 'xlsx', 'used'],
+  ['bonus_schedule', 'xlsx', 'used']];
+const SOURCES = [];
+for (const [region, country, code] of ENTITIES)
+  for (const [k, ext, decision] of KINDS) SOURCES.push({ folder: `Region_${region} / ${country} / payroll / 2026 / Q4 / october`, name: `${code}_${k}_2026-10.${ext}`, ext, decision });
+for (const [n, ext, d] of [['October close instructions', 'txt', 'reference'], ['fx_rates_2026', 'xlsx', 'reference'], ['group_policy_overtime', 'pdf', 'reference'],
+  ['chart_of_accounts', 'xlsx', 'reference'], ['headcount_bridge_Q3', 'xlsx', 'not_relevant'], ['audit_queries_Sep', 'docx', 'not_relevant'],
+  ['entity_list', 'xlsx', 'reference'], ['holiday_calendar_2026', 'xlsx', 'reference'], ['README', 'txt', 'not_relevant'], ['Thumbs', 'db', 'not_relevant'],
+  ['payroll_controls_checklist', 'xlsx', 'reference'], ['signoff_matrix', 'pdf', 'reference']]) SOURCES.push({ folder: 'Group Finance', name: `${n}.${ext}`, ext, decision: d });
+const DECISION = { used: 'Used', reference: 'Reference', not_relevant: 'Not relevant', unclear: 'Unclear' };
+const OUTPUTS = [{ name: 'group_payroll_October_2026_final_v3.xlsx', ext: 'xlsx', pill: ['ok', 'Checked'] }];
+const NOTES = [{ name: 'notes.md', ext: 'md' }, { name: 'document_map.json', ext: 'json' }, { name: 'provenance.json', ext: 'json' }, { name: 'processing_summary.txt', ext: 'txt' }];
+const CHECKS = [['Template rules', 'ok', 'Passed'], ['Totals add up', 'ok', 'Passed'], ['Files decided', 'ok', '240 of 240'], ['Rows with a source', 'ok', '1,840 of 1,840'], ['Reviewer', '', 'Not run']];
+
+let state = {};
+const RESET = { full: false, list: false, rail: true, open: null, comment: false, mode: 'View', query: '', filter: 'all', openFolders: new Set(), checks: false, menu: false };
+
+// --- The list --------------------------------------------------------------------------------------------------
+function highlight(text) {
+  const q = state.query.trim();
+  if (!q) return esc(text);
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  return i < 0 ? esc(text) : `${esc(text.slice(0, i))}<mark>${esc(text.slice(i, i + q.length))}</mark>${esc(text.slice(i + q.length))}`;
+}
+// A name cut in the middle, so the part that tells files apart (week, version, month) stays readable.
+const cut = (name) => {
+  if (state.query.trim() || name.length <= 22) return `<span class="start">${highlight(name)}</span>`;
+  return `<span class="start">${esc(name.slice(0, -16))}</span><span class="end">${esc(name.slice(-16))}</span>`;
 };
-let state = { full: false, rail: true, open: 'output_template_output.xlsx', comment: false, mode: 'View' };
+const fileRow = (f, pill) => `<button class="f ${f.decision === 'not_relevant' ? 'dim' : ''}" data-go="${esc(f.name)}" aria-current="${state.open === f.name}" title="${esc((f.folder ? f.folder + ' / ' : '') + f.name)}">
+  <span class="kind">${f.ext.toUpperCase()}</span><span class="name">${cut(f.name)}</span>${pill ? `<span class="pill ${pill[0]}">${pill[1]}</span>` : ''}</button>`;
 
+function sourcesHtml() {
+  const q = state.query.trim().toLowerCase();
+  const counts = { all: SOURCES.length };
+  for (const s of SOURCES) counts[s.decision] = (counts[s.decision] || 0) + 1;
+  const shown = SOURCES.filter((s) => (state.filter === 'all' || s.decision === state.filter) && (!q || (s.folder + '/' + s.name).toLowerCase().includes(q)));
+  const chips = ['all', 'used', 'reference', 'not_relevant', 'unclear'].map((k) => `<button data-filter="${k}" aria-pressed="${state.filter === k}">${k === 'all' ? 'All' : DECISION[k]} ${counts[k] || 0}</button>`).join('');
+  const folders = {};
+  for (const s of shown) (folders[s.folder] ||= []).push(s);
+  // Many files: folders start folded; finding something opens the folders it is in.
+  const many = SOURCES.length > 40;
+  const body = Object.entries(folders).map(([folder, list]) => {
+    const open = !!q || !many || state.openFolders.has(folder);
+    const parts = folder.split(' / ');
+    const short = parts.length > 2 ? `${parts[0]} / ${parts[1]} / … / ${parts[parts.length - 1]}` : folder;
+    return `<button class="folder" data-folder="${esc(folder)}" aria-expanded="${open}" title="${esc(folder)}">${svg('chev')}<span class="name">${esc(short)}</span><span class="count">${list.length}</span></button>
+      ${open ? `<div class="inside">${list.map((s) => fileRow(s, state.full && !state.open ? ['', DECISION[s.decision]] : null)).join('')}</div>` : ''}`;
+  }).join('');
+  return `<div class="group"><h3>Sources <span class="count">${shown.length === SOURCES.length ? SOURCES.length : `${shown.length} of ${SOURCES.length}`}</span></h3>
+    <div style="display:flex;flex-direction:column;gap:8px;padding:0 0 4px">
+      <label class="find">${svg('find')}<input data-query value="${esc(state.query)}" placeholder="Find a source" aria-label="Find a source"></label>
+      <div class="chips" role="group" aria-label="Show">${chips}</div></div>
+    ${body || '<p class="none">No source matches.</p>'}</div>`;
+}
+
+function listHtml({ rail = false } = {}) {
+  const checks = rail ? '' : `<div class="group"><button class="checks" data-checks aria-expanded="${state.checks}">${svg('chev')}<span class="name">Checks</span><span class="pill ok">All passed</span></button>
+    ${state.checks ? `<div class="check-list">${CHECKS.map(([n, tone, v]) => `<div><span>${n}</span><span class="pill ${tone}">${v}</span></div>`).join('')}</div>` : ''}</div>`;
+  return `<div class="group"><h3>Outputs</h3>${OUTPUTS.map((o) => fileRow(o, o.pill)).join('')}</div>
+    <div class="group"><h3>Agent's notes</h3>${NOTES.map((o) => fileRow(o)).join('')}</div>
+    ${checks}${sourcesHtml()}`;
+}
+
+// --- The top bar -----------------------------------------------------------------------------------------------
+function nameHtml(name) {
+  // Cut in the middle: the start shrinks, the last 14 characters stay.
+  if (name.length <= 24) return `<span class="start">${esc(name)}</span>`;
+  return `<span class="start">${esc(name.slice(0, -14))}</span><span class="end">${esc(name.slice(-14))}</span>`;
+}
 function head() {
-  const back = state.open ? `<button class="icon-btn" data-go="" aria-label="Back to files" title="Back to files">${svg('back')}</button>` : '';
-  const title = state.open || 'Files';
-  const railBtn = state.full ? `<button class="icon-btn" data-rail aria-pressed="${state.rail}" aria-label="${state.rail ? 'Hide' : 'Show'} the file list" title="${state.rail ? 'Hide' : 'Show'} the file list">${svg('side')}</button>` : '';
-  const modes = state.open ? `<div class="modes">${['View', 'Comment'].map((m) => `<button aria-pressed="${state.mode === m}" data-mode="${m}">${m}</button>`).join('')}</div>` : '';
-  const tools = state.open ? `<button class="icon-btn" aria-label="Find" title="Find">${svg('find')}</button><button class="icon-btn" aria-label="Download" title="Download">${svg('down')}</button>` : '';
   const full = `<button class="icon-btn" data-full aria-pressed="${state.full}" aria-label="${state.full ? 'Exit full screen' : 'Full screen'}" title="${state.full ? 'Exit full screen (Esc)' : 'Full screen'}">${svg(state.full ? 'shrink' : 'expand')}</button>`;
   const close = state.full ? '' : `<button class="icon-btn" aria-label="Close" title="Close">${svg('x')}</button>`;
-  $('#head').innerHTML = `${railBtn}${state.full ? '' : back}<h2>${title}</h2>${modes}${tools}${full}${close}`;
+  const railBtn = state.full && state.open ? `<button class="icon-btn" data-rail aria-pressed="${state.rail}" aria-label="${state.rail ? 'Hide' : 'Show'} the file list" title="${state.rail ? 'Hide' : 'Show'} the file list">${svg('side')}</button>` : '';
+  if (!state.open) {
+    $('#head').innerHTML = `<h2><span class="start">Files</span></h2>${full}${close}`;
+    return;
+  }
+  const back = state.full ? '' : `<button class="icon-btn" data-go="" aria-label="Back to files" title="Back to files">${svg('back')}</button>`;
+  // One button for comment mode, lit while it is on: the name keeps the room a two-way switch would take.
+  const on = state.mode === 'Comment';
+  const modes = `<button class="icon-btn comment-btn" data-mode="${on ? 'View' : 'Comment'}" aria-pressed="${on}" aria-label="Comment on this file" title="${on ? 'Stop commenting' : 'Comment: click a cell, line or spot'}">${svg('comment')}</button>`;
+  // Find, zoom and download sit in the bar when there is room (full screen), else under More.
+  const tools = state.full
+    ? `<button class="icon-btn" aria-label="Find" title="Find">${svg('find')}</button><button class="icon-btn" aria-label="Zoom" title="Zoom">${svg('zoom')}</button><button class="icon-btn" aria-label="Download" title="Download">${svg('down')}</button>`
+    : `<button class="icon-btn" data-menu aria-label="More" title="More" aria-expanded="${state.menu}">${svg('more')}</button>`;
+  $('#head').innerHTML = `${railBtn}${back}<h2 title="${esc(state.open)}">${nameHtml(state.open)}</h2>${modes}${tools}${full}${close}
+    ${state.menu ? `<div class="menu" style="right:48px;top:48px"><button>${svg('find')}Find in file</button><button>${svg('zoom')}Zoom</button><button>${svg('down')}Download</button></div>` : ''}`;
 }
 
-function rail() {
-  const f = (name, pill) => `<button class="f" data-go="${name}" aria-current="${state.open === name}"><span title="${name}">${name}</span>${pill ? `<span class="pill ${pill[0]}">${pill[1]}</span>` : ''}</button>`;
-  const sources = FILES.sources.map(([folder, names]) => `<div class="folder" title="${folder}">${folder}</div>${names.map((n) => f(n)).join('')}`).join('');
-  $('#rail').innerHTML = `<input placeholder="Find a file" aria-label="Find a file">
-    <div><h3>Outputs</h3>${FILES.outputs.map((o) => f(o.name, o.pill)).join('')}</div>
-    <div><h3>Agent's notes</h3>${FILES.records.map((o) => f(o.name)).join('')}</div>
-    <div><h3>Sources <span class="count">· 11</span></h3>${sources}<button class="more">Show all 11</button></div>`;
-}
+// --- An open file ----------------------------------------------------------------------------------------------
+const NAMES = ['Jordan Hollis', 'Quinn Brook', 'Parker Hollis', 'Leon Stroud', 'Indigo Hollis', 'Sage Pemberton'];
+const OUTPUT = [['Entity', 'Employee ID', 'Employee Name', 'Department', 'Currency', 'Base Salary'], ...Array.from({ length: 22 }, (_, i) => ['SG01', `SG00${String(i + 1).padStart(2, '0')}`, NAMES[i % 6], ['Engineering', 'Operations', 'People', 'Sales'][i % 4], 'SGD', 4600 + i * 350])];
+const SOURCE = [['Emp ID', 'Name', 'Dept', 'Base', 'Allowance', 'Start'], ...Array.from({ length: 22 }, (_, i) => [`SG00${String(i + 1).padStart(2, '0')}`, NAMES[i % 6], ['Engineering', 'Operations', 'People', 'Sales'][i % 4], 4600 + i * 350, 400 + i * 20, `2024-0${(i % 9) + 1}-01`])];
+const SHEETS = ['Employees', 'Entity Summary', 'File Map', 'Lists', 'FX', 'Joiners and leavers', 'Exceptions', 'Sign-off'];
 
-function sheet(rows, ring) {
-  return `<div class="bar"><div class="tabs">${['Employees', 'Entity Summary', 'File Map', 'Lists'].map((t, i) => `<button class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div><span class="spacer"></span><div class="modes"><button aria-pressed="false">Changes</button></div></div>
-    <div class="sheet" style="position:relative"><table class="grid"><thead><tr><th></th>${'ABCDEF'.split('').map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>
-    ${rows.map((r, i) => `<tr class="${i === 0 ? 'head' : ''}"><td class="rn">${i + 1}</td>${r.map((v, c) => `<td class="${typeof v === 'number' ? 'num' : ''} ${ring && ring[0] === i && ring[1] === c ? 'ring' : ''}">${typeof v === 'number' ? v.toLocaleString('en') : v}</td>`).join('')}</tr>`).join('')}
-    </tbody></table>${state.comment ? `<div class="pop" style="left:420px;top:150px"><h2>Employees, cell F3</h2><textarea placeholder="What should change?"></textarea><div class="end"><button class="btn text">Cancel</button><button class="btn primary">Add comment</button></div></div>` : ''}</div>`;
+function sheet(rows, ring, pill) {
+  return `<div class="bar"><div class="tabs">${SHEETS.map((t, i) => `<button class="${i === 0 ? 'on' : ''}">${t}</button>`).join('')}</div>${pill || ''}<div class="modes"><button aria-pressed="false">Changes</button></div></div>
+    <div class="sheet"><table class="grid"><thead><tr><th></th>${'ABCDEF'.split('').map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map((r, i) => `<tr class="${i === 0 ? 'head' : ''}"><td class="rn">${i + 1}</td>${r.map((v, c) => `<td class="${typeof v === 'number' ? 'num' : ''} ${ring && ring[0] === i && ring[1] === c ? 'ring' : ''}">${typeof v === 'number' ? v.toLocaleString('en') : esc(v)}</td>`).join('')}</tr>`).join('')}
+    </tbody></table>${state.comment ? `<div class="pop" style="left:${state.full ? 460 : 60}px;top:150px"><h2>Employees, cell F3</h2><textarea placeholder="What should change?"></textarea><div class="end"><button class="btn text">Cancel</button><button class="btn primary">Add comment</button></div></div>` : ''}</div>`;
 }
-
-const OUTPUT = [['Entity', 'Employee ID', 'Employee Name', 'Department', 'Currency', 'Base Salary'], ...Array.from({ length: 18 }, (_, i) => ['SG01', `SG00${String(i + 1).padStart(2, '0')}`, ['Jordan Hollis', 'Quinn Brook', 'Parker Hollis', 'Leon Stroud', 'Indigo Hollis', 'Sage Pemberton'][i % 6], ['Engineering', 'Operations', 'People', 'Sales'][i % 4], 'SGD', 4600 + i * 350])];
-const SOURCE = [['Emp ID', 'Name', 'Dept', 'Base', 'Allowance', 'Start'], ...Array.from({ length: 18 }, (_, i) => [`SG00${String(i + 1).padStart(2, '0')}`, ['Jordan Hollis', 'Quinn Brook', 'Parker Hollis', 'Leon Stroud', 'Indigo Hollis', 'Sage Pemberton'][i % 6], ['Engineering', 'Operations', 'People', 'Sales'][i % 4], 4600 + i * 350, 400 + i * 20, '2024-0' + ((i % 9) + 1) + '-01'])];
 
 function body() {
-  if (!state.open) {
-    $('#body').innerHTML = `<div><h3 style="font-size:13px;color:var(--muted);font-weight:500;margin-bottom:4px">Outputs</h3>${FILES.outputs.map((o) => `<div class="list-row"><span>${o.name}</span><span class="pill ok">Checked</span></div>`).join('')}</div>
-      <div><h3 style="font-size:13px;color:var(--muted);font-weight:500;margin-bottom:4px">Sources</h3>${FILES.sources.flatMap(([, n]) => n).map((n) => `<div class="list-row"><span>${n}</span></div>`).join('')}</div>`;
-  } else if (state.open.endsWith('.md')) {
-    $('#body').innerHTML = `<div class="doc"><h3>Which file won</h3><p>SG01_Payroll_Oct2026_FINAL.xlsx over the v1 draft, which is marked superseded.</p><h3>Left out</h3><p>The UK leaver after the 15 October cut-off.</p><h3>Assumptions</h3><p>Stipends are included as allowances; no separate one-time-payment field was found.</p></div>`;
-  } else if (state.open.startsWith('SG01')) {
-    $('#body').innerHTML = sheet(SOURCE, [10, 3]);
-  } else {
-    $('#body').innerHTML = sheet(OUTPUT, null);
-  }
+  if (!state.open) return ($('#body').innerHTML = listHtml());
+  if (state.open.endsWith('.md') || state.open.endsWith('.txt') || state.open.endsWith('.json'))
+    return ($('#body').innerHTML = `<div class="doc"><h3>Which file won</h3><p>Each entity's payroll register over its draft, which is marked superseded.</p><h3>Left out</h3><p>UK leavers after the 15 October cut-off; September registers, which are last month's.</p><h3>Assumptions</h3><p>Stipends are included as allowances; no separate one-time-payment field was found.</p></div>`);
+  const source = SOURCES.find((s) => s.name === state.open);
+  $('#body').innerHTML = source ? sheet(SOURCE, [10, 3], `<span class="pill">${DECISION[source.decision]}</span>`) : sheet(OUTPUT, null, '<span class="pill ok">Checked</span>');
 }
 
 function draw() {
   const app = $('#app');
   app.classList.toggle('full', state.full);
+  app.classList.toggle('list', state.full && !state.open);
   app.classList.toggle('no-rail', !state.rail);
   head();
-  rail();
+  $('#rail').innerHTML = state.full && state.open ? listHtml({ rail: true }) : '';
   body();
 }
 
@@ -216,29 +320,53 @@ document.addEventListener('click', (e) => {
   let el;
   if (t('[data-full]')) state.full = !state.full;
   else if (t('[data-rail]')) state.rail = !state.rail;
-  else if ((el = t('[data-go]'))) Object.assign(state, { open: el.dataset.go || null, comment: false });
+  else if (t('[data-menu]')) state.menu = !state.menu;
+  else if (t('[data-checks]')) state.checks = !state.checks;
+  else if ((el = t('[data-filter]'))) state.filter = el.dataset.filter;
+  else if ((el = t('[data-folder]'))) {
+    const f = el.dataset.folder;
+    state.openFolders.has(f) ? state.openFolders.delete(f) : state.openFolders.add(f);
+  } else if ((el = t('[data-go]'))) Object.assign(state, { open: el.dataset.go || null, comment: false, menu: false, mode: 'View' });
   else if ((el = t('[data-mode]'))) Object.assign(state, { mode: el.dataset.mode, comment: el.dataset.mode === 'Comment' });
   else return;
   draw();
+});
+document.addEventListener('input', (e) => {
+  if (!e.target.matches('[data-query]')) return;
+  const at = e.target.selectionStart;
+  const inRail = !!e.target.closest('.rail');
+  state.query = e.target.value;
+  draw();
+  const box = document.querySelector(inRail ? '.rail [data-query]' : '#body [data-query]');
+  box?.focus();
+  box?.setSelectionRange(at, at);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.full) { state.full = false; draw(); }
 });
 
+const SG = 'Region_APAC / Singapore / payroll / 2026 / Q4 / october';
+const OUT = OUTPUTS[0].name;
 const STATES = [
-  ['Today: panel beside chat', { full: false, rail: true, open: 'output_template_output.xlsx', comment: false, mode: 'View' }],
-  ['Full screen', { full: true, rail: true, open: 'output_template_output.xlsx', comment: false, mode: 'View' }],
-  ['Open a source', { full: true, rail: true, open: 'SG01_Payroll_Oct2026_FINAL.xlsx', comment: false, mode: 'View' }],
-  ["Agent's notes", { full: true, rail: true, open: 'notes.md', comment: false, mode: 'View' }],
-  ['Comment at full screen', { full: true, rail: true, open: 'output_template_output.xlsx', comment: true, mode: 'Comment' }],
-  ['List hidden', { full: true, rail: false, open: 'output_template_output.xlsx', comment: false, mode: 'View' }],
-  ['Files list at full screen', { full: true, rail: true, open: null, comment: false, mode: 'View' }],
+  ['Files, 240 sources', {}],
+  ['Folder open', { openFolders: new Set([SG]) }],
+  ['Find "SG01"', { query: 'SG01' }],
+  ['Only unclear', { filter: 'unclear' }],
+  ['Checks open', { checks: true }],
+  ['File open', { open: OUT }],
+  ['More menu', { open: OUT, menu: true }],
+  ['Files list, full screen', { full: true }],
+  ['File, full screen', { full: true, open: OUT, openFolders: new Set([SG]) }],
+  ['Source, full screen', { full: true, open: 'SG01_payroll_register_2026-10.xlsx', openFolders: new Set([SG]) }],
+  ['Find at full screen', { full: true, open: OUT, query: 'timesheets_wk4' }],
+  ['Comment, full screen', { full: true, open: OUT, mode: 'Comment', comment: true }],
+  ['List hidden', { full: true, open: OUT, rail: false }],
 ];
 const bar = $('#switcher');
 STATES.forEach(([name, s], n) => {
   const b = document.createElement('button');
   b.textContent = name;
-  b.onclick = () => { state = { ...s }; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); };
+  b.onclick = () => { state = { ...RESET, openFolders: new Set(), ...s }; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); };
   bar.appendChild(b);
   if (n === 0) b.click();
 });
