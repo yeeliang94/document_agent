@@ -66,12 +66,13 @@ def check_style(style) -> None:
 
 
 def as_number(text: str):
-    """A number written as text, such as "4,200.50", or None. Text with a leading zero (a code) stays text."""
+    """A number written as text, such as "4,200.50", or None. Text with a leading zero (a code) or more than 15
+    digits (an account number) stays text."""
     if not isinstance(text, str) or not NUMBER.match(text) or not re.search(r'\d', text):
         return None
     plain = text.strip().replace(',', '')
-    if re.match(r'^-?0\d', plain):
-        return None
+    if re.match(r'^-?0\d', plain) or len(re.sub(r'\D', '', plain)) > 15:
+        return None  # a code with a leading zero, or a long ID that Excel's numbers cannot hold digit for digit
     try:
         value = float(plain)
     except ValueError:
@@ -136,7 +137,8 @@ def _style_sheet(ws, header_row: int, types: dict[str, str], style: dict) -> Non
                 if isinstance(cell.value, str) and as_date(cell.value):
                     cell.value = as_date(cell.value)
                 if cell.number_format in UNSET:
-                    cell.number_format = style['date_format']
+                    timed = isinstance(cell.value, datetime) and cell.value.time() != datetime.min.time()
+                    cell.number_format = style['date_format'] + (' hh:mm' if timed else '')
             elif kind in ('number', 'integer'):
                 if isinstance(cell.value, str) and as_number(cell.value) is not None:
                     cell.value = as_number(cell.value)

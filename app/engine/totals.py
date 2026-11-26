@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import islice
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -140,7 +141,11 @@ def work_out(path: Path, known: frozenset = frozenset()) -> Totals:
     out = Totals()
     book = _Book(path)
     try:
-        cells = list(book.formula_cells())[:MAX_FORMULAS]
+        cells = list(islice(book.formula_cells(), MAX_FORMULAS + 1))
+        # Past the cap the scan stops, so which cells hold formulas is known only that far: a total's gap could
+        # then hold an unseen formula and be blamed for leaving it out. Totals are still listed; gaps are not judged.
+        whole = len(cells) <= MAX_FORMULAS
+        cells = cells[:MAX_FORMULAS]
         out.formulas = len(cells)
         for sheet, r, c, text in cells:
             place = f'{sheet}!{get_column_letter(c)}{r}'
@@ -162,7 +167,7 @@ def work_out(path: Path, known: frozenset = frozenset()) -> Totals:
             out.totals.append({'sheet': sheet, 'cell': place.split('!', 1)[1], 'formula': text, 'value': value})
             reads: list = []
             _reads(parsed, sheet, reads)
-            for rng in ranges:
+            for rng in ranges if whole else ():
                 missed = _left_out(book, sheet, r, c, rng, reads)
                 if missed:
                     out.short.add((sheet, text))

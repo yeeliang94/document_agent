@@ -193,3 +193,22 @@ def test_the_helper_formats_a_column_that_ends_in_a_total_and_keeps_formats_the_
     styled = load_workbook(tmp_path / 'summary.xlsx').active
     assert [styled[f'B{r}'].number_format for r in (2, 3, 4)] == ['#,##0.00'] * 3
     assert styled['C2'].number_format == '0%'
+
+
+def test_long_ids_stay_text_and_times_stay_shown(tmp_path):
+    from datetime import datetime
+
+    from openpyxl import Workbook, load_workbook
+
+    from app.engine.house_style import apply, as_number
+
+    assert as_number('12345678901234567890') is None and as_number('4,200.50') == 4200.5
+    book = Workbook()
+    book.active.append(['Account', 'Posted'])
+    book.active.append(['12345678901234567890', datetime(2026, 10, 31, 14, 30)])
+    book.active.append(['12345678901234567891', datetime(2026, 10, 31)])
+    book.save(tmp_path / 'b.xlsx')
+    apply(tmp_path / 'b.xlsx')
+    sheet = load_workbook(tmp_path / 'b.xlsx').active
+    assert sheet['A2'].value == '12345678901234567890'
+    assert (sheet['B2'].number_format, sheet['B3'].number_format) == ('dd/mm/yyyy hh:mm', 'dd/mm/yyyy')
