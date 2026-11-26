@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `70%` (45 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
+**Overall Progress:** `73%` (47 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -333,9 +333,9 @@ Open questions for you before this starts:
 
 These come from `reports/Small wins - agent tools and user experience.md`. These are the first, cheapest batch. Each one is a general fix, not a rule for one kind of document.
 
-- [ ] 🟨 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
+- [x] 🟩 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
   - **Verify:** in a browser, with the tab in the background, a question, a finish and a stop each raise one notification. With the switch off, none is raised. A blocked permission shows a plain sentence on the Settings page.
-  - **Result (2026-11-26):** built (`web/alerts.js`; Settings: Notifications). Only while the person is away from the tab; a run they paused or stopped raises nothing, a run paused by the day's limit does. Checked in a browser: a finish raised one notification with its words, the tab word and dot, and a click opened the run; switch off and a paused run raised none; the blocked sentence and the Allow button show. Not yet seen: a real question and a real stop end to end, and the mark clearing on return to the tab.
+  - **Result (2026-11-26):** built (`web/alerts.js`; Settings: Notifications). Only while the person is away from the tab; a run they paused or stopped raises nothing, a run paused by the day's limit does. Checked in a browser: a finish raised one notification with its words, the tab word and dot, and a click opened the run; switch off and a paused run raised none; the blocked sentence and the Allow button show. Then, through the running app with a test run switched from running to a question and later to a stop at its time limit: each raised one notification with the question or the reason, and the tab showed "Question ·" / "Stopped ·" with its dot; the mark cleared as soon as the page had focus again. (The browser's own notification was stood in for, as this test browser blocks them.)
 
 - [ ] 🟨 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
   - When a tool fails, say which tool failed and with what input, not only the error (agent.py `_tool_error`).
@@ -400,8 +400,9 @@ The tester's first batch (source links, runs told apart, Settings errors in view
   - **Result (2026-11-26):** each run, its Technical log, each playbook and client, the lists and Settings have their own address (`web/routes.js`). Browser Back, Forward and Refresh, the back arrows and "Back to run" all return to the page before. A deleted run's address opens New run with a sentence; an opening run fades the page. Checked in a browser; not checked: Back to a client's Runs tab (the test data had no client runs).
 - [ ] 🟥 **Step 57: Delete a playbook** (prototype first) — with a confirmation that names what goes with it; its past runs stay and still open. Long names show in full on hover and are not cut mid-word. Then remove the "QA test playbook" the tester left in the scratch data.
   - **Verify:** tests that a deleted playbook's runs still open and its clients are unaffected; the flow checked in a browser.
-- [ ] 🟥 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.
+- [x] 🟩 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.
   - **Verify:** in a browser at both widths.
+  - **Result (2026-11-26):** already in place: the narrow-screen menu (the select at the top) lists Technical log for the open run, at 642 and 375 wide; choosing it opens the log, and Back to run returns. Checked in a browser.
 - [ ] 🟥 **Step 59: No "What should change?" on input files** (prototype first) — input files the agent does not edit get a note or a question, not a change request; the comment box no longer covers the cell it is about.
   - **Verify:** in a browser: a comment on an input file and an output file, at 642 and 1440 wide.
 - [ ] 🟥 **Step 60: Look at a past playbook version before restoring it** (prototype first).
