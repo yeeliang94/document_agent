@@ -13,6 +13,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, ROUND_UP, Decimal
 from functools import lru_cache
 
+from openpyxl.styles.numbers import is_date_format
 from openpyxl.utils import column_index_from_string
 from openpyxl.utils.datetime import CALENDAR_WINDOWS_1900 as EPOCH_1900
 from openpyxl.utils.datetime import from_excel, to_excel
@@ -728,3 +729,20 @@ class Calculator:
         if best is None:
             raise XlError('#N/A')
         return best
+
+
+def shown_value(cell, typed, calc: 'Calculator', sheet: str, row: int, col: int) -> tuple:
+    """A cell's value as Excel shows it, and its formula when the preview worked the value out itself."""
+    if cell.value is not None or not (isinstance(typed, str) and typed.startswith('=')):
+        return (cell.value if cell.value is not None else typed), None
+    try:
+        value = calc.result(sheet, row, col)
+    except Exception:  # noqa: BLE001 - a formula the calculator cannot work out keeps its text, and never stops the preview
+        return typed, None
+    code = getattr(cell, 'number_format', None)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and code and is_date_format(code):
+        try:
+            value = from_excel(value)  # a date sum like =B2+30 comes out as a day number
+        except (ValueError, OverflowError):
+            pass
+    return value, typed

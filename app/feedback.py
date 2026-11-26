@@ -9,6 +9,14 @@ picture with numbered pins. Each round keeps a folder under <job>/feedback/round
   before/      the outputs as they were when the comments were made
   report.json  what changed where the comments asked, and what else changed since
 
+The agent answers each comment with its save (what it changed, or why it left the spot as it was). Answers are kept
+on the job's own entry for the round, as {"answers": {"1": "...", "2": "..."}}, next to the code's verdict in the
+report: the answer explains, and the verdict says whether the spot changed.
+
+A reply is a comment like any other, sent as a new round, with "reply_to" naming the comment it answers ("1.2"). It
+points at that comment's spot, and the agent reads the earlier comment and answer with it. Resolving a comment
+("resolved": [2, 3] on the round's entry) only tidies the screen; the agent is never told.
+
 The copy in before/ is what makes the report possible: after the agent saves, its outputs are compared with it.
 A round is "saving" while it is being written, "sent" once queued for the agent, "delivered" when a run has read it,
 and "done" when that run finished its work and the final report was kept.
@@ -30,13 +38,14 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 
-from . import preview
+from . import clients, preview, versioned
 from .cleaning import now
 from .engine.checks import DOCUMENT_MAP, PROVENANCE
 from .files import within
 
 MAX_COMMENTS = 50
 MAX_TEXT = 2000
+MAX_ANSWER = 1000  # characters in the agent's answer to one comment
 MAX_PICTURES = 8  # pages or images with pins in one round; each is sent to the model on every later turn
 MAX_IMAGE_PIXELS = 40_000_000  # a picture larger than this is refused before it is opened in full
 SHOWN = 200  # characters of a cell or line quoted back to the agent
@@ -245,7 +254,7 @@ def pin_pictures(root: Path, number: int, entries: list[dict]) -> dict[str, byte
     return made
 
 
-def round_message(number: int, entries: list[dict], lessons: bool = False) -> str:
+def round_message(number: int, entries: list[dict], lessons: bool = False, client: str = '') -> str:
     """The comments as the agent reads them: one line each, with its file, its spot, what is there now and what the
     user wrote. What comes from a file or from the user is quoted, so it can only ever be read as content."""
     lines = [
@@ -253,7 +262,11 @@ def round_message(number: int, entries: list[dict], lessons: bool = False) -> st
         'calls for, and whatever follows from it, such as a total; leave everything else as it is. A comment that '
         'speaks of every row, or states a rule, reaches every place the same thing occurs, not only its pin. After you save, '
         'save_outputs also returns comment_changes: which of these spots changed, and what else changed since these '
-        'comments were made.'
+        'comments were made. With your save, pass answers: for every comment, by its number (e.g. '
+        f'"{number}.1"), one or two plain sentences the user reads under their comment, saying what you changed, or why '
+        "you left the spot as it was. Name cells as Sheet!B4 (or 'Sheet name'!B4) and files by their name. comment_changes "
+        'lists any '
+        'comment still unanswered.'
     ]
     if lessons:
         lines[0] += (
@@ -263,6 +276,12 @@ def round_message(number: int, entries: list[dict], lessons: bool = False) -> st
             'example where the comment gives one. A fix that is only about this '
             'file is not a lesson, and most comments are just fixes.'
         )
+        if client:
+            lines[0] += (
+                f' Say where the rule belongs: scope "client" when it is about how {client} wants things, '
+                '"playbook" when anyone doing this kind of work should follow it. Where the comment says where it '
+                'is remembered, that place is used.'
+            )
     if any(entry.get('picture') for entry in entries):
         lines[0] += (
             ' The pictures that come with this message show where the pins are. They are for you to look at; they '
@@ -274,9 +293,39 @@ def round_message(number: int, entries: list[dict], lessons: bool = False) -> st
             parts.append(f'pin {entry["n"]} on picture {entry["picture"]}')
         if entry['now'] is not None:
             parts.append(f'there now: {_quoted(entry["now"])}')
+        if entry.get('earlier'):
+            earlier = entry['earlier']
+            answered = _quoted(earlier['answer']) if earlier.get('answer') else 'nothing yet'
+            parts.append(
+                f'a reply to comment {entry["reply_to"]}: {_quoted(earlier["text"])}, which you answered: {answered}'
+            )
         parts.append(f'comment: {_quoted(entry["text"])}')
         lines.append(' | '.join(parts))
     return '\n'.join(lines)
+
+
+SPOT_FIELDS = ('path', 'sheet', 'cell', 'page', 'x', 'y', 'w', 'h', 'line')
+
+
+def _replied(root: Path, job: dict, comments: list[dict]) -> list[dict | None]:
+    """For each comment that replies to an earlier one: that comment's spot, text and the agent's answer, so the reply
+    points where the comment did. Raises ValueError for a reply to a comment this run does not have."""
+    found = []
+    for number, comment in enumerate(comments, 1):
+        name = comment.get('reply_to')
+        if not name:
+            found.append(None)
+            continue
+        round_number, _, n = str(name).partition('.')
+        entry = next((r for r in job.get('feedback') or [] if str(r['number']) == round_number), None)
+        try:
+            record = json.loads((_folder(root, entry['number']) / 'round.json').read_text(encoding='utf-8'))
+            earlier = next(c for c in record['comments'] if str(c['n']) == n)
+        except (TypeError, OSError, ValueError, StopIteration):
+            raise ValueError(f'Comment {number} replies to a comment this run does not have') from None
+        found.append({'reply_to': f'{entry["number"]}.{earlier["n"]}', 'spot': {k: earlier[k] for k in SPOT_FIELDS if k in earlier},
+                      'earlier': {'text': earlier['text'], 'answer': (entry.get('answers') or {}).get(n)}})  # fmt: skip
+    return found
 
 
 def _folder(root: Path, number: int) -> Path:
@@ -297,10 +346,17 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
     comment's spot does not exist, the round cannot be stored, or a remembered comment cannot be added to the
     playbook; nothing is queued then and nothing is left behind."""
     root = store.path(job_id)
-    entries = [
-        {'n': n, **spot, 'text': comment['text'].strip(), 'remember': bool(comment.get('remember'))}
-        for n, (spot, comment) in enumerate(zip(locate(root, comments), comments, strict=True), 1)
+    replies = _replied(root, store.get(job_id), comments)
+    # A reply points where its comment did, whatever spot the browser sent with it.
+    spots = [
+        {**{k: v for k, v in c.items() if k not in SPOT_FIELDS}, **r['spot']} if r else c
+        for c, r in zip(comments, replies, strict=True)
     ]
+    entries = [
+        {'n': n, **spot, 'text': comment['text'].strip(), 'remember': bool(comment.get('remember')),
+         'remember_to': comment.get('remember_to'), **({k: reply[k] for k in ('reply_to', 'earlier')} if reply else {})}
+        for n, (spot, comment, reply) in enumerate(zip(locate(root, spots), comments, replies, strict=True), 1)
+    ]  # fmt: skip
     claim = {}
 
     def reserve(job):
@@ -325,12 +381,15 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
             (folder / 'pins').mkdir(exist_ok=True)
             (folder / 'pins' / name).write_bytes(data)
         # A job with a playbook can keep a lesson (app/lessons.py); the message says so only then.
-        message = round_message(number, entries, lessons=bool((job.get('playbook') or {}).get('id')))
+        message = round_message(number, entries, lessons=bool((job.get('playbook') or {}).get('id')),
+                                client=(job.get('client') or {}).get('name', ''))
         record = {'id': round_id, 'number': number, 'created_at': now(), 'comments': entries, 'message': message,
                   'pictures': sorted(pictures), 'remembered_version': None}  # fmt: skip
         (folder / 'round.json').write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding='utf-8')
         # Last, because it is the one step that reaches outside this job.
-        record['remembered_version'] = version = _remember(store, job, round_id, number, entries)
+        kept = _remember(store, job, round_id, number, entries)
+        record['remembered_version'] = version = kept.get('playbook')
+        record['remembered_client_version'] = client_version = kept.get('client')
         (folder / 'round.json').write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding='utf-8')
     except Exception as error:
         _drop(store, job_id, round_id, folder)
@@ -342,7 +401,12 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
 
     def send(job):
         entry = next(r for r in job['feedback'] if r['id'] == round_id)
-        entry.update(status='sent', remembered_version=version)
+        for reply in filter(None, replies):  # a reply opens its comment again
+            at, n = (int(x) for x in reply['reply_to'].split('.'))
+            for earlier in job['feedback']:
+                if earlier['number'] == at and n in (earlier.get('resolved') or []):
+                    earlier['resolved'] = [x for x in earlier['resolved'] if x != n]
+        entry.update(status='sent', remembered_version=version, remembered_client_version=client_version)
         job['pending_messages'] = [*(job.get('pending_messages') or []), {'text': message, 'round': number, 'images': images}]  # fmt: skip
         sent.update(entry)
 
@@ -350,7 +414,9 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
     store.event(
         job_id, 'feedback.sent', f'{len(entries)} comment{"" if len(entries) == 1 else "s"} sent to the agent',
         type='user', round=number, round_id=round_id, remembered_version=version,
-        comments=[{k: e.get(k) for k in ('n', 'path', 'where', 'text', 'remember')} for e in entries],
+        remembered_client_version=client_version,
+        # With its spot, so the chat's card can open the file there.
+        comments=[{k: e[k] for k in ('n', 'path', 'where', 'text', 'remember', 'remember_to', 'reply_to', *SPOT_FIELDS) if k in e} for e in entries],
     )  # fmt: skip
     return sent
 
@@ -369,31 +435,91 @@ def recover(store, job: dict) -> None:
             store.event(job['id'], 'feedback.dropped', 'Comments that were being saved when the app stopped were not sent. Send them again.', type='job', level='WARN', round=entry['number'])  # fmt: skip
 
 
-def _remember(store, job: dict, round_id: str, number: int, entries: list[dict]) -> int | None:
-    """Add the comments marked "remember" to the job's playbook as one new version; returns its number. A round
-    remembered once is never added twice."""
-    lines = [e['text'] for e in entries if e['remember']]
-    if not lines:
-        return None
-    playbook_id = (job.get('playbook') or {}).get('id') or job.get('module') or ''
+def _remember(store, job: dict, round_id: str, number: int, entries: list[dict]) -> dict:
+    """Add the comments marked "remember" to where each is kept: the job's playbook (the default) or its client's
+    notes, one new version for each. Returns {"playbook": version, "client": version}, each only when added to. A
+    round remembered once is never added twice. Every place is checked before any is written, so a round that
+    cannot be kept in one place changes neither."""
+    plan = {}
+    for scope in clients.SCOPES:
+        lines = [e['text'] for e in entries if e['remember'] and (e.get('remember_to') or 'playbook') == scope]
+        if not lines:
+            continue
+        place = clients.where(store, job, scope)
+        if not place:
+            raise ValueError('This run has no client, so a comment can only be remembered in the playbook')
+        books, target = place
+        try:
+            latest, history = books.get(target), books.versions(target)
+        except KeyError:
+            raise ValueError(f"This run's {books.label} no longer exists, so a comment cannot be remembered") from None
+        # Found again by the job and the round's own id, not its number: a round cut off after this saved and sent
+        # again is given a new number, and must still not add the same text twice.
+        earlier = next((v for v in history if (v['detail'].get('job_id'), v['detail'].get('round_id')) == (job['id'], round_id)), None)  # fmt: skip
+        if not earlier and len(latest['text'].rstrip()) + 2 + len('\n\n'.join(lines)) > versioned.MAX_TEXT:
+            raise ValueError(f'The {books.text} of {latest["name"]} would pass {versioned.MAX_TEXT:,} characters. Shorten them first.')  # fmt: skip
+        plan[scope] = (books, target, lines, earlier)
     detail = {'job_id': job['id'], 'round': number, 'round_id': round_id}
-    # Found again by the job and the round's own id, not its number: a round cut off after this saved and sent
-    # again is given a new number, and must still not add the same instructions twice.
-    same = lambda d: (d.get('job_id'), d.get('round_id')) == (job['id'], round_id)  # noqa: E731
-    try:
-        earlier = next((v for v in store.playbooks.versions(playbook_id) if same(v['detail'])), None)
-        if earlier:
-            return earlier['version']
-        saved = store.playbooks.save(
-            playbook_id, '\n\n'.join(lines), 'remembered', ' '.join(lines), append=True, **detail
-        )
-    except KeyError:
-        raise ValueError("This run's playbook no longer exists, so a comment cannot be remembered") from None
-    return saved['version']
+    found = {}
+    for scope, (books, target, lines, earlier) in plan.items():
+        found[scope] = earlier['version'] if earlier else books.save(
+            target, '\n\n'.join(lines), 'remembered', ' '.join(lines), append=True, **detail
+        )['version']  # fmt: skip
+    return found
+
+
+def answer(store, job_id: str, answers: list[dict]) -> dict:
+    """Keep the agent's answer to each comment it names ({"comment": "2.1", "answer": "..."}), for the rounds it is
+    acting on. A later answer to the same comment replaces the earlier one. Returns {"kept": [...], "not_kept":
+    [...]} with a reason for each answer that names no open comment, for the agent to correct."""
+    kept, not_kept, wanted = [], [], {}
+    for item in answers:
+        name, text = str(item.get('comment', '')).strip(), ' '.join(str(item.get('answer', '')).split())
+        round_number, _, n = name.partition('.')
+        if not (round_number.isdigit() and n.isdigit()):
+            not_kept.append(f'{name or "(empty)"}: name a comment by its number, e.g. "2.1"')
+        elif not text:
+            not_kept.append(f'{name}: the answer is empty')
+        else:
+            wanted[(int(round_number), int(n))] = text[:MAX_ANSWER]
+
+    def keep(job):
+        for (number, n), text in wanted.items():
+            entry = next((r for r in job.get('feedback') or [] if r['number'] == number), None)
+            if entry is None or entry['status'] != 'delivered':
+                not_kept.append(f'{number}.{n}: no round {number} is open in this run')
+            elif not 1 <= n <= entry['comments']:
+                not_kept.append(f'{number}.{n}: round {number} has {entry["comments"]} comments')
+            else:
+                entry.setdefault('answers', {})[str(n)] = text
+                kept.append(f'{number}.{n}')
+
+    if wanted:
+        store.mutate(job_id, keep)
+    return {'kept': kept, 'not_kept': not_kept}
+
+
+def resolve(store, job_id: str, comment: str, resolved: bool) -> None:
+    """Mark one comment ("2.1") resolved or open again. For the screen only: the agent is never told."""
+    round_number, _, n = comment.partition('.')
+    found = []
+
+    def mark(job):
+        entry = next((r for r in job.get('feedback') or [] if str(r['number']) == round_number), None)
+        if entry is None or not n.isdigit() or not 1 <= int(n) <= entry['comments']:
+            return
+        found.append(True)
+        rest = [x for x in entry.get('resolved') or [] if x != int(n)]
+        entry['resolved'] = sorted([*rest, int(n)]) if resolved else rest
+
+    store.mutate(job_id, mark)
+    if not found:
+        raise ValueError('This run has no such comment')
 
 
 def rounds(store, job_id: str) -> list[dict]:
-    """Every round of a job, oldest first, with its comments, its status and its change report once there is one."""
+    """Every round of a job, oldest first, with its comments, its status, the agent's answers and its change report
+    once there is one."""
     root, found = store.path(job_id), []
     for entry in store.get(job_id).get('feedback') or []:
         folder = _folder(root, entry['number'])
@@ -402,8 +528,8 @@ def rounds(store, job_id: str) -> list[dict]:
         except (OSError, ValueError):
             continue  # still being saved
         report = folder / 'report.json'
-        learned = {k: entry[k] for k in ('learned_version', 'learned') if k in entry}  # see app/lessons.py
-        found.append({**record, **learned, 'status': entry['status'], 'report': json.loads(report.read_text(encoding='utf-8')) if report.exists() else None})  # fmt: skip
+        learned = {k: entry[k] for k in ('learned_version', 'learned_client_version', 'learned') if k in entry}  # see app/lessons.py
+        found.append({**record, **learned, 'status': entry['status'], 'answers': entry.get('answers') or {}, 'resolved': entry.get('resolved') or [], 'report': json.loads(report.read_text(encoding='utf-8')) if report.exists() else None})  # fmt: skip
     return found
 
 
@@ -487,37 +613,51 @@ def _change(pair) -> str:
     return f'{_quoted(_short(pair[0]))} -> {_quoted(_short(pair[1]))}'
 
 
-def changes_since(store, job_id: str, relative: str, sheet: str | None = None) -> dict:
-    """What the agent changed in one output since the last round of comments, as the preview shows it: for a sheet,
-    each changed cell with what it showed before ({'value', 'text'}); for a text file, each changed line with the line
-    it replaced (None for a new line), and under 'removed' the lines taken out, each after the line it followed (0 for
-    the top). 'round' is that round's number, None when no round has been sent. 'new' says the file, or the sheet,
-    was not there then. Files the preview shows as pictures or pages are not compared: 'cells' and 'lines' are
-    both missing."""
+def changes_since(
+    store, job_id: str, relative: str, sheet: str | None = None, version: int | None = None, since: int | None = None
+) -> dict:
+    """What changed in one output, as the preview shows it: for a sheet, each changed cell with what it showed before
+    ({'value', 'text'}); for a text file, each changed line with the line it replaced (None for a new line), and under
+    'removed' the lines taken out, each after the line it followed (0 for the top). Files the preview shows as
+    pictures or pages are not compared: 'cells' and 'lines' are both missing.
+
+    The file is the output as it is now, or as version `version` kept it. It is compared with the version `since`
+    when given ('since' in the answer), otherwise with the files as they were at the last round of comments
+    ('round': that round's number, None when no round has been sent; an older version has no round to compare
+    with). 'new' says the file, or the sheet, was not there then."""
     root = store.path(job_id)
-    current = preview.job_file(root, relative)
+    current = preview.any_file(root, relative, version)
     folder, _, name = relative.partition('/')
-    entries = store.get(job_id).get('feedback') or [] if folder == 'outputs' else []
-    before = next((b for e in reversed(entries) if (b := _folder(root, e['number']) / 'before').is_dir()), None)
-    if before is None:
-        return {'round': None}
-    number = int(before.parent.name.removeprefix('round-'))
-    try:
-        old = within(before, name)
-    except ValueError:
-        old = None
-    if old is None or not old.is_file():
-        return {'round': number, 'new': True}
+    if since is not None:
+        label = {'since': since}
+        try:
+            old = preview.version_file(root, since, relative)
+        except (FileNotFoundError, ValueError):
+            if not (root / 'versions' / f'v{since:04d}').is_dir():
+                raise FileNotFoundError(f'version {since}') from None
+            return {**label, 'new': True}
+    else:
+        entries = store.get(job_id).get('feedback') or [] if folder == 'outputs' and version is None else []
+        before = next((b for e in reversed(entries) if (b := _folder(root, e['number']) / 'before').is_dir()), None)
+        if before is None:
+            return {'round': None}
+        label = {'round': int(before.parent.name.removeprefix('round-'))}
+        try:
+            old = within(before, name)
+        except ValueError:
+            old = None
+        if old is None or not old.is_file():
+            return {**label, 'new': True}
     kind = current.suffix.lower()
     if kind in preview.SHEETS or kind == '.csv':
         now = preview._sheet(current, sheet) if kind != '.csv' else preview._csv(current)
         was = preview._sheet(old, now['sheet']) if kind != '.csv' else preview._csv(old)
         if was['sheet'] != now['sheet']:  # a sheet added since; the preview fell back to another one
-            return {'round': number, 'new': True}
-        return {'round': number, 'cells': _changed_cells(was, now)}
+            return {**label, 'new': True}
+        return {**label, 'cells': _changed_cells(was, now)}
     if kind in preview.TEXT or kind == '.docx':
-        return {'round': number, **_changed_lines(preview.text_of(old), preview.text_of(current))}
-    return {'round': number}
+        return {**label, **_changed_lines(preview.text_of(old), preview.text_of(current))}
+    return label
 
 
 def _shown_cells(body: dict) -> dict[str, tuple]:
@@ -627,6 +767,9 @@ def change_report(store, job_id: str) -> dict | None:
                     )
                 )
             spots.append({'round': entry['number'], 'n': comment['n'], 'changed': len(changed) > before})
+    unanswered = [
+        f'{e["number"]}.{c["n"]}' for e in open_rounds for c in e['comments'] if str(c['n']) not in e['answers']
+    ]
     elsewhere, total = [], 0
     for name, cells in _differences(_folder(root, open_rounds[0]['number']) / 'before', outputs).items():
         if cells is None:
@@ -644,6 +787,7 @@ def change_report(store, job_id: str) -> dict | None:
         'changed_where_asked': changed,
         'not_changed_where_asked': unchanged,
         'spots': spots,  # the same verdict per comment, for the screen to mark the spots that changed
+        'unanswered': unanswered,  # comments the agent has not yet answered with a save
         'changed_elsewhere': elsewhere,
         'changed_elsewhere_count': total,
         'note': f'Compared cell by cell with the files as they were saved when round {open_rounds[0]["number"]} was '

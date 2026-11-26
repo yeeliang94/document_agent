@@ -6,19 +6,27 @@ import {
   jobUrl, state, toast,
 } from './core.js'; // prettier-ignore
 import {
-  MAX_BLOCK, blockCells, columnName, commentAction, commenting, dropComment, editPin, forget, keepComment, loadRounds,
-  popHtml, sendComments, syncPop, writeAt,
+  MAX_BLOCK, blockCells, chooseRemember, columnName, commentAction, commenting, dropComment, editPin, forget, keepComment,
+  loadRounds, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
 } from './comments.js'; // prettier-ignore
-import { backFile, closeFile, filesHtml, loadMap, openFile, proofHtml, turnPage } from './files.js';
-import { logPage, settingsPage, setupPage, startBlocked } from './pages.js';
 import {
-  applyPlace, canFind, closeFind, foundFor, loadChanges, locateRow, openFind, revealMarks, stepFind, typed,
+  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, refreshClients, submitClientDialog,
+  suggestClient, syncClient, typeNotes,
+} from './clients.js'; // prettier-ignore
+import { backFile, closeFile, filesHtml, loadMap, openFile, openSpot, proofHtml, turnPage } from './files.js';
+import { loadLinks } from './links.js';
+import { applyWidths } from './panels.js';
+import { logPage, settingProblem, settingsChanged, settingsPage, settingsValues, setupPage, startBlocked } from './pages.js';
+import {
+  applyPlace, canFind, closeFind, foundFor, loadChanges, locateRow, openFind, revealMarks, stepChange, stepFind, typed,
 } from './review.js'; // prettier-ignore
 import {
   askTune, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab, startDraft,
   submitDialog, syncPlaybook, uploadSkill,
 } from './playbooks.js'; // prettier-ignore
-import { composerHtml, headHtml, stagesHtml, threadHtml } from './thread.js';
+import { confirmStartOver, deleteRun, renameRun, runItems, submitRun } from './runs.js';
+import { composerHtml, headHtml, nearLimits, stagesHtml, threadHtml } from './thread.js';
+import { continueFrom, loadVersions } from './versions.js';
 import { applyZoom, canZoom, wheelZoom, zoomAction } from './zoom.js';
 
 const RUN = `
@@ -30,6 +38,7 @@ const RUN = `
       <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-label="Conversation with the agent" aria-live="polite"></div></div>
       <div class="composer" id="composer-wrap"></div>
     </section>
+    <div class="grip" id="files-grip" role="separator" aria-orientation="vertical" aria-label="Files panel width" tabindex="0"></div>
     <aside class="files" id="files" aria-label="Files"></aside>
   </div>`;
 
@@ -44,36 +53,29 @@ function paint(selector, html) {
   return true;
 }
 
-function runItems() {
-  return state.jobs.map((j) => {
-    const status = j.id === state.job?.id ? state.job.status : j.status;
-    const dot = state.config?.statuses?.active?.includes(status) ? '<i></i>' : status === 'waiting' ? '<i class="ask"></i>' : '';
-    const on = j.id === state.job?.id && ['run', 'log'].includes(state.view);
-    const day = new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' });
-    return `<button class="item ${on ? 'on' : ''}" data-job="${esc(j.id)}"><span>${esc(jobTitle(j))}</span>${dot}<time>${day}</time></button>`;
-  });
-}
-
 function sideHtml() {
-  const here = state.view === 'playbook' ? 'playbooks' : state.view;
+  const here = listView();
   const link = (view, label) => `<button class="item ${here === view ? 'on' : ''}" data-view="${view}"><span>${label}</span></button>`;
   return `
     <div class="brand">Document Intelligence</div>
     ${btn('new', 'New run', 'quiet add', false, 'plus')}
     <nav class="runs" aria-label="Recent runs"><h3>Recent</h3>${runItems().join('') || '<p class="empty item">No runs yet</p>'}</nav>
-    <div class="foot">${link('playbooks', 'Playbooks')}${link('settings', 'Settings')}</div>`;
+    <div class="foot">${link('clients', 'Clients')}${link('playbooks', 'Playbooks')}${link('settings', 'Settings')}</div>`;
 }
+
+// A page of one playbook or client belongs to its list in the navigation.
+const listView = () => ({ playbook: 'playbooks', client: 'clients' })[state.view] || state.view;
 
 // Narrow screens swap the sidebar for one menu.
 function topnavHtml() {
-  const view = state.view === 'playbook' ? 'playbooks' : state.view;
+  const view = listView();
   const here = view === 'run' ? (state.job ? 'job:' + state.job.id : 'new') : view;
   const option = (value, label) => `<option value="${esc(value)}" ${attr('selected', value === here)}>${esc(label)}</option>`;
   const runs = state.jobs.map((j) =>
     option('job:' + j.id, `${jobTitle(j)}, ${new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}`),
   );
   return `<div class="brand">Document Intelligence</div>
-    <select aria-label="Go to" data-nav>${option('new', 'New run')}${runs.join('')}${state.job ? option('log', 'Technical log') : ''}${option('playbooks', 'Playbooks')}${option('settings', 'Settings')}</select>`;
+    <select aria-label="Go to" data-nav>${option('new', 'New run')}${runs.join('')}${state.job ? option('log', 'Technical log') : ''}${option('clients', 'Clients')}${option('playbooks', 'Playbooks')}${option('settings', 'Settings')}</select>`;
 }
 
 function noticesHtml() {
@@ -145,12 +147,19 @@ function render() {
     revealMarks($('#files'));
     tick();
   } else {
-    const pages = { run: setupPage, playbooks: playbooksPage, playbook: playbookPage, settings: settingsPage, log: logPage };
+    const pages = {
+      run: setupPage, playbooks: playbooksPage, playbook: playbookPage, clients: clientsPage, client: clientPage,
+      settings: settingsPage, log: logPage,
+    }; // prettier-ignore
     paint('#main', noticesHtml() + pages[state.view]());
     syncPlaybook();
+    syncClient();
   }
+  applyWidths(); // the dividers' kept widths, fitted to the window
   paint('#pop-root', popHtml());
   syncPop();
+  syncReply();
+  loadLinks(render); // cells and files named in what was just drawn become links once the server has checked them
 
   const el = focused && $('#' + focused);
   if (el && el !== document.activeElement) {
@@ -172,6 +181,7 @@ async function refreshSettings() {
   try {
     state.settings = await api('/api/settings');
     state.settingsDraft = { ...state.settings.values };
+    state.settingsErrors = {};
     state.settingsError = '';
   } catch (e) {
     state.settingsError = `Settings could not be loaded: ${e.message}`;
@@ -186,7 +196,9 @@ async function refreshConfig() {
 function leaveRun() {
   closeFile();
   Object.assign(state, { events: [], seen: 0, map: null, mapKey: '', mapFilter: 'all', showFiles: false, search: '', filter: 'all' });
-  Object.assign(state, { commentDraft: null, rounds: [], roundsKey: '' });
+  Object.assign(state, { commentDraft: null, rounds: [], roundsKey: '', versions: [], versionsKey: '', showVersions: false });
+  Object.assign(state, { reply: null, activeComment: '', showResolved: false, menu: null });
+  Object.assign(state.changes, { since: null, step: 0, jump: false }); // version numbers belong to one run
   state.toggled.clear();
 }
 
@@ -198,7 +210,7 @@ async function loadJob(id) {
     leaveRun();
     Object.assign(state, { job, events, view: 'run', notice: '' });
     state.seen = events.reduce((n, e) => Math.max(n, e.seq), 0); // an opened run appears whole, without animating in
-    await Promise.all([loadMap(), loadRounds()]);
+    await Promise.all([loadMap(), loadRounds(), loadVersions()]);
   } finally {
     state.loading = false;
   }
@@ -208,6 +220,7 @@ async function loadJob(id) {
 function newRun() {
   leaveRun();
   Object.assign(state, { job: null, files: [], template: null, view: 'run', notice: '' });
+  Object.assign(state, { runClient: '', clientSuggestion: null, clientDecided: false });
 }
 
 async function uploadAndStart() {
@@ -217,11 +230,12 @@ async function uploadAndStart() {
     form.append('playbook_id', currentPlaybook().id);
     if (state.period) form.append('period', state.period);
     form.append('instructions', state.instructions[currentPlaybook().id] || '');
+    if (state.runClient) form.append('client_id', state.runClient); // only a client the person chose
     for (const f of state.files) form.append('files', f, f.webkitRelativePath || f.name);
     if (state.template) form.append('template', state.template, state.template.name);
     const job = await api('/api/jobs', { method: 'POST', body: form });
     leaveRun();
-    Object.assign(state, { job, files: [], template: null });
+    Object.assign(state, { job, files: [], template: null, runClient: '', clientSuggestion: null, clientDecided: false });
   }
   if (state.config?.configured) await api(jobUrl('/start'), { method: 'POST' });
   else toast('Files uploaded. Add OPENAI_API_KEY to .env and restart to run.');
@@ -231,6 +245,7 @@ async function uploadAndStart() {
 
 // Actions that only change the screen; they run instantly.
 const localActions = {
+  'start-over': () => confirmStartOver(state.job.id),
   new: newRun,
   'more-options': () => (state.moreOptions = !state.moreOptions),
   'no-template': () => (state.template = null),
@@ -247,7 +262,11 @@ const localActions = {
   'close-file': closeFile,
   'skill-pick': () => $('#skill-picker').click(),
   attach: () => $('#attach-picker').click(),
+  'wrap-up': () => state.wrapped.add(`${state.job.id}:${nearLimits()[0]?.seq}`),
+  'show-versions': () => (state.showVersions = true),
+  'hide-versions': () => (state.showVersions = false),
   ...playbookDialogs,
+  ...clientDialogs,
 };
 localActions['back-file'] = () => backFile(render);
 
@@ -260,25 +279,53 @@ const serverActions = {
     await refreshConfig();
   },
   'save-settings': async () => {
-    const draft = { ...state.settingsDraft };
-    for (const [name, option] of Object.entries(state.settings.options)) {
-      if (typeof option.default === 'number') draft[name] = Number(draft[name]);
+    // A wrong value is named beside its field, here before sending and from the server's answer after.
+    const errors = {};
+    for (const name of Object.keys(state.settingsDraft)) {
+      const problem = settingProblem(name, state.settingsDraft[name]);
+      if (problem) errors[name] = problem;
     }
-    state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ values: draft }) });
+    state.settingsErrors = errors;
+    if (Object.keys(errors).length) return;
+    try {
+      state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ values: settingsValues() }) });
+    } catch (error) {
+      if (!error.field) throw error;
+      state.settingsErrors = { [error.field]: error.message };
+      return;
+    }
     state.settingsDraft = { ...state.settings.values };
+    await refreshConfig(); // the run screen names the More steps amount from it
     toast('Settings saved.');
   },
   ...playbookActions,
+  ...clientActions,
   'send-comments': async () => {
     await sendComments();
-    await Promise.all([refreshJob(), refreshConfig()]);
+    await Promise.all([refreshJob(), refreshConfig(), refreshClients()]); // a remembered comment adds a version
   },
   start: uploadAndStart,
   interrupt: async () => {
     await api(jobUrl('/interrupt'), { method: 'POST' });
     await refreshJob();
   },
+  'more-steps': async () => {
+    await api(jobUrl('/more-steps'), { method: 'POST' });
+    await refreshJob();
+  },
   export: () => download(jobUrl('/logs'), `${state.job.id}.jsonl`),
+  // A stopped run carries on from a kept version, or starts over; either way in a fresh sandbox.
+  continue: async (number) => {
+    await continueFrom(number);
+    state.showVersions = false;
+    await refreshJob();
+    // Continued from the older version on show: it is now the latest.
+    if (state.preview?.version) openFile(state.preview.path, render, { sheet: state.preview.data?.sheet, back: state.preview.back });
+  },
+  'send-reply': async () => {
+    await sendReply();
+    await refreshJob();
+  },
 };
 for (const name of ['pause', 'resume', 'cancel']) {
   serverActions[name] = async () => {
@@ -287,7 +334,7 @@ for (const name of ['pause', 'resume', 'cancel']) {
   };
 }
 
-async function action(name) {
+async function action(name, arg) {
   if (localActions[name]) {
     localActions[name]();
     if (!['folder', 'files', 'template', 'skill-pick', 'attach'].includes(name)) render();
@@ -297,7 +344,7 @@ async function action(name) {
   state.notice = '';
   render();
   try {
-    await serverActions[name]();
+    await serverActions[name](arg);
   } catch (e) {
     state.notice = e.message;
   } finally {
@@ -312,6 +359,7 @@ async function openView(view) {
   render();
   if (view === 'settings') await refreshSettings();
   else if (view === 'playbooks') await refreshConfig();
+  else if (view === 'clients') [state.jobs] = await Promise.all([api('/api/jobs'), refreshClients()]);
   else return;
   render();
 }
@@ -346,6 +394,26 @@ function placeFound(path, place) {
 function spotAt(e, target) {
   const line = target('[data-line]');
   return line ? { path: state.preview.path, line: Number(line.dataset.line) } : null;
+}
+
+// Show an output as a kept version holds it, or the latest ('latest'). Comparing starts again from the plain file.
+async function pickVersion(value) {
+  const view = state.preview;
+  if (!view) return;
+  Object.assign(state.changes, { on: false, since: null, step: 0 });
+  state.reply = null;
+  await openFile(view.path, render, { sheet: view.data?.sheet || null, version: value === 'latest' ? null : Number(value), back: view.back });
+}
+
+// Open a sent comment's spot, from its row in the chat or in the file panel's list.
+function openComment(key) {
+  const [round, n] = key.split('.').map(Number);
+  const sent = state.events.find((e) => e.name === 'feedback.sent' && e.round === round)?.comments?.find((c) => c.n === n);
+  const c = sentComment(key)?.c || sent;
+  if (!c) return;
+  state.activeComment = key;
+  const spot = Object.fromEntries(['path', 'sheet', 'cell', 'line', 'page', 'x', 'y', 'w', 'h'].filter((k) => c[k] != null).map((k) => [k, c[k]]));
+  return openSpot(spot, render);
 }
 
 // Answer the agent's question with one click: a choice it offered, or leaving the choice to it.
@@ -398,11 +466,55 @@ async function sendText() {
 document.addEventListener('click', async (e) => {
   const target = (selector) => e.target.closest(selector);
   let el;
+  // A dropdown closes on any click outside it.
+  if (state.menu && !target('.menu-wrap')) {
+    state.menu = null;
+    render();
+  }
   try {
     let spot;
     if (target('[data-close]')) $('#details').close();
+    else if ((el = target('[data-menu]'))) {
+      state.menu = state.menu === el.dataset.menu ? null : el.dataset.menu;
+      render();
+    } else if ((el = target('[data-run-rename]')) || (el = target('[data-run-delete]'))) {
+      state.menu = null;
+      render();
+      if (el.dataset.runRename) renameRun(el.dataset.runRename);
+      else deleteRun(el.dataset.runDelete);
+    } else if ((el = target('[data-pick-version]'))) await pickVersion(el.dataset.pickVersion);
+    else if ((el = target('[data-compare]'))) {
+      Object.assign(state.changes, { since: el.dataset.compare ? Number(el.dataset.compare) : null, step: 0, jump: true });
+      state.menu = null;
+      render();
+      await loadChanges(state.preview, render);
+    } else if ((el = target('[data-change-step]'))) {
+      stepChange(Number(el.dataset.changeStep));
+      render();
+    } else if ((el = target('[data-goto]'))) await openComment(el.dataset.goto);
+    else if ((el = target('[data-link]'))) {
+      const { link: path, linkSheet: sheet, linkCell: cell } = el.dataset;
+      await openSpot({ path, ...(sheet ? { sheet } : {}), ...(cell ? { cell } : {}) }, render);
+    } else if ((el = target('[data-reply]'))) {
+      state.reply = { to: el.dataset.reply, text: '', round_id: null };
+      state.activeComment = el.dataset.reply;
+      render();
+      $('#reply-text')?.focus();
+    } else if (target('[data-reply-cancel]')) {
+      state.reply = null;
+      render();
+    } else if ((el = target('[data-resolve]')) || (el = target('[data-reopen]'))) {
+      await resolveComment(el.dataset.resolve || el.dataset.reopen, !!el.dataset.resolve);
+      render();
+    } else if (target('[data-show-resolved]')) {
+      state.showResolved = !state.showResolved;
+      render();
+    }
     else if ((el = target('[data-comment]'))) {
       commentAction(el.dataset.comment);
+      render();
+    } else if ((el = target('[data-remember]'))) {
+      chooseRemember(el.dataset.remember);
       render();
     } else if (target('#pop-root')) return;
     else if ((el = target('[data-pin]'))) {
@@ -413,9 +525,9 @@ document.addEventListener('click', async (e) => {
       render();
     } else if ((el = target('[data-forget]'))) {
       try {
-        await forget(Number(el.dataset.forget));
+        await forget(Number(el.dataset.forget), el.dataset.scope);
       } finally {
-        await refreshConfig(); // refused or not, show what the playbook's latest version now is
+        await Promise.all([refreshConfig(), refreshClients()]); // refused or not, show what the latest version now is
         render();
       }
     } else if ((el = target('[data-zoom]'))) {
@@ -424,7 +536,13 @@ document.addEventListener('click', async (e) => {
       attached().splice(Number(el.dataset.unattach), 1);
       render();
     } else if ((el = target('[data-action]'))) await action(el.dataset.action);
+    else if ((el = target('[data-continue]'))) await action('continue', Number(el.dataset.continue));
     else if (await playbookClick(target, render)) return;
+    else if (await clientClick(target, render)) return;
+    else if ((el = target('[data-use-client]'))) {
+      chooseRunClient(el.dataset.useClient);
+      render();
+    }
     else if ((el = target('[data-mode]'))) setMode(el.dataset.mode);
     else if (target('[data-find]')) {
       if (state.find) closeFind();
@@ -439,6 +557,7 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('[data-changes]'))) {
       const name = el.dataset.changes;
       state.changes[name] = !state.changes[name];
+      if (name === 'on') Object.assign(state.changes, { step: 0, jump: state.changes.on });
       render();
       if (name === 'on') await loadChanges(state.preview, render);
     }
@@ -450,14 +569,17 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('[data-answer]'))) await answerWith(el.dataset.answer);
     else if ((el = target('[data-view]'))) await openView(el.dataset.view);
     else if ((el = target('[data-job]'))) await loadJob(el.dataset.job);
-    else if ((el = target('[data-download]'))) await download(fileUrl('file', el.dataset.download), baseName(el.dataset.download));
+    else if ((el = target('[data-download]'))) {
+      const version = el.dataset.fileVersion ? `&version=${el.dataset.fileVersion}` : ''; // an older version on show
+      await download(fileUrl('file', el.dataset.download, version), baseName(el.dataset.download));
+    }
     else if ((el = target('[data-open]'))) {
       const from = target('.proof') && state.preview;
       const back = from ? { path: from.path, sheet: from.data?.sheet, row: state.row } : null;
       // A source opened from a row opens where the row's values are, with them outlined.
       const found = from ? foundFor(el.dataset.open) : null;
       await openFile(el.dataset.open, render, { back, found, page: found?.page || 1 });
-    } else if ((el = target('[data-sheet]'))) await openFile(state.open, render, { sheet: el.dataset.sheet, back: state.preview?.back });
+    } else if ((el = target('[data-sheet]'))) await openFile(state.open, render, { sheet: el.dataset.sheet, back: state.preview?.back, version: state.preview?.version });
     else if ((el = target('[data-page]'))) await turnPage(Number(el.dataset.page), render);
     else if ((el = target('tr[data-row]'))) markRow(el);
     else if ((el = target('[data-group]'))) {
@@ -472,7 +594,10 @@ document.addEventListener('click', async (e) => {
       } else state.settingsDraft[name] = value;
       render();
     } else if ((el = target('[data-toggle]'))) {
-      state.settingsDraft[el.dataset.toggle] = !state.settingsDraft[el.dataset.toggle];
+      const name = el.dataset.toggle;
+      const [on, off] = state.settings.options[name].choices; // a two-way choice shown as a switch
+      const v = state.settingsDraft;
+      v[name] = on === undefined ? !v[name] : v[name] === on ? off : on;
       render();
     } else if ((el = target('[data-step]'))) {
       const { step: name, delta } = el.dataset;
@@ -510,6 +635,20 @@ document.addEventListener('keydown', (e) => {
       return render();
     }
     return stepFind(e.shiftKey ? -1 : 1, turnPage, render);
+  }
+  if (e.key === 'Escape' && state.menu) {
+    const was = state.menu;
+    state.menu = null;
+    render();
+    return $(`[data-menu="${was}"]`)?.focus(); // back to the button that opened it
+  }
+  if (e.key === 'Escape' && e.target?.id === 'reply-text') {
+    state.reply = null;
+    return render();
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target?.id === 'reply-text') {
+    e.preventDefault();
+    return $('#reply-form').requestSubmit();
   }
   if (e.key === 'Escape' && (state.commentDraft || drag)) {
     dropPick();
@@ -695,8 +834,13 @@ document.addEventListener('input', (e) => {
     if (start) start.disabled = startBlocked();
   }
   if (id === 'note' && state.commentDraft) state.commentDraft.text = value;
+  if (id === 'reply-text' && state.reply) {
+    state.reply.text = value;
+    syncReply();
+  }
   if (id === 'find-q' && state.find) typed(value, turnPage, render);
   if (id === 'playbook-text') startDraft(state.book, value);
+  if (id === 'client-notes') typeNotes(value);
   if (id === 'tune') state.book.ask = value;
   if (id === 'playbook-text' || id === 'tune') syncPlaybook();
   if (id === 'period') {
@@ -704,7 +848,11 @@ document.addEventListener('input', (e) => {
     $('[data-action="start"]').disabled = startBlocked();
     $('[data-action="more-options"]').style.display = value || state.template ? 'none' : ''; // nothing to fold away
   }
-  if (e.target.dataset.setting) state.settingsDraft[e.target.dataset.setting] = value;
+  if (e.target.dataset.setting) {
+    state.settingsDraft[e.target.dataset.setting] = value;
+    const save = $('[data-action="save-settings"]'); // Save is lit once something differs from what is saved
+    if (save) save.disabled = state.busy || !settingsChanged();
+  }
   if (id === 'log-search') {
     state.search = value;
     // Wait for a pause in typing before filtering the log.
@@ -715,6 +863,14 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('change', async (e) => {
   if (e.target.matches('[data-playbook]')) state.playbook = e.target.value;
+  else if (e.target.matches('[data-run-client]')) chooseRunClient(e.target.value);
+  else if (e.target.dataset.setting && state.settingsErrors) {
+    // A number is checked once it has been typed, and its message shown beside it.
+    const name = e.target.dataset.setting;
+    const problem = settingProblem(name, e.target.value);
+    if (problem) state.settingsErrors[name] = problem;
+    else delete state.settingsErrors[name];
+  }
   else if (e.target.id === 'skill-picker') {
     const file = e.target.files[0];
     e.target.value = '';
@@ -732,6 +888,8 @@ document.addEventListener('change', async (e) => {
   } else if (e.target.id === 'folder-picker' || e.target.id === 'files-picker') {
     state.files = Array.from(e.target.files);
     e.target.value = '';
+    render();
+    await suggestClient(state.files); // the names may point to a known client, offered beside the client box
   } else if (e.target.id === 'attach-picker') {
     const files = Array.from(e.target.files);
     e.target.value = '';
@@ -745,12 +903,22 @@ document.addEventListener('change', async (e) => {
 
 document.addEventListener('submit', async (e) => {
   const form = e.target.id;
-  if (!['composer', 'comment-form', 'tune-form', 'book-form'].includes(form)) return;
+  if (!['composer', 'comment-form', 'tune-form', 'book-form', 'reply-form', 'run-form'].includes(form)) return;
   e.preventDefault();
+  if (form === 'reply-form') return action('send-reply');
   try {
     if (form === 'composer') return await sendText();
+    if (form === 'run-form') {
+      const starting = e.target.dataset.does === 'start-over';
+      if ((await submitRun(e.target)) === state.job?.id) newRun(); // the run on show was deleted
+      if (starting) {
+        state.showVersions = false;
+        await refreshJob();
+      }
+      return render();
+    }
     if (form === 'comment-form') keepComment();
-    else if (form === 'book-form') await submitDialog(e.target);
+    else if (form === 'book-form') (await submitClientDialog(e.target)) || (await submitDialog(e.target));
     else {
       const ask = state.book.ask.trim();
       if (!ask) return;
@@ -822,8 +990,8 @@ async function refreshJob() {
   const fresh = events.filter((ev) => !seen.has(ev.seq));
   state.events.push(...fresh);
   // The agent added a lesson to the playbook: its new version is needed at once, to offer Undo beside the lesson.
-  if (fresh.some((ev) => ev.name === 'lesson.saved')) state.config = await api('/api/config');
-  await Promise.all([loadMap(), loadRounds()]);
+  if (fresh.some((ev) => ev.name === 'lesson.saved')) [state.config] = await Promise.all([api('/api/config'), refreshClients()]);
+  await Promise.all([loadMap(), loadRounds(), loadVersions()]);
   if (statusChanged) state.jobs = await api('/api/jobs');
 }
 
@@ -852,7 +1020,7 @@ render();
 setInterval(tick, 1000);
 (async () => {
   try {
-    await Promise.all([refreshConfig(), refreshSettings()]); // refreshSettings keeps its own error for its page
+    await Promise.all([refreshConfig(), refreshSettings(), refreshClients()]); // refreshSettings keeps its own error for its page
     state.jobs = await api('/api/jobs');
   } catch (e) {
     state.notice = e.message;

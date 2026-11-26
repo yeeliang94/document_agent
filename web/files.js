@@ -1,14 +1,18 @@
 // The Files panel: the run's outputs, checks and source files, and a viewer to look inside any of them.
 
 import {
-  api, baseName, blobUrl, esc, extension, fileUrl, icon, jobUrl, pill, plural, sources,
+  api, attr, baseName, blobUrl, esc, extension, fileUrl, icon, inGroup, isActive, jobUrl, pill, plural, sources,
   state, storedPath,
 } from './core.js'; // prettier-ignore
-import { barHtml, blockCells, canComment, changedSpots, commenting, isBox, pendingHtml, pin, pinsOn } from './comments.js';
 import {
-  canFind, changedOnly, changesBarHtml, changesOn, findBarHtml, isFound, loadChanges, marked, pageMarksHtml, placeHtml, searchPdf,
-  startMarks,
+  barHtml, blockCells, canComment, changedSpots, columnName, commenting, isBox, pendingHtml, pin, pinsOn, sentHtml, sentPin, sentPinsOn,
+} from './comments.js'; // prettier-ignore
+import {
+  canFind, changedOnly, changeInFocus, changesBarHtml, changesOn, findBarHtml, isFound, loadChanges, marked, pageMarksHtml,
+  placeHtml, rowProof, searchPdf, startMarks,
 } from './review.js'; // prettier-ignore
+import { versionMenuHtml } from './versions.js';
+import { inline, lineLook, lineRoles, plainFor } from './markdown.js';
 import { fullHtml, resetZoom, zoomHtml } from './zoom.js';
 
 const DECISIONS = {
@@ -80,11 +84,13 @@ function checksHtml(job) {
     const ok = (good, text) => pill(good ? 'ok' : 'warn', text);
     const rows = [
       fact('Template rules', s.deliverable_problems === undefined ? pill('', 'Not checked') : ok(!s.deliverable_problems, s.deliverable_problems ? plural(s.deliverable_problems, 'problem') : 'Passed')),
+      fact('Totals add up', s.totals === undefined ? pill('', 'Not checked') : !s.totals && !s.totals_problems ? pill('', 'No totals') : ok(!s.totals_problems, s.totals_problems ? plural(s.totals_problems, 'problem') : 'Passed')),
       fact('Files decided', s.files === undefined ? pill('', 'Not checked') : ok(s.files_decided === s.files, `${s.files_decided} of ${s.files}`)),
     ];
     if (s.rows_written != null) rows.push(fact('Rows with a source', ok(s.rows_sourced === s.rows_written && s.rows_written > 0, `${s.rows_sourced} of ${s.rows_written}`)));
     rows.push(fact('Reviewer', check.reviews ? ok(true, check.doubts ? `${plural(check.doubts, 'doubt')} checked` : 'No doubts') : pill('', 'Not run')));
-    const issues = !check.passed && check.issues?.length ? `<ul class="fix">${check.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+    // A finished run lists what is still to fix in its report, so the list is shown once, there.
+    const issues = !check.passed && check.issues?.length && !inGroup('finished', job.status) ? `<ul class="fix">${check.issues.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
     return `<div class="list"><h3>Checks</h3>${rows.join('')}${issues}</div>`;
   }
   return '';
@@ -142,7 +148,7 @@ function listHtml(job) {
       ${checksHtml(job)}
       ${template ? `<div class="list"><h3>${/\.json$/i.test(template.path) ? 'Format' : 'Template'}</h3>${row(template.path, baseName(template.path))}</div>` : ''}
       <div class="list"><h3><span>Sources</span><span>${all.length}</span></h3>${filter}${sourceRows}</div>
-    </div>${barHtml(false)}`;
+    </div>${barHtml()}`;
 }
 
 // --- The viewer ------------------------------------------------------------
@@ -179,9 +185,9 @@ const shownText = (value, text) => (typeof text === 'string' ? text : plainText(
 // `picked` is its place in a block being commented on: 'held' for a block with a comment waiting, or the edges
 // ('sel t l') of the block being picked. `was` is what it showed before the agent's last rework, when that changed;
 // `found` says it holds a value of the row this source was opened from. `shown` is the text it shows, worked out once.
-function cell(value, { spot = '', changed = false, mark = '', look = {}, css = '', picked = '', was = null, found = false, shown = shownText(value, look.text) } = {}) {
+function cell(value, { spot = '', changed = false, mark = '', look = {}, css = '', picked = '', was = null, found = false, ring = false, shown = shownText(value, look.text) } = {}) {
   const plain = typeof look.text === 'string' ? plainText(value) : shown;
-  const cls = [typeof value === 'number' ? 'num' : '', changed || was ? 'changed' : '', found ? 'found' : '', picked].filter(Boolean).join(' ');
+  const cls = [typeof value === 'number' ? 'num' : '', changed || was ? 'changed' : '', found ? 'found' : '', ring ? 'ring' : '', picked].filter(Boolean).join(' ');
   // A value the preview worked out from a formula shows that formula on hover.
   const tip = typeof look.formula === 'string' ? look.formula : typeof value === 'string' || shown !== plain ? shown : '';
   const title = tip ? ` title="${esc(tip)}"` : '';
@@ -194,11 +200,25 @@ function cell(value, { spot = '', changed = false, mark = '', look = {}, css = '
 function sheetHtml(view) {
   const { data, path } = view;
   const picks = data.row_sources && Object.keys(data.row_sources).length > 0;
-  const spots = canComment();
-  const changed = changedSpots(path);
-  const waiting = pinsOn(path, { sheet: data.sheet });
+  const latest = !view.version; // an older version takes no comments and shows none: they are on the latest
+  const spots = canComment() && latest;
+  const changed = latest ? changedSpots(path) : new Set();
+  const waiting = latest ? pinsOn(path, { sheet: data.sheet }) : [];
   const pins = {}; // a block's pin sits on its first cell, beside any other pin there
+  // Sent comments keep their pin, in the colour of the code's verdict, while open and with Changes off.
+  if (latest && !changesOn(view)) {
+    for (const t of sentPinsOn(path, { sheet: data.sheet })) {
+      const first = String(t.root.c.cell || '').split(':')[0];
+      if (first) pins[first] = (pins[first] || '') + sentPin(t);
+    }
+  }
   for (const c of waiting) pins[c.cell.split(':')[0]] = (pins[c.cell.split(':')[0]] || '') + pin(c);
+  // The spot opened from a comment or a link, or the change in focus, is ringed.
+  const ringed = new Set();
+  const ring = changesOn(view) ? null : view.ring; // with Changes on, the change in focus is the one ringed
+  if (ring?.cell && (ring.sheet || null) === (data.sheet || null)) for (const [r, col] of blockCells(ring.cell)) ringed.add(`${columnName(col)}${r}`);
+  const focus = changesOn(view) ? changeInFocus(view) : null;
+  if (focus) ringed.add(focus);
   const held = new Set(waiting.filter((c) => c.cell.includes(':')).flatMap((c) => blockCells(c.cell).map(([r, col]) => `${r},${col}`)));
   const draft = state.commentDraft;
   // The block of the comment being written. A block being dragged out is drawn by the drag itself (app.js).
@@ -228,6 +248,7 @@ function sheetHtml(view) {
       picked: picked(i + 1, c + 1),
       was: diff?.[at] || null,
       found: !!view.found && isFound(view, shown),
+      ring: ringed.has(at),
     });
   };
   // With "Changed rows only", the first row stays as the heading.
@@ -249,15 +270,25 @@ function sheetHtml(view) {
   return `${tabs || meta ? `<div class="meta">${meta}${tabs}</div>` : ''}${grid}<div class="proof list" id="proof">${picks ? proofHtml() : ''}</div>`;
 }
 
-// The uploaded files behind the selected row of an output sheet.
+// The uploaded files behind the selected row of an output sheet: which of its values came from which file, and
+// where in it. A source none of the values was found in is still listed, so it can be opened.
 export function proofHtml() {
-  const files = state.preview?.data?.row_sources?.[state.row];
   if (!state.row) return '';
-  return `<h2>Row ${state.row} came from</h2>${
-    files?.length
-      ? files.map((p) => (storedPath(p) ? row(storedPath(p), baseName(p), placeHtml(storedPath(p))) : `<div class="frow"><span class="name">${esc(p)}</span></div>`)).join('')
-      : '<div class="empty">No source file is recorded for this row.</div>'
-  }`;
+  const data = state.preview?.data;
+  const cited = data?.row_sources?.[state.row] || [];
+  const head = `<h2>Row ${state.row} came from</h2>`;
+  if (!cited.length) return `${head}<div class="empty">No source file is recorded for this row.</div>`;
+  const stored = [...new Set(cited.map(storedPath).filter(Boolean))];
+  const { groups, left } = rowProof(data, state.row, stored);
+  const file = (path) => `<button class="file" data-open="${esc(path)}" title="${esc(path)}">${esc(baseName(path))}</button>`;
+  const line = (label, value, from) => `<tr><td>${esc(label)}</td><td class="num">${esc(value)}</td><td>${from}</td></tr>`;
+  const rows = groups.map((g) =>
+    line(g.label, g.shown, g.from ? `${file(g.from.path)} <span class="where">${esc(g.from.where)}</span>` : `<span class="where">${esc(g.status)}</span>`),
+  );
+  // Sources no value was found in (a picture, a scan), and cited files that are not among the uploads.
+  for (const path of left) rows.push(line('Other source', '', `${file(path)} ${placeHtml(path)}`));
+  for (const p of cited.filter((p) => !storedPath(p))) rows.push(line('Other source', '', `<span>${esc(p)}</span>`));
+  return `${head}<table class="came-from">${rows.join('')}</table>`;
 }
 
 function bodyHtml(view) {
@@ -267,15 +298,24 @@ function bodyHtml(view) {
   if (data.kind === 'sheet') return sheetHtml(view);
   if (data.kind === 'text') {
     // Each line can take a comment, so each is its own piece.
-    const pins = Object.fromEntries(pinsOn(view.path).map((c) => [c.line, pin(c)]));
-    const changed = changedSpots(view.path);
+    const latest = !view.version;
     const diff = changesOn(view);
+    const pins = {};
+    if (latest && !diff) for (const t of sentPinsOn(view.path)) if (t.root.c.line) pins[t.root.c.line] = (pins[t.root.c.line] || '') + sentPin(t);
+    if (latest) for (const c of pinsOn(view.path)) pins[c.line] = (pins[c.line] || '') + pin(c);
+    const changed = latest ? changedSpots(view.path) : new Set();
+    const ringLine = diff ? changeInFocus(view) : view.ring?.line ? String(view.ring.line) : null;
     const only = changedOnly(view);
     // Lines the agent took out show, struck through, where they were.
     const removed = {};
     for (const r of diff?.removed || []) (removed[r.after] ||= []).push(`<span class="ln gone"><s>${esc(r.text)}</s></span>`);
     let gap = false; // with "Changed lines only", a run of hidden lines shows as one gap
-    const lines = (removed[0] || []).concat(data.text.split('\n').flatMap((line, i) => {
+    // A Markdown file is shown formatted, line by line, so each line can still take a comment (markdown.js).
+    const md = /\.(md|markdown)$/i.test(view.path);
+    const all = data.text.split('\n');
+    const roles = md ? lineRoles(all) : [];
+    const plain = plainFor(state.find?.query);
+    const lines = (removed[0] || []).concat(all.flatMap((line, i) => {
       const n = String(i + 1);
       const after = removed[i + 1] || [];
       if (only && !(n in diff.lines)) {
@@ -284,19 +324,29 @@ function bodyHtml(view) {
         return [...(first ? ['<span class="gap">⋯</span>'] : []), ...after];
       }
       gap = false;
-      const cls = ['ln', changed.has(`line ${n}`) || (diff && n in diff.lines) ? 'changed' : '', view.found && isFound(view, line) ? 'found' : ''].filter(Boolean).join(' ');
+      const look = md ? lineLook(roles[i]) : { cls: '', attrs: '', before: '' };
+      const cls = ['ln', look.cls, changed.has(`line ${n}`) || (diff && n in diff.lines) ? 'changed' : '', view.found && isFound(view, line) ? 'found' : '', n === ringLine ? 'ring' : ''].filter(Boolean).join(' ');
       const was = diff?.lines[n] ? ` title="Was: ${esc(diff.lines[n])}"` : '';
-      return [`<span class="${cls}"${was} ${canComment() ? `data-line="${n}"` : ''}>${pins[n] || ''}${marked(line)}</span>`, ...after];
+      const shown = md ? inline(marked(roles[i].text), plain || roles[i].role === 'code' || roles[i].role === 'table') : marked(line);
+      return [`<span class="${cls}"${look.attrs}${was} ${canComment() && latest ? `data-line="${n}"` : ''}>${pins[n] || ''}${look.before}${shown}</span>`, ...after];
     }));
-    return `<pre class="doc ${commenting() ? 'spots' : ''}">${lines.join('\n')}</pre>${data.more ? '<p class="meta">The rest of the file is not shown. Download it to read everything.</p>' : ''}`;
+    const more = data.more ? '<p class="meta">The rest of the file is not shown. Download it to read everything.</p>' : '';
+    if (md) return `<div class="doc md ${commenting() ? 'spots' : ''}">${lines.join('')}</div>${more}`;
+    return `<pre class="doc ${commenting() ? 'spots' : ''}">${lines.join('\n')}</pre>${more}`;
   }
   if (data.kind === 'pages' || data.kind === 'image') {
     // Comments on a page or picture are pinned where the person clicked, as a share of its width and height.
     const where = data.kind === 'pages' ? { page: view.page } : {};
     // A drawn box shows its outline, with its pin on the top-left corner.
     const area = (a, cls) => `<span class="area ${cls}" style="left:${a.x * 100}%;top:${a.y * 100}%;width:${a.w * 100}%;height:${a.h * 100}%"></span>`;
-    const pins = pinsOn(view.path, where)
-      .map((c) => (isBox(c) ? area(c, 'held') : '') + pin(c).replace('class="pin"', `class="pin" style="left:${c.x * 100}%;top:${c.y * 100}%"`))
+    const at = (c) => `left:${c.x * 100}%;top:${c.y * 100}%`;
+    const sent = sentPinsOn(view.path, where)
+      .filter((t) => t.root.c.x != null)
+      .map((t) => sentPin(t, at(t.root.c)))
+      .join('');
+    const ring = view.ring && view.ring.x != null && (view.ring.page || null) === (where.page || null) && isBox(view.ring) ? area(view.ring, 'ring') : '';
+    const pins = sent + ring + pinsOn(view.path, where)
+      .map((c) => (isBox(c) ? area(c, 'held') : '') + pin(c).replace('class="pin"', `class="pin" style="${at(c)}"`))
       .join('');
     const draft = state.commentDraft;
     const drawn = draft?.path === view.path && (draft.page || null) === (where.page || null) && isBox(draft) ? draft : null;
@@ -332,14 +382,32 @@ function viewerHtml(view) {
   const body = bodyHtml(view);
   const back = view.back ? (view.back.row ? `Back to row ${view.back.row}` : `Back to ${baseName(view.back.path)}`) : 'Back to files';
   const find = canFind(view) ? `<button class="icon-btn" data-find aria-label="Find in file" title="Find in file" aria-pressed="${!!state.find}">${icon('find')}</button>` : '';
+  // An older version is for looking only: no Comment mode, and a way to carry on from it or go back to the latest.
+  const older = view.version
+    ? `<div class="older"><span>An older version. Comments go on the latest.</span>
+        <button class="btn quiet small" data-continue="${view.version}" ${attr('disabled', state.busy || isActive())}>Continue from here</button>
+        <button class="btn quiet small" data-pick-version="latest">Back to latest</button></div>`
+    : '';
+  // The comments sent on this file, with their answers, on the latest and with Changes off.
+  const sent = !view.version && !changesOn(view) && view.data && !view.error ? sentHtml(view.path) : '';
   return `
     <div class="files-head"><button class="icon-btn" data-action="back-file" aria-label="${esc(back)}" title="${esc(back)}">${icon('back')}</button>
       <h2 title="${esc(view.path)}">${esc(baseName(view.path))}</h2>
-      ${canComment() && hasSpots(view) ? modesHtml() : ''}${zoomHtml()}${find}${fullHtml()}
-      <button class="icon-btn" data-download="${esc(view.path)}" aria-label="Download">${icon('down')}</button>
+      ${versionMenuHtml(view.path, view.version)}
+      ${canComment() && hasSpots(view) && !view.version ? modesHtml() : ''}${toolsHtml(view, find)}
       <button class="icon-btn" data-action="close-file" aria-label="Close">${icon('x')}</button></div>
     ${findBarHtml(view)}
-    <div class="files-body">${about}${view.data && !view.error ? changesBarHtml(view) : ''}${body}</div>${barHtml(hasSpots(view))}`;
+    <div class="files-body">${older}${about}${view.data && !view.error ? changesBarHtml(view) : ''}${body}${sent}</div>${barHtml()}`;
+}
+
+// Zoom, find, full screen and download sit in the header while the panel is wide enough; in a narrow panel they
+// move into a More menu (styles.css decides which, by the panel's width).
+function toolsHtml(view, find) {
+  const open = state.menu === 'more';
+  const download = `<button class="icon-btn" data-download="${esc(view.path)}" ${view.version ? `data-file-version="${view.version}"` : ''} aria-label="Download" title="Download">${icon('down')}</button>`;
+  return `<span class="menu-wrap more-wrap">
+      <button type="button" class="icon-btn more" data-menu="more" aria-haspopup="true" aria-expanded="${open}" aria-label="More" title="More">${icon('more')}</button>
+      <span class="tools ${open ? 'open' : ''}" role="group" aria-label="File tools">${zoomHtml()}${find}${fullHtml()}${download}</span></span>`;
 }
 
 // View or Comment: what a click in the preview does. The C key flips it.
@@ -367,9 +435,12 @@ export function closeFile() {
 // Loads in steps and calls `draw` after each, so the panel opens at once and fills in.
 // `back` remembers the output and row a source was opened from, so Back returns there; `found` is what to outline
 // in that source (see review.js), and `page` the page of a PDF to open at.
-export async function openFile(path, draw, { sheet = null, row = null, back = null, found = null, page = 1 } = {}) {
+// `version` opens an output as that kept version holds it (null for the latest); `ring` is a spot to ring and bring
+// into view: a cell, a line, or a box on a page.
+export async function openFile(path, draw, { sheet = null, row = null, back = null, found = null, page = 1, version = null, ring = null } = {}) {
   dropImage();
-  const view = { path, data: null, page: 1, image: null, error: '', back, found, hits: null, changes: null };
+  const view = { path, data: null, page: 1, image: null, error: '', back, found, hits: null, changes: null, version, ring: ring && { ...ring, jump: true } };
+  state.menu = null;
   if (state.open !== path) resetZoom();
   state.open = path;
   state.preview = view;
@@ -378,15 +449,15 @@ export async function openFile(path, draw, { sheet = null, row = null, back = nu
   draw();
   const current = () => state.preview === view;
   try {
-    view.data = await api(fileUrl('preview', path, sheet ? `&sheet=${encodeURIComponent(sheet)}` : ''));
+    view.data = await api(fileUrl('preview', path, (sheet ? `&sheet=${encodeURIComponent(sheet)}` : '') + versionOf(view)));
     if (!current()) return;
     draw();
     loadChanges(view, draw);
-    if (view.data.kind === 'image') view.image = await blobUrl(fileUrl('file', path));
+    if (view.data.kind === 'image') view.image = await blobUrl(fileUrl('file', path, versionOf(view)));
     else if (view.data.kind === 'pages') {
       // A row's place in this source may have come in while the file loaded.
       view.page = Math.min(Math.max(1, view.found?.page || page), view.data.pages);
-      view.image = await blobUrl(fileUrl('page', path, `&page=${view.page}`));
+      view.image = await blobUrl(fileUrl('page', path, `&page=${view.page}${versionOf(view)}`));
       if (state.find) searchPdf(view, turnPage, draw);
     } else return;
     if (!current()) return URL.revokeObjectURL(view.image);
@@ -406,11 +477,28 @@ export function backFile(draw) {
   return openFile(back.path, draw, { sheet: back.sheet, row: back.row });
 }
 
+const versionOf = (view) => (view.version ? `&version=${view.version}` : '');
+
+// Open a file at a spot: a sent comment's, or a cell or file the agent named. The spot is ringed and scrolled into
+// view; a file already on show (the latest, at that sheet and page) is not loaded again.
+export function openSpot(spot, draw, back = null) {
+  state.changes.on = false; // the plain file, with its pins, as the spot was commented on
+  state.menu = null;
+  const view = state.preview;
+  const same = view?.path === spot.path && !view.version && view.data && !view.error;
+  if (same && (!spot.sheet || spot.sheet === view.data.sheet) && (!spot.page || spot.page === view.page)) {
+    view.ring = { ...spot, jump: true };
+    return draw();
+  }
+  const from = view && view.path !== spot.path ? { path: view.path, sheet: view.data?.sheet } : back;
+  return openFile(spot.path, draw, { sheet: spot.sheet || null, page: spot.page || 1, ring: spot, back: from });
+}
+
 export async function turnPage(page, draw) {
   const view = state.preview;
   if (!view?.data || page < 1 || page > view.data.pages) return;
   try {
-    const image = await blobUrl(fileUrl('page', view.path, `&page=${page}`));
+    const image = await blobUrl(fileUrl('page', view.path, `&page=${page}${versionOf(view)}`));
     if (state.preview !== view) return URL.revokeObjectURL(image);
     dropImage();
     Object.assign(view, { page, image });

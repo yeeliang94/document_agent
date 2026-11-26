@@ -75,3 +75,25 @@ def test_config_publishes_the_status_groups_the_api_enforces(tmp_path):
         statuses = client.get('/api/config').json()['statuses']
     assert statuses == jobstatus.as_json()
     assert 'running' in statuses['active'] and 'partial' in statuses['startable']
+
+
+def test_a_run_is_renamed_and_deleted_but_not_while_it_is_going(tmp_path):
+    with TestClient(base_url=LOCAL, app=create_app(Settings(data_dir=tmp_path, api_key=''))) as client:
+        kept, going = create_job(client), create_job(client)
+        renamed = client.patch(f'/api/jobs/{kept["id"]}', json={'name': '  October   payroll '})
+        assert renamed.status_code == 200 and renamed.json()['name'] == 'October payroll'
+        assert next(j for j in client.get('/api/jobs').json() if j['id'] == kept['id'])['name'] == 'October payroll'
+        assert client.patch(f'/api/jobs/{kept["id"]}', json={'name': 'x' * 81}).status_code == 400
+        assert client.patch(f'/api/jobs/{kept["id"]}', json={'name': ''}).json()['name'] is None  # back to its goal
+        assert client.patch('/api/jobs/' + 'a' * 32, json={'name': 'Nope'}).status_code == 404
+
+        client.app.state.store.update(going['id'], status='running')
+        refused = client.delete(f'/api/jobs/{going["id"]}')
+        assert refused.status_code == 409 and 'Stop it before you delete it' in refused.json()['detail']
+        assert (tmp_path / 'jobs' / going['id']).exists()
+
+        assert client.delete(f'/api/jobs/{kept["id"]}').status_code == 204
+        assert client.get(f'/api/jobs/{kept["id"]}').status_code == 404
+        assert not (tmp_path / 'jobs' / kept['id']).exists()
+        assert [j['id'] for j in client.get('/api/jobs').json()] == [going['id']]
+        assert client.delete(f'/api/jobs/{kept["id"]}').status_code == 404

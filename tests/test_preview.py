@@ -322,13 +322,39 @@ def test_a_row_is_found_on_the_page_holding_most_of_its_values(client):
     assert len(found['boxes']) == 4
     assert found['wanted'] == ['Selatan Courier', 'SC26100217', '2,315.60', '2315.60', '185.25', '2,500.85', '2500.85']
     none = client.post(f'/api/jobs/{job["id"]}/locate', json={'path': path, 'values': ['Nobody']}).json()
-    assert none == {'page': None, 'boxes': [], 'wanted': ['Nobody']}
+    assert none == {'page': None, 'boxes': [], 'wanted': ['Nobody'], 'values': {}}
     # Another kind of source is not searched here; the page outlines the values in it from `wanted`.
     sheet_job, sheet = upload(client, 'vendors.csv', b'vendor,amount\nSelatan Courier,2500.85\n')
     other = client.post(f'/api/jobs/{sheet_job["id"]}/locate', json={'path': sheet, 'values': ['2500.85']}).json()
-    assert other == {'page': None, 'boxes': [], 'wanted': ['2,500.85', '2500.85']}
+    assert other == {'page': None, 'boxes': [], 'wanted': ['2,500.85', '2500.85'], 'values': {'2500.85': 'row 2'}}
     too_long = client.post(f'/api/jobs/{job["id"]}/locate', json={'path': path, 'values': ['x' * 201]})
     assert too_long.status_code == 422
+
+
+def test_each_value_of_a_row_says_where_it_was_found_in_a_source(client):
+    # A PDF names the first page each value is on: the invoice number is on page 1, the amounts on page 2.
+    job, path = upload(client, 'invoice.pdf', INVOICE)
+    row = ['SC26100217', '2,315.60', '2315.60', 'Selatan Courier']
+    found = client.post(f'/api/jobs/{job["id"]}/locate', json={'path': path, 'values': row}).json()
+    assert found['values'] == {'SC26100217': 'page 1', '2,315.60': 'page 2', '2315.60': 'page 2'}
+    # A workbook names the sheet and row, and matches a number as a number: 4500 in a cell is 4,500.00.
+    book = Workbook()
+    book.active.title = 'Employees'
+    book.active.append(['ID', 'Name', 'Salary'])
+    book.active.append(['EMP001', 'Alex Example', 4500])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    sheet_job, sheet = upload(client, 'staff.xlsx', buffer.getvalue())
+    values = ['EMP001', 'Alex Example', '4,500.00', '12,500.00', 'Example']
+    found = client.post(f'/api/jobs/{sheet_job["id"]}/locate', json={'path': sheet, 'values': values}).json()
+    assert found['values'] == {'EMP001': 'Employees, row 2', 'Alex Example': 'Employees, row 2', '4,500.00': 'Employees, row 2', 'Example': 'Employees, row 2'}  # fmt: skip
+    # A text file names the line, and a value is found only as a whole word or number.
+    text_job, text = upload(client, 'letter.txt', b'Dear Alex,\nYour salary is 14,500.00.\nFrom 1 Oct: 4,500.00\n')
+    found = client.post(f'/api/jobs/{text_job["id"]}/locate', json={'path': text, 'values': ['4500']}).json()
+    assert found['values'] == {'4500': 'line 3'}
+    # A picture is not searched.
+    picture_job, picture = upload(client, 'letter.png', b'not really a picture')
+    assert client.post(f'/api/jobs/{picture_job["id"]}/locate', json={'path': picture, 'values': ['4500']}).json()['values'] == {}
 
 
 def test_amounts_are_looked_for_in_the_ways_a_source_writes_them():

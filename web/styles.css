@@ -107,8 +107,61 @@ svg {
 /* Shell */
 .app {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: var(--side, 232px) 8px minmax(0, 1fr);
   height: 100dvh;
+  position: relative;
+}
+/* The run list hidden: a thin rail keeps the divider and the button that shows the list again */
+.app.slim {
+  grid-template-columns: 0 40px minmax(0, 1fr);
+}
+.app.slim .side {
+  padding: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+.app .side-show {
+  display: none;
+  position: absolute;
+  top: 24px;
+  left: 4px;
+  z-index: 2;
+}
+.app.slim .side-show {
+  display: grid;
+}
+/* The dividers between side-by-side panels: drag, or arrow keys when focused */
+.grip {
+  cursor: col-resize;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  min-height: 0;
+}
+.grip::after {
+  content: '';
+  width: 2px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background 0.15s;
+}
+.grip:hover::after,
+.grip:focus-visible::after,
+.dragging .grip::after {
+  background: var(--faint);
+}
+.grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+.dragging .work {
+  transition: none;
 }
 .side {
   padding: 24px 12px 16px;
@@ -308,7 +361,7 @@ svg {
 .work {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--files, 380px);
+  grid-template-columns: minmax(0, 1fr) 8px var(--files, 380px);
   min-width: 0;
   min-height: 0;
   transition: grid-template-columns 0.25s ease;
@@ -355,6 +408,11 @@ svg {
 }
 .stages .done {
   color: var(--muted);
+}
+.stages .budget {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 .scroll {
   flex: 1;
@@ -540,7 +598,8 @@ button.file:hover {
   flex-direction: column;
   gap: 12px;
 }
-.card.ask {
+.card.ask,
+.card.warn {
   background: var(--warn-bg);
 }
 .card.bad {
@@ -554,6 +613,32 @@ button.file:hover {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+/* The raw error of a run that stopped, folded away under its plain message */
+.card details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  width: fit-content;
+}
+.card details pre {
+  margin: 8px 0 0;
+  font: 12px/1.5 var(--mono);
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The saved versions of a run, one row each (versions.js) */
+.versions .row {
+  min-height: 0;
+}
+.versions .row .name {
+  color: var(--text);
+}
+.versions .act {
+  min-width: 136px; /* Latest and Continue from here take the same room, so the times line up */
+  display: flex;
+  justify-content: flex-end;
 }
 .filerow {
   display: flex;
@@ -575,6 +660,43 @@ button.file:hover {
 }
 .filerow .name:hover {
   color: var(--accent);
+}
+/* The report a finished run ends with (thread.js reportCard) */
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 62ch;
+}
+.report h2 {
+  text-wrap: pretty;
+}
+.report .why {
+  color: var(--muted);
+  margin-top: -8px;
+}
+.report section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.report ul {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.card.deliver {
+  padding: 12px 16px;
+}
+.choices .spent {
+  margin-left: auto;
+  align-self: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .todo {
   margin: 0;
@@ -1071,6 +1193,7 @@ button.file:hover {
 
 /* Files panel */
 .files {
+  container: files / inline-size;
   margin: 16px 16px 16px 0;
   background: var(--panel);
   border-radius: 12px;
@@ -1088,7 +1211,8 @@ button.file:hover {
   min-height: 60px;
 }
 .files-head h2 {
-  margin-right: auto;
+  flex: 1 1 0;
+  min-width: 48px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1344,6 +1468,11 @@ button.frow:hover .name {
 .row .val {
   flex-wrap: nowrap;
   flex: none;
+}
+/* The client box with its suggestion wraps under itself on a narrow screen. */
+.row .val.wraps {
+  flex-wrap: wrap;
+  flex: 0 1 auto;
 }
 .row .when {
   color: var(--muted);
@@ -1632,7 +1761,8 @@ dialog > h3 {
   display: none;
 }
 @media (max-width: 1000px) {
-  .app {
+  .app,
+  .app.slim {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
   }
@@ -1662,6 +1792,11 @@ dialog > h3 {
   .work,
   .work.viewing {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .grip,
+  .side-show,
+  .app.slim .side-show {
+    display: none;
   }
   .files {
     display: none;
@@ -1880,16 +2015,21 @@ mark.hit.now {
   flex: none;
 }
 
-/* What changed since the last round */
+/* What changed since the last round, or since a version: the switch, what it compares with, and the steps */
 .changes {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 16px;
+  min-height: 32px;
   color: var(--muted);
   font-size: 13px;
   margin-bottom: -12px; /* sits close above the sheet it describes */
+}
+.changes .count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .switch-label {
   display: inline-flex;
@@ -2057,25 +2197,561 @@ button.chip:hover {
 .work.full .files-body {
   padding: 0 32px 24px;
 }
-/* On a narrow screen the file already fills the screen, so there is no full screen. At any width the head wraps when
-   its buttons and the file's name do not fit on one line (a laptop with the run list showing). On a phone, a pinch
-   zooms, so the zoom buttons give way to the file's name. */
+/* On a narrow screen the file already fills the screen, so there is no full screen. The head stays on one line: the
+   file's name shrinks first, then in a narrow panel zoom, find, full screen and download move into the More menu.
+   On a phone, a pinch zooms, so the zoom buttons go. */
 @media (max-width: 1000px) {
   .files-head [data-zoom='full'] {
     display: none;
   }
 }
-@media (min-width: 561px) {
+.more-wrap .more {
+  display: none;
+}
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+@container files (max-width: 799px) {
+  .more-wrap .more {
+    display: grid;
+  }
+  .more-wrap .more[aria-expanded='true'] {
+    background: var(--grey-bg);
+    color: var(--text);
+  }
+  .tools {
+    display: none;
+  }
+  .tools.open {
+    display: flex;
+    position: absolute;
+    z-index: 6;
+    top: calc(100% + 4px);
+    right: 0;
+    padding: 4px;
+    border-radius: 12px;
+    background: var(--bg);
+    box-shadow:
+      0 0 0 1px var(--line),
+      0 8px 32px rgba(24, 24, 27, 0.12);
+  }
+  .tools .zoom {
+    background: var(--panel);
+  }
+}
+@container files (max-width: 479px) {
   .files-head {
-    flex-wrap: wrap;
-    row-gap: 8px;
+    gap: 4px;
   }
   .files-head h2 {
-    flex: 1 1 96px;
+    min-width: 32px;
   }
 }
 @media (max-width: 560px) {
   .files-head .zoom {
     display: none;
   }
+}
+
+/* Which value of a row came from which file */
+.came-from {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.came-from td {
+  padding: 12px 0;
+  box-shadow: inset 0 1px 0 var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.came-from td:first-child {
+  color: var(--muted);
+  width: 120px;
+  padding-right: 12px;
+}
+.came-from td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  width: 80px;
+  padding-right: 16px;
+  white-space: nowrap;
+}
+.came-from .file {
+  color: var(--text);
+  text-align: left;
+}
+.came-from .where {
+  margin-left: 4px;
+}
+
+/* Where a remembered comment is kept, in the comment box */
+.pop .line > span:first-child {
+  flex: 1;
+}
+.pop .seg {
+  background: var(--panel);
+  flex: none;
+}
+.pop .seg button {
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+/* A Markdown file shown formatted: each line is still its own piece, drawn by its role */
+.doc.md {
+  white-space: normal;
+  line-height: 1.6;
+}
+.doc.md .ln {
+  display: block;
+  min-height: 1.6em;
+  white-space: pre-wrap;
+}
+.doc.md .md-blank {
+  min-height: 8px;
+  height: 8px;
+}
+.doc.md .md-h1,
+.doc.md .md-h2,
+.doc.md .md-h3 {
+  font-weight: 500;
+  padding-top: 8px;
+}
+.doc.md .md-h1 {
+  font-size: 16px;
+}
+.doc.md .md-h2 {
+  font-size: 14px;
+}
+.doc.md .md-item {
+  position: relative;
+  padding-left: 24px;
+}
+.doc.md .md-l1 {
+  margin-left: 24px;
+}
+.doc.md .md-l2,
+.doc.md .md-l3,
+.doc.md .md-l4 {
+  margin-left: 48px;
+}
+.doc.md .md-mark {
+  position: absolute;
+  left: 4px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.doc.md .md-quote {
+  box-shadow: inset 2px 0 0 var(--line);
+  padding-left: 12px;
+  color: var(--muted);
+}
+.doc.md .md-code,
+.doc.md .md-table,
+.doc.md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.doc.md code {
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.doc.md .md-rule {
+  height: 16px;
+  min-height: 16px;
+  background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat;
+}
+.doc.md strong {
+  font-weight: 500;
+}
+
+/* A cell or file the agent names: plain text in the accent colour, so a sentence still reads as a sentence */
+.ref {
+  display: inline;
+  color: var(--accent);
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(47, 111, 219, 0.3);
+  text-underline-offset: 3px;
+  white-space: normal;
+}
+.ref:hover {
+  text-decoration-color: var(--accent);
+}
+
+/* The one dropdown: the file's Version menu and what Changes compares with */
+.menu-wrap {
+  position: relative;
+  flex: none;
+}
+.picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.picker:hover,
+.picker[aria-expanded='true'] {
+  background: var(--grey-bg);
+}
+.picker svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.drop {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 280px;
+  max-width: min(400px, calc(100vw - 32px));
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 8px 32px rgba(24, 24, 27, 0.12);
+}
+.drop button {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+.drop button:hover,
+.drop button[aria-checked='true'] {
+  background: var(--panel);
+}
+.drop .v {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drop .when {
+  font-size: 13px;
+  color: var(--muted);
+  flex: none;
+}
+
+/* An older version on show */
+.older {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: var(--sheet);
+  border-radius: 12px;
+  padding: 8px 8px 8px 16px;
+  color: var(--muted);
+}
+.older span {
+  flex: 1;
+  min-width: 160px;
+}
+
+/* The code's verdict on a sent comment: changed, not changed, still being worked on */
+.pin.done {
+  background: var(--ok-fg);
+}
+.pin.left {
+  background: var(--grey-fg);
+}
+.pin.wait {
+  background: var(--faint);
+}
+/* A sent comment's number grows to "1.2" once there is more than one round */
+.pin.still {
+  min-width: 20px;
+  width: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+}
+.comments .pin,
+.me.round .pin {
+  margin: 1px 0 0;
+}
+
+/* The spot a comment or a link opened, or the change in focus */
+.grid td.ring,
+.doc .ln.ring {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  animation: ring 1.2s 2;
+}
+.stage .area.ring {
+  border-color: var(--accent);
+  background: none;
+  animation: ring 1.2s 2;
+}
+@keyframes ring {
+  50% {
+    box-shadow:
+      inset 0 0 0 2px var(--accent),
+      0 0 0 4px var(--accent-bg);
+  }
+}
+
+/* The sent round in the chat: each comment opens its spot */
+.me.round {
+  width: 88%;
+  max-width: 88%;
+  padding: 8px;
+}
+.me.round .notes {
+  gap: 0;
+}
+.me.round li {
+  display: block;
+}
+.me.round .spot {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  border-radius: 8px;
+}
+.me.round .spot:hover {
+  background: var(--grey-bg);
+}
+.me.round .where {
+  display: block;
+  margin: 0;
+}
+.me.round .pill {
+  margin-right: 8px;
+}
+
+/* The comments sent on the file on show, each with the agent's answer */
+.comments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.comments-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+.comments-head h2 {
+  flex: 1;
+}
+.c {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  margin: 0 -16px;
+  border-radius: 12px;
+}
+.c.on {
+  background: var(--sheet);
+}
+.c-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.c-top .where {
+  text-align: left;
+}
+.c-top .where:hover {
+  color: var(--text);
+}
+.c-top .verdict {
+  flex: 1;
+}
+.c-top .verdict.ok {
+  color: var(--ok-fg);
+}
+.c > p {
+  padding-left: 32px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.answer {
+  margin-left: 32px;
+  padding-left: 16px;
+  box-shadow: inset 2px 0 0 var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.answer p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.answer .who {
+  font-size: 13px;
+  color: var(--muted);
+}
+.answer.pending p {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.4s infinite;
+  flex: none;
+}
+.reply {
+  margin-left: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.reply textarea {
+  border: 0;
+  background: var(--sheet);
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 72px;
+  resize: none;
+  outline: none;
+}
+.reply textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.c.on .reply textarea {
+  background: var(--panel);
+}
+.reply .row {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.c-act {
+  margin-left: 24px;
+  display: flex;
+  gap: 4px;
+}
+.resolved {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.resolved span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The run list: each run's name, its status and a menu to rename or delete it */
+.item.run {
+  cursor: pointer;
+  padding: 4px 4px 4px 12px;
+  min-height: 40px;
+  position: relative;
+}
+.run-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  text-align: left;
+  color: inherit;
+  padding: 4px 0;
+}
+.item.run > .pill,
+.item.run > .menu-wrap {
+  flex: none;
+  overflow: visible;
+}
+/* The menu button takes room only while the row is pointed at, focused or its menu is open. */
+.run-more {
+  width: 0;
+  height: 28px;
+  overflow: hidden;
+  opacity: 0;
+}
+.item.run:hover .run-more,
+.item.run:focus-within .run-more,
+.run-more[aria-expanded='true'] {
+  width: 28px;
+  opacity: 1;
+}
+.item.run .drop {
+  left: auto;
+  right: 0;
+  min-width: 160px;
+}
+
+/* Settings: a number with its unit, and a refused value's sentence beside the field */
+.unit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--sheet);
+  border-radius: 12px;
+  padding: 0 12px;
+  width: 200px;
+  flex: none;
+  margin-left: auto; /* a field that wraps under its label on a phone stays on the right */
+}
+.row .unit input {
+  border: 0;
+  background: none;
+  border-radius: 0;
+  padding: 8px 0;
+  width: 100%;
+  min-width: 0;
+  outline: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.row .unit input:not([inputmode]) {
+  text-align: left;
+}
+.unit:focus-within {
+  box-shadow: 0 0 0 2px var(--accent-bg);
+}
+.unit span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.unit.bad,
+.unit.bad:focus-within {
+  box-shadow: inset 0 0 0 1px var(--bad-fg);
+}
+.row.err {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.row.err > p {
+  flex-basis: 100%;
+  text-align: right;
+  font-size: 13px;
 }

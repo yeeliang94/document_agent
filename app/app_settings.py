@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 
+class SettingError(ValueError):
+    """A value the Settings page cannot keep. field names the setting, so the page can show the sentence beside it."""
+
+    def __init__(self, message: str, field: str | None = None):
+        super().__init__(message)
+        self.field = field
+
+
 @dataclass(frozen=True)
 class Option:
     default: object
@@ -21,18 +29,19 @@ class Option:
     pattern: str | None = None
 
     def check(self, value):
+        """The value, or a SettingError whose sentence reads well beside the field (it does not repeat the label)."""
         if isinstance(self.default, bool):
             if not isinstance(value, bool):
-                raise ValueError(f'{self.label} must be on or off.')
+                raise SettingError('Choose on or off.')
         elif isinstance(self.default, int):
             if isinstance(value, bool) or not isinstance(value, int) or not (self.low <= value <= self.high):
-                raise ValueError(f'{self.label} must be a whole number from {self.low} to {self.high}.')
+                raise SettingError(f'Choose a whole number from {self.low} to {self.high}.')
         elif self.choices and value not in self.choices:
-            raise ValueError(f'{self.label} must be one of {", ".join(map(str, self.choices))}.')
+            raise SettingError(f'Choose one of {", ".join(map(str, self.choices))}.')
         elif not isinstance(value, str):
-            raise ValueError(f'{self.label} must be text.')
+            raise SettingError('Enter text.')
         elif self.pattern and not re.fullmatch(self.pattern, value):
-            raise ValueError(f'{self.label} may hold only letters, digits, dots, dashes and underscores.')
+            raise SettingError('Use only letters, digits, dots, dashes and underscores.')
         return value
 
 
@@ -50,6 +59,11 @@ OPTIONS = {
     'daily_token_limit_thousands': Option(30000, 'Token limit per day, all runs (thousands)', low=0, high=500000),
     # OpenAI condenses the older history once a request reaches this size; tried live at 20 (see PLAN-IMPROVEMENTS).
     'condense_at_thousands': Option(200, 'Condense history at (thousands of tokens, 0 for never)', low=0, high=1000),
+    # The first save that passes also shows the agent pictures of its deliverables (about 1,000-2,000 tokens each).
+    'look_before_finish': Option(True, 'Show the agent its files before it finishes'),
+    'versions_kept': Option(20, 'Versions kept per run', low=1, high=100),  # a copy of the outputs at each save
+    # Questions the agent may ask over the whole job; each one waits for your answer.
+    'max_questions': Option(3, 'Questions it may ask per job', low=0, high=10),
     'question_wait_minutes': Option(10, 'Minutes to hold the sandbox while a question waits', low=1, high=18),
     'replay_tests': Option('large', 'Check playbook changes against past corrections', ('never', 'large', 'every')),
     'litellm_provider': Option('', 'LiteLLM provider header', pattern=r'[A-Za-z0-9_.-]{0,64}'),
@@ -64,8 +78,14 @@ def defaults() -> dict:
 def validate(changes: dict) -> dict:
     unknown = sorted(set(changes) - set(OPTIONS))
     if unknown:
-        raise ValueError(f'Unknown setting(s): {", ".join(unknown)}.')
-    return {name: OPTIONS[name].check(value) for name, value in changes.items()}
+        raise SettingError(f'Unknown setting(s): {", ".join(unknown)}.')
+    checked = {}
+    for name, value in changes.items():
+        try:
+            checked[name] = OPTIONS[name].check(value)
+        except SettingError as error:
+            raise SettingError(str(error), name) from None
+    return checked
 
 
 def describe() -> dict:

@@ -28,7 +28,11 @@ def describe(runs) -> str:
         'was laid out and which conventions the user accepted. Open one with open_past_run when that would help; '
         'you do not have to. An earlier run is an example, not a source: the goal, the house rules and the skills '
         "come first where they differ, and every value you write comes from this job's own files.\n"
-        + '\n'.join(f'- {r["label"]}: {r["title"]} (finished {r["finished"]})' for r in runs)
+        + '\n'.join(
+            f'- {r["label"]}: {r["title"]} (' + (f'for {r["client"]}, ' if r.get('client') else '')
+            + f'finished {r["finished"]})'
+            for r in runs
+        )
     )
 
 

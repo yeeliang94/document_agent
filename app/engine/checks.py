@@ -31,10 +31,13 @@ from openpyxl.utils.cell import range_boundaries
 from openpyxl.worksheet.cell_range import CellRange
 
 from .jobspec import Deliverable, JobSpec
+from .looks import warnings as look_warnings
 from .rules import _key, blank, check_format, check_rules, filled_rows, table
+from .totals import listed, template_faults, work_out
 
 JUNK_NAMES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 MAX_UNCOMPRESSED = 2 * 1024**3
+WORKBOOKS = {'.xlsx', '.xlsm'}
 DOCUMENT_MAP = 'document_map.json'
 PROVENANCE = 'provenance.json'
 # The agent's records of its work and the app's own summary: never the output the user asked for.
@@ -750,6 +753,8 @@ def free_form_file(path: Path) -> tuple[str | None, dict[str, set[int]]]:
 def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row') -> dict:
     """Every check, plus a summary per area for people: deliverable problems, files decided, rows with sources."""
     deliverable_issues, changes, written, gaps = [], [], {}, []
+    # The workbooks whose totals and look are checked: (name, path, template, format)
+    books = [(d.name, outputs / d.name, d.template, d.format) for d in job.deliverables]
     for deliverable in job.deliverables:
         result = check_deliverable(outputs, deliverable, job.rules)
         deliverable_issues += result.issues
@@ -774,20 +779,47 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
             if problem:
                 deliverable_issues.append(f'{name}: {problem}')
             written |= {(name, sheet): numbers for sheet, numbers in rows.items()}
+            if path.suffix.lower() in WORKBOOKS and not problem:
+                books.append((name, path, None, None))
+    totals_issues, totals_lines, unsupported, looks = [], [], 0, []
+    for name, path, template, format_spec in books:
+        if not path.exists():
+            continue
+        try:
+            found = work_out(path, template_faults(template) if template else frozenset())
+        except Exception:  # noqa: BLE001 - a workbook that does not open is already a deliverable problem
+            continue
+        totals_issues += [f'{name}: {line}' for line in found.problems]
+        totals_lines += listed(name, found)
+        unsupported += found.unsupported
+        rows = {sheet: numbers for (book, sheet), numbers in written.items() if book == name}
+        try:
+            looks += [f'{name}: {line}' for line in look_warnings(path, rows, format_spec)]
+        except Exception:  # noqa: BLE001 - a look that cannot be checked is not a problem with the work
+            pass
     entries, error = read_map(outputs)
     map_issues, decided = ([error], 0) if error else check_map(entries, files)
     summary = {
         'deliverable_problems': len(deliverable_issues),
         'files_decided': decided,
         'files': sum(not f.get('junk') for f in files),
+        'totals': len(totals_lines),
+        'totals_problems': len(totals_issues),
+        'looks_right': not looks,
     }
     provenance_issues = []
     if proof == 'row':
         provenance_issues, counts = check_provenance(outputs, written, files, entries)
         summary |= {'rows_sourced': counts['sourced'], 'rows_written': counts['written']}
-    issues = deliverable_issues + map_issues + provenance_issues
+    issues = deliverable_issues + totals_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
-    return {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps, 'summary': summary}
+    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps,
+              'totals': totals_lines, 'looks': looks, 'summary': summary}  # fmt: skip
+    if unsupported:
+        result['totals_not_worked_out'] = (
+            f'{unsupported} formula(s) use something this machine cannot work out; check those in the sandbox.'
+        )
+    return result
 
 
 MAX_LAYOUT = 12  # row groups per sheet in the template outline

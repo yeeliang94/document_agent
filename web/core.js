@@ -24,6 +24,8 @@ const icons = {
   expand: 'M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6',
   shrink: 'M4 14h6v6M20 10h-6V4M14 10l6-6M10 14l-6 6',
   down1: 'M6 9l6 6 6-6',
+  more: 'M7 12a1 1 0 11-2 0 1 1 0 012 0zM13 12a1 1 0 11-2 0 1 1 0 012 0zM19 12a1 1 0 11-2 0 1 1 0 012 0z',
+  side: 'M4 5h16v14H4zM9 5v14',
 };
 export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"/></svg>`;
 export const btn = (action, label, kind = 'quiet', disabled = false, glyph = '') =>
@@ -35,16 +37,30 @@ const currentPeriod =
   monthParts.find((p) => p.type === 'year').value + '-' + monthParts.find((p) => p.type === 'month').value;
 
 export const state = {
-  view: 'run', // run | playbooks | playbook | settings | log
+  view: 'run', // run | playbooks | playbook | clients | client | settings | log
   playbook: '', // the playbook a new run will use
   book: null, // the playbook page that is open; see playbooks.js
   books: {}, // each playbook opened in this visit, with any edit not yet saved
+  clients: [], // every client, with its latest version; see clients.js
+  client: null, // the client page that is open
+  clientPages: {}, // each client opened in this visit, with any edit not yet saved
+  runClient: '', // the client a new run follows, only ever one the person chose
+  clientSuggestion: null, // the client the chosen files point to, offered beside the client box
+  clientDecided: false, // the person took or turned down the suggestion
   comments: {}, // comments pinned to files and not yet sent, by job id; see comments.js
   commentDraft: null, // the comment being written
   previewMode: 'view', // view: clicks in the preview check things; comment: clicks and drags make comments
   rounds: [], // the rounds of comments already sent on the open run
   roundsKey: '',
+  versions: [], // the outputs kept at each save of the open run, newest first; see versions.js
+  versionsKey: '',
+  showVersions: false, // the stopped card shows the list of earlier versions
   sending: null, // the round of comments being sent, kept until the server has it
+  reply: null, // the reply being written under a sent comment: { to: '1.2', text, round_id }
+  activeComment: '', // the sent comment last opened from the chat or the list, as '1.2'
+  showResolved: false, // the file panel lists the resolved comments too
+  menu: null, // the dropdown open in the file panel: 'version', 'since' or 'more'
+  links: { key: '', found: {} }, // cells and files named in the agent's words, by text; see links.js
   forgotten: new Set(), // remembered comments taken back out of the playbook in this visit
   config: null,
   job: null,
@@ -52,6 +68,7 @@ export const state = {
   events: [],
   seen: 0, // highest event number already drawn, so only newer items animate in
   toggled: new Set(), // work blocks the user opened or closed by hand
+  wrapped: new Set(), // near-limit cards answered with Let it wrap up, as "job id:event number"
   files: [],
   template: null,
   period: '', // a reporting month, for work that has one
@@ -66,7 +83,9 @@ export const state = {
   preview: null, // { path, data, sheet, page, image, error }
   row: null,
   find: null, // the find bar in the preview, while open; see review.js
-  changes: { on: false, only: false }, // the preview shows what changed since the last round
+  // The preview shows what changed since the last round (since: null) or since a version (its number); `step` is the
+  // change in focus, for Previous and Next.
+  changes: { on: false, only: false, since: null, step: 0, jump: false },
   places: null, // where the selected row was found in its PDF sources
   map: null, // the agent's decision for each file, by stored path
   mapKey: '',
@@ -83,6 +102,7 @@ export const state = {
   settings: null,
   settingsDraft: null,
   settingsError: '',
+  settingsErrors: {}, // a refused value's sentence, by setting, shown beside its field
 };
 
 // --- Derived state ---------------------------------------------------------
@@ -109,6 +129,7 @@ export const STATUS = {
 };
 
 export function jobTitle(job) {
+  if (job.name) return job.name; // the name the person gave the run
   // The run list carries the playbook's name; a run made before playbooks carries only its module.
   const named = typeof job.playbook === 'string' ? job.playbook : job.playbook?.name;
   const label = named || playbooks().find((p) => p.id === job.module)?.name || job.module || '';
@@ -170,12 +191,13 @@ async function request(path, options = {}) {
     }
   }
   if (!res.ok) {
-    let detail;
+    let detail, field;
     try {
-      detail = (await res.json()).detail;
+      ({ detail, field } = await res.json()); // field: the setting or form field the sentence is about
     } catch {}
     const error = new Error(typeof detail === 'string' ? detail : detail?.message || `Request failed (${res.status})`);
     error.status = res.status;
+    error.field = field;
     throw error;
   }
   return res;

@@ -2,7 +2,9 @@
 // the comments together as one round. Only where each comment points is sent: the server reads the file itself
 // to tell the agent what is there, so nothing here has to be trusted.
 
+import { runClient } from './clients.js';
 import { $, api, attr, baseName, esc, icon, inGroup, jobUrl, playbooks, plural, state } from './core.js';
+import { linked } from './links.js';
 
 export const canComment = () => !!state.job && !state.job.legacy && inGroup('accepts_comments');
 // Clicks in the preview make comments only in Comment mode; in View mode they check things, like a row's sources.
@@ -75,7 +77,7 @@ export function columnName(n) {
 // Open the comment box at a spot: a new comment, or the one already pinned there.
 export function writeAt(spot, x, y) {
   const held = pending().find((c) => sameSpot(c, spot));
-  state.commentDraft = { ...(held || { ...spot, text: '', remember: false }), at: [x, y] };
+  state.commentDraft = { ...(held || { ...spot, text: '', remember: false, remember_to: null }), at: [x, y] };
 }
 
 export function editPin(id, x, y) {
@@ -95,8 +97,40 @@ export function popHtml() {
     <form class="pop" id="comment-form" style="${place}" role="dialog" aria-label="Comment">
       <h2>${esc(label(d))}</h2>${isBox(d) ? snipHtml(d) : ''}
       <textarea id="note" aria-label="Comment" placeholder="What should change?" maxlength="2000"></textarea>
+      ${rememberHtml(d)}
       <div class="end">${d.id ? '<button type="button" class="btn text" data-comment="delete">Delete</button>' : ''}
         <button type="button" class="btn text" data-comment="cancel">Cancel</button><button class="btn quiet">${d.id ? 'Save' : 'Add comment'}</button></div></form>`;
+}
+
+// Whether the agent keeps this comment for later runs, and where. A run with a client chooses: this run only, the
+// client's notes, or the playbook for everyone; without a client, it is the playbook or nothing.
+export const rememberedTo = (c) => (c.remember ? c.remember_to || 'playbook' : '');
+
+// A name short enough for its button: "Acme" for Acme Manufacturing.
+function shortName(name) {
+  const first = name.split(/\s+/)[0];
+  return name.length <= 12 || first.length < 3 ? name : first;
+}
+
+function rememberHtml(d) {
+  const client = state.job.client?.name;
+  const scope = rememberedTo(d);
+  if (!client) {
+    const on = scope === 'playbook';
+    return `<div class="line"><span>Remember for next time</span><button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="Remember for next time" data-remember="${on ? '' : 'playbook'}"></button></div>`;
+  }
+  const book = state.job.playbook?.name || playbooks().find((p) => p.id === state.job.module)?.name || 'the playbook';
+  const all = /^[A-Z][a-z]/.test(book) ? book[0].toLowerCase() + book.slice(1) : book;
+  const choice = (value, label, title) =>
+    `<button type="button" class="${scope === value ? 'on' : ''}" data-remember="${value}" aria-pressed="${scope === value}" title="${esc(title)}">${esc(label)}</button>`;
+  return `<div class="line"><span>Remember</span><span class="seg" role="group" aria-label="Remember">${choice('', 'This run', 'Only this run')}${choice('client', shortName(client), `For ${client}`)}${choice('playbook', `All ${all}`, `For every ${book} run`)}</span></div>`;
+}
+
+export function chooseRemember(value) {
+  const d = state.commentDraft;
+  if (!d) return;
+  d.remember = !!value;
+  d.remember_to = value || null;
 }
 
 // The drawn area, cut out of the page on show, so the person sees what the agent will be pointed at.
@@ -160,15 +194,13 @@ export function dropComment(id) {
 
 // --- Sending ----------------------------------------------------------------
 
-// The strip under the Files panel: how many comments wait, and the button that sends them. `spots` says the
-// file on show has places to click; without any, the strip appears only when comments are waiting.
-export function barHtml(spots) {
+// The strip under the Files panel, while comments wait: how many, and the button that sends them.
+export function barHtml() {
   const n = pending().length;
-  if (!canComment() || (!n && !spots)) return '';
+  if (!canComment() || !n) return '';
   const files = new Set(pending().map((c) => c.path)).size;
-  const said = n ? `${plural(n, 'comment')}${files > 1 ? ` on ${files} files` : ''}` : '';
-  return `<div class="files-foot"><span>${said}</span>
-    <button class="btn primary" data-action="send-comments" ${attr('disabled', !n || state.busy)}>Send to agent</button></div>`;
+  return `<div class="files-foot"><span>${plural(n, 'comment')}${files > 1 ? ` on ${files} files` : ''}</span>
+    <button class="btn primary" data-action="send-comments" ${attr('disabled', state.busy)}>Send to agent</button></div>`;
 }
 
 export async function sendComments() {
@@ -192,17 +224,18 @@ export async function sendComments() {
   }
   state.sending = null;
   const sent = new Map(round.comments.map((c) => [c.id, c]));
-  const same = (c) => sent.has(c.id) && sent.get(c.id).text === c.text && sent.get(c.id).remember === c.remember;
+  const same = (c) => sent.has(c.id) && sent.get(c.id).text === c.text && rememberedTo(sent.get(c.id)) === rememberedTo(c);
   state.comments[job.id] = (state.comments[job.id] || []).filter((c) => !same(c));
   state.commentDraft = null;
 }
 
 // --- What was sent ----------------------------------------------------------
 
-// The rounds already sent on this run, reloaded when one is added or changes state.
+// The rounds already sent on this run, reloaded when one is added, answered or changes state.
 export async function loadRounds() {
   const job = state.job;
-  const key = job ? job.id + JSON.stringify((job.feedback || []).map((r) => [r.number, r.status])) : '';
+  // Answers come in while a round is open, and resolving changes a round too, so both are part of the key.
+  const key = job ? job.id + JSON.stringify((job.feedback || []).map((r) => [r.number, r.status, r.answers || {}, r.resolved || []])) : '';
   if (key === state.roundsKey) return;
   state.roundsKey = key;
   if (!job?.feedback?.length) return void (state.rounds = []);
@@ -214,40 +247,211 @@ export async function loadRounds() {
   }
 }
 
-// One round in the conversation: the comments as the person wrote them, and where each one pointed.
+// One round in the conversation: the comments as the person wrote them, where each one pointed, and the colour of
+// the code's verdict on its pin. A row opens the file at the comment's spot.
 export function roundHtml(event, cls = '') {
+  const round = state.rounds.find((r) => r.number === event.round);
   const lines = (event.comments || [])
-    .map(
-      (c) => `<li><span class="pin still">${c.n}</span><span><button class="file" data-open="${esc(c.path)}">${esc(baseName(c.path))}</button>
-        <span class="where">${esc(c.where)}</span>${c.remember ? '<span class="pill">Remember</span>' : ''}<br>${esc(c.text)}</span></li>`,
-    )
+    .map((c) => {
+      const kept = round?.comments.find((x) => x.n === c.n) || c;
+      // An event from before comments carried their spot says where in its own words.
+      const where = hasSpot(kept) ? label(kept) : c.where;
+      return `<li><button class="spot" data-goto="${event.round}.${c.n}"><span class="pin ${verdictOf(round, c.n) || 'still'}">${c.n}</span>
+        <span><span class="where">${esc(baseName(c.path))} · ${esc(where)}</span>${c.remember ? '<span class="pill">Remember</span>' : ''}${esc(c.text)}</span></button></li>`;
+    })
     .join('');
+  // Remembered comments go to the playbook, the client's notes, or both, each as one version.
+  const kept = (scope, version) => {
+    if (!version) return '';
+    const { name, latest } = keptIn(scope);
+    // Undo is offered while that version is still the latest: after that, undoing it would undo later work too.
+    const undone = state.forgotten.has(forgetKey(scope, version));
+    return `<div class="saved ${cls}"><span>${undone ? `Removed from ${name}` : `Added to ${name} · version ${version}`}</span>
+        ${!undone && latest === version ? undoButton(scope, version) : ''}</div>`;
+  };
+  return `<div class="me round ${cls}"><ol class="notes">${lines}</ol></div>${kept('playbook', event.remembered_version)}${kept('client', event.remembered_client_version)}`;
+}
+
+// Where a run keeps what it remembers: the name to show, already escaped, and the latest version there now.
+function keptIn(scope) {
+  if (scope === 'client') {
+    const client = runClient();
+    const who = esc(client?.name || state.job.client?.name || 'the client');
+    return { name: `${who}’s notes`, who, latest: client?.version };
+  }
   const book = playbooks().find((p) => p.id === (state.job.playbook?.id || state.job.module));
-  const version = event.remembered_version;
-  // Undo is offered while that version is still the latest: after that, undoing it would undo later work too.
   const name = esc(book?.name || 'the playbook');
-  const undone = state.forgotten.has(`${state.job.id}:${version}`);
-  const kept = version
-    ? `<div class="saved ${cls}"><span>${undone ? `Removed from ${name}` : `Added to ${name} · version ${version}`}</span>
-        ${!undone && book?.version === version ? `<button class="btn text small" data-forget="${version}">Undo</button>` : ''}</div>`
+  return { name, who: name, latest: book?.version };
+}
+const forgetKey = (scope, version) => `${state.job.id}:${scope === 'client' ? 'client:' : ''}${version}`;
+const undoButton = (scope, version) =>
+  `<button class="btn text small" data-forget="${version}" ${scope === 'client' ? 'data-scope="client"' : ''}>Undo</button>`;
+
+// --- Answers, replies and resolving -------------------------------------------
+// Each sent comment is named by its round and number, "1.2". The agent answers it with a save; the code's verdict
+// (did the spot change?) comes in the round's report when the run finishes, and wins over what the answer says.
+
+const SPOT = ['path', 'sheet', 'cell', 'page', 'x', 'y', 'w', 'h', 'line'];
+const hasSpot = (c) => !!(c.cell || c.line || c.page || c.x != null);
+const OPEN_ROUND = ['saving', 'sent', 'delivered'];
+
+// 'done' when the spot changed, 'left' when it did not, 'wait' while the agent works on it.
+export function verdictOf(round, n) {
+  if (!round) return '';
+  if (round.report) return round.report.spots?.some((v) => v.round === round.number && v.n === n && v.changed) ? 'done' : 'left';
+  return OPEN_ROUND.includes(round.status) ? 'wait' : '';
+}
+
+// Every sent comment, by its name.
+function sentComments() {
+  const all = new Map();
+  for (const round of state.rounds) {
+    for (const c of round.comments) {
+      all.set(`${round.number}.${c.n}`, {
+        key: `${round.number}.${c.n}`, round, c, answer: round.answers?.[String(c.n)] || '',
+        verdict: verdictOf(round, c.n), resolved: (round.resolved || []).includes(c.n),
+        open: OPEN_ROUND.includes(round.status),
+      }); // prettier-ignore
+    }
+  }
+  return all;
+}
+
+export const sentComment = (key) => sentComments().get(key) || null;
+
+// The comments on one file as threads: a comment, then each reply to it in order. A thread shows the verdict of its
+// last comment, and resolving it resolves that one; a reply opens its comment again on the server.
+export function threadsOn(path) {
+  const all = sentComments();
+  const rootOf = (item) => {
+    for (let seen = 0, at = item; seen < 50; seen++) {
+      const up = at.c.reply_to && all.get(at.c.reply_to);
+      if (!up) return at.key;
+      at = up;
+    }
+    return item.key;
+  };
+  const threads = new Map();
+  for (const item of all.values()) {
+    const root = rootOf(item);
+    if (!threads.has(root)) threads.set(root, []);
+    threads.get(root).push(item);
+  }
+  return [...threads.values()]
+    .filter((items) => items[0].c.path === path)
+    .map((items) => ({ root: items[0], items, last: items[items.length - 1] }));
+}
+
+// A sent comment's number as its pin shows it: "2" while there is one round, "1.2" once there are more.
+export const sentLabel = (item) => (state.rounds.length > 1 ? item.key : String(item.c.n));
+
+// The open threads pinned on one place of a file, for the viewer: { sheet } for a sheet, { page } for a page.
+export function sentPinsOn(path, where = {}) {
+  return threadsOn(path).filter(
+    (t) => !t.last.resolved && Object.entries(where).every(([k, v]) => (t.root.c[k] ?? null) === (v ?? null)),
+  );
+}
+
+export const sentPin = (t, style = '') =>
+  `<span class="pin still ${t.last.verdict}" ${style ? `style="${style}"` : ''} aria-label="Sent comment ${sentLabel(t.root)}">${sentLabel(t.root)}</span>`;
+
+const VERDICT = { done: 'Changed', left: 'Not changed' };
+
+function answerHtml(item) {
+  if (item.answer) return `<div class="answer"><span class="who">Agent</span><p>${linked(item.answer)}</p></div>`;
+  return item.open ? '<div class="answer pending"><p><span class="live-dot"></span>Working on it</p></div>' : '';
+}
+
+// The comments sent on the file on show, each with the agent's answer, Reply and Resolve; the resolved ones fold away.
+export function sentHtml(path) {
+  const threads = threadsOn(path);
+  if (!threads.length) return '';
+  const open = threads.filter((t) => !t.last.resolved);
+  const done = threads.filter((t) => t.last.resolved);
+  const canReply = canComment();
+  const item = (t) => {
+    const { root, last } = t;
+    const replying = state.reply?.to === last.key;
+    const waiting = last.open && !last.answer;
+    const verdict = VERDICT[last.verdict] || '';
+    const replies = t.items
+      .slice(1)
+      .map((r) => `<div class="answer you"><span class="who">You</span><p>${esc(r.c.text)}</p></div>${answerHtml(r)}`)
+      .join('');
+    const box = replying
+      ? `<form class="reply" id="reply-form"><textarea id="reply-text" placeholder="Reply" aria-label="Reply to the agent" maxlength="2000"></textarea>
+          <div class="row"><button type="button" class="btn text" data-reply-cancel>Cancel</button><button class="btn primary small" ${attr('disabled', state.busy)}>Send</button></div></form>`
+      : waiting || !canReply ? '' : `<div class="c-act"><button class="btn text small" data-reply="${last.key}">Reply</button></div>`;
+    return `<div class="c ${t.items.some((x) => x.key === state.activeComment) ? 'on' : ''}">
+      <div class="c-top"><span class="pin still ${last.verdict}">${sentLabel(root)}</span>
+        <button class="where" data-goto="${root.key}">${esc(label(root.c))}</button>
+        <span class="verdict ${last.verdict === 'done' ? 'ok' : ''}">${verdict}</span>
+        ${waiting || replying ? '' : `<button class="btn text small" data-resolve="${last.key}">Resolve</button>`}</div>
+      <p>${esc(root.c.text)}</p>${answerHtml(root)}${replies}${box}</div>`;
+  };
+  const doneRow = (t) => `<div class="resolved"><span class="pin still ${t.last.verdict}">${sentLabel(t.root)}</span>
+      <span>${esc(label(t.root.c))} · ${esc(t.root.c.text)}</span><button class="btn text small" data-reopen="${t.last.key}">Reopen</button></div>`;
+  const toggle = done.length
+    ? `<button type="button" class="switch-label" role="switch" aria-checked="${state.showResolved}" data-show-resolved><span class="switch ${state.showResolved ? 'on' : ''}"></span>Resolved (${done.length})</button>`
     : '';
-  return `<div class="me ${cls}"><ol class="notes">${lines}</ol></div>${kept}`;
+  return `<section class="comments" aria-label="Comments"><div class="comments-head"><h2>Comments</h2>${toggle}</div>
+    ${open.map(item).join('') || '<p class="empty">No open comments.</p>'}
+    ${state.showResolved ? done.map(doneRow).join('') : ''}</section>`;
+}
+
+// Put the typed reply back after a redraw, so typing never redraws the box.
+export function syncReply() {
+  const box = $('#reply-text');
+  if (!box || !state.reply) return;
+  if (box.value !== state.reply.text) box.value = state.reply.text;
+  const send = $('#reply-form .btn.primary');
+  if (send) send.disabled = state.busy || !state.reply.text.trim();
+}
+
+// A reply is a comment of its own, sent as a new round on the same spot; the server takes the spot from the
+// comment it replies to. Like a round, it keeps one id until the server has it, so a retry is the same reply.
+export async function sendReply() {
+  const reply = state.reply;
+  const item = reply && sentComment(reply.to);
+  const text = reply?.text.trim();
+  if (!item || !text) return;
+  reply.round_id ||= crypto.randomUUID();
+  const spot = Object.fromEntries(SPOT.filter((k) => item.c[k] != null).map((k) => [k, item.c[k]]));
+  try {
+    await api(jobUrl('/comments'), {
+      method: 'POST',
+      body: JSON.stringify({ round_id: reply.round_id, comments: [{ ...spot, text, reply_to: reply.to }] }),
+    });
+  } catch (error) {
+    if (error.status >= 400 && error.status < 500) reply.round_id = null;
+    throw error;
+  }
+  if (state.reply === reply) state.reply = null;
+}
+
+// Resolve a comment or open it again. For the screen only: the agent is never told.
+export async function resolveComment(key, resolved) {
+  state.rounds = await api(jobUrl('/comments/resolve'), { method: 'POST', body: JSON.stringify({ comment: key, resolved }) });
+  if (resolved && state.reply?.to === key) state.reply = null;
 }
 
 // A lesson the agent took from a comment and added to the playbook by itself, with the way to take it back.
 export function learnedHtml(item, last, cls = '') {
-  const book = playbooks().find((p) => p.id === (state.job.playbook?.id || state.job.module));
-  const name = esc(book?.name || 'the playbook');
-  const undone = state.forgotten.has(`${state.job.id}:${item.version}`);
-  const undo = last && !undone && book?.version === item.version ? `<button class="btn text small" data-forget="${item.version}">Undo</button>` : '';
-  return `<div class="saved learned ${cls}"><span>${undone ? `Removed from ${name}` : `Learned for ${name}`}: ${esc(item.lesson)}</span>${undo}</div>`;
+  const scope = item.scope === 'client' ? 'client' : 'playbook';
+  const { name, who, latest } = keptIn(scope);
+  const undone = state.forgotten.has(forgetKey(scope, item.version));
+  const undo = last && !undone && latest === item.version ? undoButton(scope, item.version) : '';
+  return `<div class="saved learned ${cls}"><span>${undone ? `Removed from ${name}` : `Learned for ${who}`}: ${esc(item.lesson)}</span>${undo}</div>`;
 }
 
-// Take a remembered comment back out of the playbook. Based on the version that added it: if the playbook has
-// moved on since, the server refuses, because going back now would undo that later work too.
-export async function forget(version) {
-  const id = state.job.playbook?.id || state.job.module;
+// Take a remembered comment or a lesson back out of the playbook or the client's notes. Based on the version that
+// added it: if that place has moved on since, the server refuses, because going back now would undo later work too.
+export async function forget(version, scope = 'playbook') {
   const body = JSON.stringify({ version: version - 1, based_on: version });
-  await api(`/api/playbooks/${encodeURIComponent(id)}/restore`, { method: 'POST', body });
-  state.forgotten.add(`${state.job.id}:${version}`);
+  const where =
+    scope === 'client'
+      ? `/api/clients/${encodeURIComponent(state.job.client.id)}`
+      : `/api/playbooks/${encodeURIComponent(state.job.playbook?.id || state.job.module)}`;
+  await api(`${where}/restore`, { method: 'POST', body });
+  state.forgotten.add(forgetKey(scope, version));
 }

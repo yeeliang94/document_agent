@@ -49,4 +49,4 @@ def test_job_list_omits_bulky_fields(tmp_path):
         job = create_job(client)
         listed = client.get('/api/jobs').json()
         assert [j['id'] for j in listed] == [job['id']]
-        assert set(listed[0]) == {'id', 'module', 'playbook', 'title', 'period', 'status', 'created_at', 'updated_at'}
+        assert set(listed[0]) == {'id', 'name', 'module', 'playbook', 'client', 'client_id', 'title', 'period', 'status', 'created_at', 'updated_at'}

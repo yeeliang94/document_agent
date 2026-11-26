@@ -35,9 +35,19 @@ class Control:
 
     can_remember = False  # True when the caller can keep a lesson; the agent then gets the remember tool
 
-    def remember(self, comment: str, lesson: str) -> str:
+    def remember(self, comment: str, lesson: str, scope: str = 'playbook') -> str:
         """Note a lasting rule the agent took from one of the user's comments; returns words for the agent."""
         return 'Nothing can be remembered in this run.'
+
+    def follow_client(self, name: str) -> dict:
+        """Attach the client the user confirmed to a run started without one. Returns {"reply": words for the
+        agent, "client": {"name", "notes"} of the client attached, or None}."""
+        return {'reply': 'No client can be followed in this run.', 'client': None}
+
+    def answer(self, answers: list[dict]) -> dict:
+        """Keep the agent's answers to the user's comments ([{"comment": "2.1", "answer": ...}]). Returns
+        {"kept": [...], "not_kept": [...]}."""
+        return {'kept': [], 'not_kept': [f'{a.get("comment")}: there are no comments in this run' for a in answers]}
 
     def after_save(self) -> dict:
         """Extra facts for the agent about the files it just saved, added to what save_outputs returns."""
@@ -83,8 +93,8 @@ def instructions(messages: list, placed=(), interrupted: bool = False, running=(
     if interrupted:
         cut = INTERRUPTED + ''.join(f'It was running a script that: {r}\n' for r in running if r)
     text = (
-        'New message from the user. Answer anything it asks in your summary; where it changes the work, redo only the '
-        'affected work and save again:\n' + '\n'.join(texts(messages))
+        'New message from the user. Answer anything it asks in your report: the short answer in the headline, any '
+        'detail under what you did; where it changes the work, redo only the affected work and save again:\n' + '\n'.join(texts(messages))
     )
     if placed:
         text += '\nThe files the user added are in your sandbox at:\n' + '\n'.join(

@@ -200,7 +200,8 @@ def test_provenance_must_cover_every_written_row_with_used_files(tmp_path):
     result = run_checks(outputs, job, files)
     assert result['passed'] and result['issues'] == []
     assert result['summary'] == {'deliverable_problems': 0, 'files_decided': 2, 'files': 2, 'rows_sourced': 2,
-                                 'rows_written': 2}  # fmt: skip
+                                 'rows_written': 2, 'totals': 0, 'totals_problems': 0,
+                                 'looks_right': False}  # fmt: skip  (its amounts have no number format)
 
 
 def test_missing_outputs_are_reported(packet, tmp_path):
@@ -634,7 +635,8 @@ class StopAfter(SimpleNamespace):
 
 def _drive_job(tmp_path, **limits):
     defaults = dict(usage=[], scout_usage=[], review_usage=[], turns_used=0, max_turns=60, files=[],
-                    max_tokens=10_000, tools_running=[], warned=set(), clock=None, time_limit=0)  # fmt: skip
+                    max_tokens=10_000, tools_running=[], warned=set(), clock=None, time_limit=0,
+                    store=RunStore(tmp_path / 'progress'), calls=0, stage='reading', waits=0)  # fmt: skip
     return SimpleNamespace(**{**defaults, **limits})
 
 
@@ -792,7 +794,7 @@ def test_the_agent_is_told_what_the_stopped_script_was_doing():
 
     sent = instructions(['Use November rates.'], interrupted=True, running=['Fill the October sheet'])
     assert sent.startswith(INTERRUPTED) and 'It was running a script that: Fill the October sheet' in sent
-    assert 'in your summary' in sent
+    assert 'the short answer in the headline' in sent
     assert not instructions(['Use November rates.']).startswith(INTERRUPTED)
 
 
@@ -887,7 +889,7 @@ def test_a_failed_review_never_sinks_a_run_that_passed_its_checks(tmp_path, monk
     import app.engine.agent as engine
 
     async def finished(*_args, **_kw):
-        return FakeStream(final=engine.JobSummary(status='complete', summary='done'))
+        return FakeStream(final=engine.JobSummary(status='complete', headline='done'))
 
     async def broken_review(*_args, **_kw):
         raise engine.MaxTurnsExceeded('Max turns (20) exceeded')
@@ -1769,7 +1771,8 @@ def test_the_clock_stops_while_a_question_waits_for_the_user(tmp_path):
         await asyncio.sleep(0.3)  # the user takes longer to answer than the whole run may take
         return 'Use 17 November.'
 
-    job = SimpleNamespace(store=RunStore(tmp_path), answerer=Answerer(ask=slow), waits=0, clock=None, held=())
+    job = SimpleNamespace(store=RunStore(tmp_path), answerer=Answerer(ask=slow), waits=0, clock=None, held=(),
+                          time_limit=0, turns_used=0, calls=0, max_turns=60, stage='reading')  # fmt: skip
 
     async def go():
         async with asyncio.timeout(0.15) as clock:
@@ -1790,7 +1793,7 @@ def _limit_in_follow_up(box):
     async def drive(*_args, **_kw):
         calls.append(1)
         if len(calls) == 1:
-            return FakeStream(final=engine.JobSummary(status='complete', summary='Done.'))
+            return FakeStream(final=engine.JobSummary(status='complete', headline='Done.'))
         box.files[f'{engine.OUTPUT_DIR}/o.xlsx'] = b'half made change'  # never saved
         raise engine.LimitReached('Reached the 10-turn limit.', 'turns')
 
@@ -1806,7 +1809,7 @@ def test_a_limit_reached_after_the_work_passed_keeps_the_run_finished(tmp_path, 
     store = _run_with_fakes(tmp_path, monkeypatch, box, _limit_in_follow_up(box), context='Dates as DD/MM/YYYY.')
     record = store.record
     assert record['status'] == 'complete' and record['error'] is None and record['cut_short'] is None
-    assert record['summary']['summary'] == 'Done.'
+    assert record['summary']['headline'] == 'Done.'
     assert (store.outputs / 'o.xlsx').read_bytes() == b'checked workbook'
     assert [e['what'] for e in _events(store) if e['event'] == 'limit.after_pass'] == ['turns']
 
