@@ -286,15 +286,19 @@ From the study of Claude's document panel (26 Nov). A comment gets an answer, wh
 
 ### Phase 12: Speak instead of type (its own branch, after Phase 11)
 
-Asked for 2026-11-27. A microphone button on every box people write in, like Codex and Claude Code have: press, speak, press again, and the words land in the box to edit before sending. The words come from OpenAI's transcription endpoint through the same gateway as the agent.
+Asked for 2026-11-27. A microphone button on every box people write in, like Codex and Claude Code have. Press it and speak; the words appear in the box as you talk; press again to stop, then edit before sending. Uses OpenAI's newest transcription models (July 2026), not Whisper or gpt-4o-transcribe, which OpenAI shuts down on 26 Feb 2027:
+- **gpt-live-transcribe** for live text while speaking: a Realtime transcription session over a WebSocket (`/v1/realtime?intent=transcription`), fed 24 kHz mono PCM16 audio, sending the words back as deltas.
+- **gpt-transcribe** as the fallback: the recording is sent when the person stops, and the text streams back (`/v1/audio/transcriptions` with `stream=true`).
 
-- [ ] 🟥 **Step 40: Try transcription through the gateway** — one short synthetic recording sent to `/audio/transcriptions` with the gateway's model alias, before building on it.
-  - **Verify:** I report whether the gateway passes it, which alias works, the time and the cost of one minute of speech. If it does not pass, we stop here and choose again.
+The browser never holds the key. It sends its audio to this app, which opens the session to the gateway and passes the words back.
 
-- [ ] 🟥 **Step 41: A transcription route** — `POST /api/transcribe` takes a short recording and returns the text. The model alias and a length limit are Settings values; the key stays in `.env`. The recording is not kept.
-  - **Verify:** tests with a fake model: text comes back, a recording past the limit is refused with a plain sentence, and nothing is written to disk.
+- [ ] 🟥 **Step 40: Try both through the gateway** — a short synthetic recording through the gateway: a live session with gpt-live-transcribe, and a streamed file transcription with gpt-transcribe. Confirm the aliases the gateway uses for both.
+  - **Verify:** I report which of the two the gateway passes, how soon the first words come back, and the cost of one minute of speech. If the gateway does not pass the live WebSocket, Phase 12 is built on the fallback alone and the words appear when the person stops, not while they speak; you decide before Step 41.
 
-- [ ] 🟥 **Step 42: The microphone button** (prototype first) — one shared button on every text box: the message box, comment and reply boxes, New run's goal, playbook and client notes, and Settings' text fields where it helps. Recording state, then "Transcribing", then the words added where the cursor was. A plain message when the browser blocks the microphone.
+- [ ] 🟥 **Step 41: A transcription relay** — a WebSocket route on this app: the browser streams audio in, the app relays it to the gateway's live session and streams the words back. A plain `POST /api/transcribe` for the fallback. Both model aliases, the mode (live or after stopping) and a length limit are Settings values; the key stays in `.env`. No recording is kept, and the same access rules as the rest of the app apply.
+  - **Verify:** tests with a fake gateway: words arrive in order while audio is still being sent, the fallback returns the text, a recording past the limit is stopped with a plain sentence, a lost gateway connection says so, and nothing is written to disk.
+
+- [ ] 🟥 **Step 42: The microphone button** (prototype first) — one shared button on every text box: the message box, comment and reply boxes, New run's goal, playbook and client notes. The words appear where the cursor was as they are spoken, then settle when the person stops. A plain message when the browser blocks the microphone, and when the app is opened over a network without HTTPS (browsers allow the microphone only on a secure address or on this computer).
   - **Verify:** I check each box in a browser, plus a blocked microphone and a gateway that refuses.
 
 ## Risks
@@ -315,6 +319,8 @@ Asked for 2026-11-27. A microphone button on every box people write in, like Cod
 - New data (clients, versions) is added beside existing data. Existing runs and playbooks are not altered, so reverting leaves them as they were. Check that older runs still open after each phase.
 
 ## Not in this plan
+
+- **User accounts** (sign-in, who did what, roles): on hold, asked 2026-11-27. Today one optional shared access code guards the app.
 
 Found in the audit but not agreed. Say if you want any added:
 
