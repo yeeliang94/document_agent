@@ -2,7 +2,7 @@
 // files.js and pages.js.
 
 import {
-  $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, isActive, jobStatus, jobTitle, telling,
+  $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, inGroup, isActive, jobStatus, jobTitle, telling,
   jobUrl, state, toast,
 } from './core.js'; // prettier-ignore
 import {
@@ -24,6 +24,7 @@ import {
   askTune, openPlaybook, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab,
   startDraft, submitDialog, syncPlaybook, uploadSkill,
 } from './playbooks.js'; // prettier-ignore
+import { askPermission, clearMark, noticeRuns, tabTitle } from './alerts.js';
 import { pageAddress, parseAddress } from './routes.js';
 import { confirmStartOver, deleteRun, renameRun, runItems, submitRun } from './runs.js';
 import { composerHtml, headHtml, nearLimits, stagesHtml, threadHtml } from './thread.js';
@@ -127,7 +128,7 @@ function render() {
   paint('#side', sideHtml());
   paint('#topnav', topnavHtml());
   document.body.classList.toggle('loading', !!state.loading);
-  document.title = `${state.job && state.view === 'run' ? jobTitle(state.job) + ' · ' : ''}Document Intelligence`;
+  document.title = tabTitle(`${state.job && state.view === 'run' ? jobTitle(state.job) + ' · ' : ''}Document Intelligence`);
 
   if (state.view === 'run' && state.job) {
     paint('#main', RUN);
@@ -341,6 +342,7 @@ const localActions = {
   'toggle-files': () => (state.showFiles = !state.showFiles),
   'toggle-rail': () => (state.rail = !state.rail),
   'toggle-checks': () => (state.checksOpen = !state.checksOpen),
+  'allow-notify': () => askPermission(render),
   'close-file': closeFile,
   'skill-pick': () => $('#skill-picker').click(),
   attach: () => $('#attach-picker').click(),
@@ -688,6 +690,7 @@ document.addEventListener('click', async (e) => {
       const v = state.settingsDraft;
       v[name] = on === undefined ? !v[name] : v[name] === on ? off : on;
       render();
+      if (name === 'notify' && v[name]) await askPermission(render); // the browser asks once, on this click
     } else if ((el = target('[data-step]'))) {
       const { step: name, delta } = el.dataset;
       const option = state.settings.options[name];
@@ -1111,6 +1114,8 @@ async function refreshJob() {
   if (statusChanged) state.jobs = await api('/api/jobs');
 }
 
+let listedAt = 0; // when the run list was last fetched for other runs going meanwhile
+
 async function poll() {
   if (state.job && !state.polling && !state.loading) {
     state.polling = true;
@@ -1123,6 +1128,17 @@ async function poll() {
     }
     render();
   }
+  // Other runs going meanwhile are looked at too, so one that asks, finishes or stops can say so (alerts.js).
+  try {
+    const others = state.jobs?.some((j) => j.id !== state.job?.id && (inGroup('active', j.status) || j.status === 'waiting'));
+    if (others && Date.now() - listedAt > 8000) {
+      listedAt = Date.now(); // at most every 8 seconds, however often the open run is looked at
+      state.jobs = await api('/api/jobs');
+    }
+    await noticeRuns(state.jobs, loadJob, render);
+  } catch {
+    // the next round looks again
+  }
   try {
     await refreshPlaybookTab(render); // a check of past corrections fills in while its tab is open
   } catch {
@@ -1133,6 +1149,9 @@ async function poll() {
 }
 
 initVoice(render);
+// Back on the tab: the mark a run left on it clears.
+document.addEventListener('visibilitychange', () => clearMark(render));
+addEventListener('focus', () => clearMark(render));
 // The microphone button takes the focus on a click, so the cursor's place in the box is noted first.
 document.addEventListener('pointerdown', (e) => {
   const mic = e.target.closest?.('[data-mic]');

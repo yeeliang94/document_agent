@@ -3,6 +3,7 @@
 import {
   attr, btn, bytes, currentPlaybook, esc, fmtTime, icon, isWarning, playbooks, state,
 } from './core.js'; // prettier-ignore
+import { notifyNote } from './alerts.js';
 import { micButton, voiceNote } from './voice.js';
 import { clientRow } from './clients.js';
 
@@ -16,8 +17,8 @@ const playbookSelect = () =>
 // One two-way choice, one on/off switch and one number stepper, used everywhere they appear.
 const segment = (name, value, label, on) =>
   `<button type="button" class="${on ? 'on' : ''}" data-segment="${name}" data-value="${esc(value)}" aria-pressed="${on}">${esc(label)}</button>`;
-const toggle = (name, label, on) =>
-  `<button type="button" id="setting-${name}" class="switch ${on ? 'on' : ''}" data-toggle="${name}" role="switch" aria-checked="${on}" aria-label="${esc(label)}"></button>`;
+const toggle = (name, label, on, described = '') =>
+  `<button type="button" id="setting-${name}" class="switch ${on ? 'on' : ''}" data-toggle="${name}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" ${described ? `aria-describedby="${described}"` : ''}></button>`;
 const stepper = (name, label, value, low, high) => `
   <span class="stepper" role="group" aria-label="${esc(label)}">
     <button type="button" data-step="${name}" data-delta="-1" aria-label="Fewer" ${attr('disabled', value <= low)}>−</button>
@@ -122,9 +123,9 @@ export function settingsPage() {
   const options = state.settings.options;
   const errors = state.settingsErrors || {};
   // A row whose value was refused shows why, beside the field.
-  const field = (name, label, control) => {
+  const field = (name, label, control, note = '') => {
     const error = errors[name];
-    return `<div class="row ${error ? 'err' : ''}"><span>${esc(label)}</span>${control}${error ? `<p class="problem" id="setting-${name}-error">${esc(error)}</p>` : ''}</div>`;
+    return `<div class="row ${error ? 'err' : ''}"><span>${esc(label)}</span>${control}${error ? `<p class="problem" id="setting-${name}-error">${esc(error)}</p>` : ''}${note}</div>`;
   };
   const invalid = (name) => (errors[name] ? `aria-invalid="true" aria-describedby="setting-${name}-error"` : '');
   const number = (name, label) => {
@@ -136,9 +137,10 @@ export function settingsPage() {
     field(name, label, `<div class="seg" role="group" aria-label="${esc(label)}">${options[name].choices.map((c) => segment(name, c, labels[c] ?? c, v[name] === c)).join('')}</div>`);
   const steps = (name, label) => field(name, label, stepper(name, label, v[name], options[name].low, options[name].high));
   // A two-way choice reads as on or off: its first choice is on.
-  const onOff = (name, label) => {
+  const onOff = (name, label, note = '') => {
     const choices = options[name].choices;
-    return field(name, label, toggle(name, label, choices.length ? v[name] === choices[0] : v[name]));
+    const on = choices.length ? v[name] === choices[0] : v[name];
+    return field(name, label, toggle(name, label, on, note ? `setting-${name}-note` : ''), note);
   };
   const text = (name, label, placeholder = '') =>
     field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" value="${esc(v[name])}" placeholder="${esc(placeholder)}" autocomplete="off" spellcheck="false" aria-label="${esc(label)}" ${invalid(name)}></label>`);
@@ -175,6 +177,10 @@ export function settingsPage() {
         'Limits per day',
         number('daily_token_limit_thousands', 'AI usage (0 for no limit)') +
           field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
+      ) +
+      panel(
+        'Notifications',
+        onOff('notify', 'Tell me when a run asks, finishes or stops', notifyNote(v.notify)),
       ) +
       panel(
         'Voice',

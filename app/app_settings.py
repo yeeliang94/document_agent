@@ -73,6 +73,8 @@ OPTIONS = {
     'voice_live_model': Option('gpt-live-transcribe', 'Live voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),
     'voice_file_model': Option('gpt-transcribe', 'Recording voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),
     'voice_max_minutes': Option(2, 'Longest recording (minutes)', low=1, high=10),
+    # A notification and a mark on the browser tab when a run asks, finishes or stops while you look elsewhere.
+    'notify': Option(True, 'Tell me when a run asks, finishes or stops'),
 }
 
 

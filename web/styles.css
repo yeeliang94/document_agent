@@ -2967,6 +2967,17 @@ button.chip:hover {
   flex-wrap: wrap;
   row-gap: 4px;
 }
+.row:has(> .row-note) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.row > .row-note {
+  flex-basis: 100%;
+  font-size: 13px;
+}
+.row-note.muted {
+  color: var(--muted);
+}
 .row.err > p {
   flex-basis: 100%;
   text-align: right;

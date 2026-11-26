@@ -333,8 +333,9 @@ Open questions for you before this starts:
 
 These come from `reports/Small wins - agent tools and user experience.md`. These are the first, cheapest batch. Each one is a general fix, not a rule for one kind of document.
 
-- [ ] 🟥 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
+- [ ] 🟨 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
   - **Verify:** in a browser, with the tab in the background, a question, a finish and a stop each raise one notification. With the switch off, none is raised. A blocked permission shows a plain sentence on the Settings page.
+  - **Result (2026-11-26):** built (`web/alerts.js`; Settings: Notifications). Only while the person is away from the tab; a run they paused or stopped raises nothing, a run paused by the day's limit does. Checked in a browser: a finish raised one notification with its words, the tab word and dot, and a click opened the run; switch off and a paused run raised none; the blocked sentence and the Allow button show. Not yet seen: a real question and a real stop end to end, and the mark clearing on return to the tab.
 
 - [ ] 🟨 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
   - When a tool fails, say which tool failed and with what input, not only the error (agent.py `_tool_error`).
@@ -352,7 +353,7 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
     - A tool fails: "The tool failed with {error}…" → "{tool} failed on the input {input, cut at 300 characters}: {error}. Fix the cause if it is yours (the input, or a file it names); otherwise try once more or carry on without it."
     - A file is missing: "…Save it under /mnt/data/ first." → "…Outputs belong under /mnt/data/outputs/: save the file there first, or check its name."
     - The checks crash: "The checks could not run…" → "The checks themselves crashed (…). This is a fault in the checks, not in your work. Call save_outputs once more; if they crash again, carry on without them and say in notes.md that the checks could not run." A crash no longer takes the run's one fix pass.
-    - Duplicate rows: "Payroll row 9 duplicates row 5." → "…Remove one; if both are real records, keep both and say why in notes.md." (Open: the check still fails a kept duplicate; the owner decides the wording.)
+    - Duplicate rows (owner's choice, 2026-11-26): no longer fail the run. They are listed as duplicate_rows: "Payroll row 9 duplicates row 5. Remove one, or if both are real records, keep both and say why in notes.md."
     - Formulas the app can't work out: a count only → the count, the first 10 cells, and "… and N more".
     - Lists cut short (document map, used-but-not-cited, the resume card's issues) now say how many were left out; the counts are kept as numbers, not read back from text.
     - The resume card adds why the last run stopped: a limit, the AI service, a question waiting, the person pausing or stopping it, or a fault.

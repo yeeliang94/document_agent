@@ -843,7 +843,10 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         uncited_more = counts.get('used_not_cited_more', 0)
     issues = deliverable_issues + totals_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
-    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps, 'duplicate_rows': duplicates,
+    doubles = duplicates[:MAX_ISSUES] + (
+        [f'... and {len(duplicates) - MAX_ISSUES} more.'] if len(duplicates) > MAX_ISSUES else []
+    )
+    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps, 'duplicate_rows': doubles,
               'totals': totals_lines, 'looks': looks, 'summary': summary, 'issue_count': len(issues)}  # fmt: skip
     if used_not_cited:
         result['used_not_cited'] = used_not_cited
