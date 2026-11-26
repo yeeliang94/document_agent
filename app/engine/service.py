@@ -712,7 +712,7 @@ class SandboxEngine:
                 max_questions=options['max_questions'],
                 timeout_seconds=options['time_limit_minutes'] * 60,
                 thinking=options['thinking_summaries'],
-                plan=None if job.get('start_over') else (job.get('plan') or {}).get('steps'),
+                plan=None if job.get('start_over') or job.get('resume_from') else (job.get('plan') or {}).get('steps'),
                 echo=lambda _: None,
             )
         ).record

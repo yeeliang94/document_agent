@@ -272,14 +272,17 @@ export async function versionClick(rec, target, draw, restore) {
     const before = rec.data.version;
     if (!(await restore(from, true))) return draw(), true;
     leaveVersion(rec, draw);
-    const undo = `<button class="btn text small" data-version-undo="${before}" data-record="${esc(rec.id)}">Undo</button>`;
+    // Undo belongs to the version this Restore made: it does nothing once something newer is saved or typed.
+    const undo = `<button class="btn text small" data-version-undo="${before}" data-made="${rec.data.version}" data-record="${esc(rec.id)}">Undo</button>`;
     toast(`Restored version ${from} as version ${rec.data.version}.`, undo);
     return true;
   } else if ((el = target('[data-version-undo]'))) {
     hideToast();
     if (el.dataset.record !== rec.id) return true; // the page it was for is no longer on show
     const back = Number(el.dataset.versionUndo);
-    if (await restore(back, true)) toast(`Undone. Version ${back}’s text is back.`);
+    if (rec.data.version !== Number(el.dataset.made)) toast('Not undone: a newer version was saved since.');
+    else if (unsaved(rec)) toast('Not undone: save your edits first, or clear them.');
+    else if (await restore(back, true)) toast(`Undone. Version ${back}’s text is back.`);
   } else return false;
   draw();
   return true;

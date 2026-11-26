@@ -228,9 +228,9 @@ def test_an_action_opens_with_its_code_and_what_it_printed(tmp_path, monkeypatch
         assert client.get(url, params={'run': 2, 'name': '001-main.py'}).status_code == 404
 
 
-def test_the_settings_page_explains_the_thinking_setting():
+def test_the_settings_page_has_the_thinking_setting_with_no_helper_sentence():
     page = (WEB / 'pages.js').read_text(encoding='utf-8')
-    assert "choice('thinking_summaries'" in page and "Some AI services don't send them" in page
+    assert "choice('thinking_summaries', \"Show the agent's thinking\", { off: 'Off', short: 'Short', detailed: 'Detailed' })" in page
 
 
 @pytest.mark.skipif(shutil.which('node') is None, reason='needs Node.js to run the screen code')

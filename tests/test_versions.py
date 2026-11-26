@@ -92,12 +92,15 @@ def test_a_stopped_run_continues_from_an_earlier_version_with_those_outputs(tmp_
         assert [(v['number'], v['step']) for v in listed] == [(2, 9), (1, 5)]
         wait_for_runner_idle(client)
         run.behaviour = carry_on
+        # A plan from the later work, which going back to version 1 sets aside: the agent writes a new one.
+        client.app.state.store.update(job['id'], plan={'steps': [{'step': 'Fill the template', 'status': 'done'}], 'why': '', 'run': 1})
         assert client.post(f'/api/jobs/{job["id"]}/versions/99/continue').status_code == 404
         assert client.post(f'/api/jobs/{job["id"]}/versions/1/continue').status_code == 200
         done = wait_for_job(client, job['id'], statuses=('completed',))
         assert seen['outputs'] == 'step 5'  # the run started from the first version, not the last save
         assert 'continue from version 1, saved at step 5 of run-01 (Step 5: saved out.xlsx)' in run.calls[-1].resume
         assert 'resume_from' not in done  # said once, by that run's card
+        assert run.calls[-1].options['plan'] is None and 'Your plan from the earlier run' not in run.calls[-1].resume
 
 
 def test_continuing_from_a_version_waits_until_the_run_has_stopped(tmp_path, monkeypatch):

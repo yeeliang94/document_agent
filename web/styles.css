@@ -2120,28 +2120,6 @@ div.frow button.name {
 .name .desc.problem {
   color: var(--bad-fg);
 }
-/* New run: the Playbook and Client boxes are one width. */
-.row select.pick {
-  width: 220px;
-  max-width: 55vw;
-  flex: none;
-  text-overflow: ellipsis;
-}
-/* Why Start run is greyed out, under the buttons; gone once it can be pressed. */
-.start-row {
-  flex-wrap: wrap;
-  align-items: center;
-}
-.start-row .hint {
-  order: 9;
-  flex-basis: 100%;
-  text-align: right;
-  color: var(--muted);
-  font-size: 13px;
-}
-.start-row .hint:empty {
-  display: none;
-}
 .row .val {
   flex-wrap: nowrap;
   flex: none;

@@ -830,7 +830,8 @@ def create_app(settings_override: Settings | None = None):
             if isinstance(error, KeyError):
                 raise HTTPException(404, 'That version is no longer kept.') from None
             raise HTTPException(409, plain_errors.sentence(error)) from None
-        store.update(job_id, resume_from=version, start_over=None, error=None,
+        # The plan described the work after that version too, which was set aside: the agent writes a new one.
+        store.update(job_id, resume_from=version, start_over=None, error=None, plan=None,
                      artifacts=runner.engine.artifacts(job_id, False))  # fmt: skip
         store.event(job_id, 'user.continue_from', f'Continuing from version {number}: {version["description"]}',
                     type='user', version=number)  # fmt: skip
