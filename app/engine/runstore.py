@@ -69,7 +69,7 @@ class RunStore:
         name = f'{self._code_count:03d}-{who}.py'
         printed = '\n'.join(str(o.get('logs', '')) if isinstance(o, dict) else str(o) for o in outputs or [])
         body = code + (
-            '\n\n# ---- output ----\n' + '\n'.join('# ' + line for line in printed.splitlines()) if printed else ''
+            OUTPUT_MARK + '\n'.join('# ' + line for line in printed.splitlines()) if printed else ''
         )
         (self.dir / 'code' / name).write_text(body, encoding='utf-8')
         return name

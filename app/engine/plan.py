@@ -66,7 +66,12 @@ def changes(old: list[dict], new: list[dict]) -> dict:
                     added.append(now)
                 if was:
                     removed.append(was)
-    return {'added': added, 'changed': changed, 'removed': removed}
+    moved = set(added) & set(removed)  # a step that only moved is neither new nor dropped
+    return {
+        'added': [s for s in added if s not in moved],
+        'changed': changed,
+        'removed': [s for s in removed if s not in moved],
+    }
 
 
 def counted(steps: list[dict]) -> str:
@@ -137,6 +142,7 @@ def thought_parts(item) -> list[dict]:
 
 
 def summary_refused(error: Exception) -> bool:
-    """True when the AI service refused the request because of the thinking-summary setting, so the run can carry on
-    without it. A gateway names the parameter it does not take; any other refusal is not this."""
-    return getattr(error, 'status_code', None) == 400 and 'summary' in str(error).lower()
+    """True when the AI service refused the request as malformed (400 or 422), which a request for a summary of the
+    model's thinking may be: gateways word that refusal in many ways. The run asks once more without the summary; a
+    refusal that is about something else comes back then and ends the run as before."""
+    return getattr(error, 'status_code', None) in (400, 422)

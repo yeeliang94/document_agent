@@ -156,6 +156,7 @@ function render() {
     applyZoom(drawn);
     revealMarks($('#files'));
     tick();
+    loadOpenScript();
   } else if (starting) {
     paint('#main', '<div class="page"><p class="empty">Loading</p></div>');
   } else {
@@ -203,22 +204,35 @@ function showSettingError() {
   });
 }
 
-// An action opened in full, or closed again. A script's code and what it printed are fetched once, on opening.
-async function openAct(el) {
+// An action opened in full, or closed again.
+function openAct(el) {
   const seq = Number(el.dataset.act);
-  const job = state.job.id;
   state.act = state.act === seq ? null : seq;
   state.actCode = false;
   render();
-  const { scriptRun: run, scriptName: name, scriptIndex: index, scriptOf: of } = el.dataset;
-  if (state.act !== seq || !run) return;
+}
+
+// The open action's code and what it printed, fetched after each drawing until they are in. A script still being
+// saved by a run that is going (its name comes a moment after it finishes), or a failed request, is asked for again a
+// few seconds later; only a finished run's 404 settles it as not kept.
+const RETRY_MS = 3000;
+async function loadOpenScript() {
+  const el = $('.step.act.on');
+  const { scriptRun: run, scriptName: name, scriptIndex: index, scriptOf: of } = el?.dataset || {};
+  if (!run) return;
+  const job = state.job.id;
   const key = scriptKey(job, { run, name, index, of });
-  if (state.scripts[key]) return;
+  const had = state.scripts[key];
+  if (had && (had.code !== undefined || had.final || had.pending || Date.now() - had.at < RETRY_MS)) return;
+  state.scripts[key] = { ...had, pending: true };
   const query = new URLSearchParams(name ? { run, name } : { run, index, of });
   try {
     state.scripts[key] = await api(jobUrl(`/script?${query}`));
   } catch (e) {
-    state.scripts[key] = { error: e.status === 404 ? 'The code of this step was not kept.' : `It could not be loaded: ${e.message}` };
+    const gone = e.status === 404 && !isActive();
+    const error = gone ? 'The code of this step was not kept.' : e.status === 404 ? 'Not ready yet.' : `It could not be loaded: ${e.message}`;
+    state.scripts[key] = { error, final: gone, at: Date.now() };
+    if (!gone) setTimeout(() => state.job?.id === job && render(), RETRY_MS);
   }
   if (state.job?.id === job) render();
 }
@@ -705,7 +719,7 @@ document.addEventListener('click', async (e) => {
       const id = Number(el.dataset.group);
       state.toggled.has(id) ? state.toggled.delete(id) : state.toggled.add(id);
       render();
-    } else if ((el = target('[data-act]'))) await openAct(el);
+    } else if ((el = target('[data-act]'))) openAct(el);
     else if ((el = target('[data-act-code]'))) {
       state.actCode = true;
       render();

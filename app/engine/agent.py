@@ -202,7 +202,7 @@ Besides the deliverables, save under {out}/:
 
 How to work:
 - Start from the goal: work out what the deliverables need, then which files can supply it.
-- Once you have had a first look at the files, write your plan with update_plan: three to eight steps in plain words, each a piece of work the person would recognise ("Match each employee to the bank file"), not a single script. As you go, tick each step done and mark the one you are on, in the same reply as your next piece of work, so it costs no extra step. When the plan changes, send the new plan and say why in a sentence. The person sees the plan at the top of the run, and it is kept with the run: after the conversation is condensed, or when a run continues later, you are given it back.
+- Once you have had a first look at the files, write your plan with update_plan: three to eight steps in plain words, each a piece of work the person would recognise ("Match each employee to the bank file"), not a single script. As you go, tick each step done and mark the one you are on. Each update takes a step, so update it when a step of the plan finishes or the plan changes, ticking several at once when you can, not after every script. When the plan changes, send the new plan and say why in a sentence. The person sees the plan at the top of the run, and it is kept with the run: after the conversation is condensed, or when a run continues later, you are given it back.
 - Keep notes.md from the start, not only at the end: write each finding there in a line when you reach it, before your first save (which file wins where two compete, where each output column comes from, what you excluded and why, each open doubt). Keep it short: a person should read it in a minute, and the time goes into the work, not the notes. In a long run the older part of this conversation is condensed and keeps only the gist, and a run that stops early continues in a fresh sandbox; your notes keep every word for both. When you are told the conversation was condensed, re-read notes.md before you carry on.
 - Read the real files before you decide anything. Extract the packet zip (every part, if it comes in parts) into /mnt/data/packet and explore with code: walk the tree, open workbooks with openpyxl (hidden sheets too) and pandas, read documents (python-docx, pypdf), open nested zips, and print compact summaries. Never print whole large sheets. A scan or a photo has no text to pull out: recognise its text with code (OCR) to find the pages that matter, then look at those pages yourself (show the page, or the part you need enlarged, as an image) and take names, dates and figures from what you see. OCR misreads digits and drops faint or handwritten marks, so it finds the page; your eyes read it. Cover a lot of ground per call; one script can profile many files. Open each script with a one-line comment that says in plain words what it is for; the user sees that line as your progress.
 - Read each template the same way before you fill it: where its instructions, tables, totals and lookup lists sit, and what is example or leftover content. Templates vary and can be messy; decide from what you see.
@@ -579,8 +579,8 @@ class PlanStep(BaseModel):
 @function_tool(failure_error_function=_tool_error)
 async def update_plan(ctx: RunContextWrapper[Job], steps: list[PlanStep], why: str = '') -> str:
     """Write your plan as a short checklist, or update it: tick steps done, mark the step you are on, or change the
-    steps. Send the whole plan each time. The person sees it at the top of the run. Call it alongside your next piece
-    of work rather than on its own.
+    steps. Send the whole plan each time. The person sees it at the top of the run. Each call takes a step, so call it
+    when a step finishes or the plan changes, not after every script.
 
     Args:
         steps: The whole plan in order, three to eight steps, each under 120 characters: "done", "in_progress"

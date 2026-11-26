@@ -69,6 +69,12 @@ def test_a_changed_plan_says_what_is_new_reworded_or_dropped_and_asks_why(tmp_pa
     assert 'why' not in plans.keep(job, steps(('Read the close rules', 'done')), why='The rest is not needed.')
 
 
+def test_a_step_that_only_moved_is_neither_new_nor_dropped():
+    before = steps(('Read the rules', 'done'), ('Match the bank file', 'pending'), ('Fill the template', 'pending'))
+    after = steps(('Read the rules', 'done'), ('Fill the template', 'pending'), ('Match the bank file', 'pending'))
+    assert plans.changes(before, after) == {'added': [], 'changed': [], 'removed': []}
+
+
 @pytest.mark.parametrize(
     'sent, problem',
     [
@@ -187,15 +193,16 @@ def test_a_summary_of_the_thinking_is_shown_by_its_heading(tmp_path, monkeypatch
         assert shown[0]['message'] == 'Deciding which Singapore file is final' and shown[0]['detail'] == 'short'
 
 
-def test_only_a_refusal_naming_the_summary_counts_as_one():
+def test_a_request_the_service_calls_malformed_may_be_the_summary_setting():
     class Refused(Exception):
         def __init__(self, status, text):
             super().__init__(text)
             self.status_code = status
 
+    # Gateways word the refusal in many ways, so any malformed-request refusal gets one try without the summary.
     assert plans.summary_refused(Refused(400, "Unsupported parameter: 'reasoning.summary'"))
-    assert not plans.summary_refused(Refused(400, 'Invalid image'))
-    assert not plans.summary_refused(Refused(500, 'summary'))
+    assert plans.summary_refused(Refused(422, 'UnsupportedParamsError: reasoning'))
+    assert not plans.summary_refused(Refused(500, 'summary')) and not plans.summary_refused(Refused(401, 'summary'))
 
 
 def test_an_action_opens_with_its_code_and_what_it_printed(tmp_path, monkeypatch):
@@ -230,11 +237,13 @@ def test_the_settings_page_explains_the_thinking_setting():
 def test_a_stage_folds_to_the_plan_steps_ticked_in_it_or_to_counts():
     script = """
 import { stagesOf, stageSummary } from './stages.js';
-const step = (seq, stage, files = []) => ({ kind: 'step', seq, at: seq * 1000, stage, step: { seq, verb: 'x', files } });
+const step = (seq, stage, files = [], secs) => ({ kind: 'step', seq, at: seq * 1000, stage, step: { seq, verb: 'x', files, secs } });
 const entries = [
   step(1, 'reading', ['a.xlsx']), { kind: 'tick', seq: 2, at: 2000, stage: 'reading', steps: ['Read the close rules'] },
-  step(3, 'reading', ['b.csv']), { kind: 'tick', seq: 4, at: 4000, stage: 'reading', steps: ['Pick the final file.'] },
-  step(5, 'filling', ['a.xlsx']), step(6, 'filling', ['a.xlsx']),
+  step(3, 'reading', ['b.csv']),
+  step(5, 'filling', ['a.xlsx'], 1), step(6, 'filling', ['a.xlsx']),
+  // Ticked once filling in had begun, for a step worked on while reading: it counts towards reading.
+  { kind: 'tick', seq: 6, at: 6500, stage: 'reading', steps: ['Pick the final file.'] },
   step(7, 'checking'),
 ];
 const sections = stagesOf(entries);
@@ -251,7 +260,8 @@ console.log(JSON.stringify({
         ['node', '--input-type=module', '-e', script], cwd=WEB, capture_output=True, text=True, check=True
     )
     got = json.loads(out.stdout)
-    assert got['stages'] == [['reading', 1, 1000, 4000], ['filling', 5, 5000, 6000], ['checking', 7, 7000, 7000]]
+    # A stage's time starts when its first action started (the 1-second action at 5 began at 4).
+    assert got['stages'] == [['reading', 1, 1000, 3000], ['filling', 5, 4000, 6000], ['checking', 7, 7000, 7000]]
     assert got['reading'] == 'Read the close rules. Pick the final file.'  # the ticked steps, no AI asked
     assert got['filling'] == '2 actions on 1 file'  # no step ticked in it: how much work it held
     assert got['live'] == 'Fill the template.'  # going on now: the step the agent is on
