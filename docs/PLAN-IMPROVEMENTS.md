@@ -375,8 +375,9 @@ Two steps from the older plan were never built. They move here so one plan holds
 
 - [ ] 🟥 **Step 51: Cost per run** — a money figure for each run, from its token use and a price per million tokens (input and output, Settings values), shown on the run and summed per playbook. Time and token use are already shown in the Technical log.
   - **Verify:** tests for the sum on a run, a replay and a playbook total; a price of 0 shows no money figure; the run and playbook screens checked in a browser.
-- [ ] 🟥 **Step 52: Several runs at once** — a Settings number, default 2; runs past the limit wait in line and say so; replays share the same limit.
+- [x] 🟩 **Step 52: Several runs at once** — a Settings number, default 2; runs past the limit wait in line and say so; replays share the same limit.
   - **Verify:** tests for two runs side by side, a third that waits and then starts, pause and resume of one, and a restart with both running.
+  - **Result (2026-11-26):** built; "Runs at once" (1 to 6) under Limits per day, read as each run ends. A run past the limit stays queued with `waiting_for_slot` and a "Waiting for a free slot" event. tests/test_runs_at_once.py covers the Verify line, a change of the limit without a restart, and a job queued twice. The screen still says "Waiting to start" for a queued run.
 
 ### Phase 16: Full-screen file panel (prototype approved 2026-11-26)
 

@@ -1,4 +1,5 @@
-"""The job queue. One worker runs jobs one at a time on the sandbox engine (app/engine).
+"""The job queue. Up to "Runs at once" jobs (Settings page) run side by side on the sandbox engine (app/engine); the
+rest wait in line, in order, and their record says so (`waiting_for_slot`). A job never runs twice at the same time.
 
 It also looks after a playbook's kept tests when its instructions change: the list is reviewed (app/curator.py)
 and, depending on the Settings page, replayed (app/replay.py). Replays are ordinary jobs in the same queue."""
@@ -15,6 +16,7 @@ class JobTimeout(Exception):
     """The run went past the time limit on the Settings page."""
 
 
+SLOT_NOTE = 'Waiting for a free slot: {limit} runs at once is the limit on the Settings page'
 LEGACY_NOTE = 'This run was made by an earlier version of the app. It can be read but not continued.'
 
 
@@ -24,7 +26,9 @@ class Runner:
         self.settings = settings
         self.queue = asyncio.Queue()
         self.worker = None
-        self.active = None
+        self.running = {}  # job id -> the task running it; at most the Settings-page number at once
+        self.again = set()  # jobs taken from the line while already running: put back in line when that run ends
+        self.freed = asyncio.Event()  # set each time a run ends, so the line moves on
         self.engine = SandboxEngine(store, settings)
         self.loop = None
         self.tasks = set()  # work started by a playbook change; kept so it is not dropped half way
@@ -39,10 +43,12 @@ class Runner:
             if job.get('replay'):  # hidden jobs of a check: settled below, never continued
                 continue
             feedback.recover(self.store, job)
+            if job.get('waiting_for_slot'):  # the line itself does not survive a restart
+                self.store.update(job['id'], waiting_for_slot=None)
             if not job.get('legacy') and (self.store.path(job['id']) / 'working' / 'history.json').exists():
                 self.retire(job)
-            elif job['status'] in jobstatus.ACTIVE:  # No worker survives a restart.
-                self.store.update(job['id'], status='paused', error=None)
+            elif job['status'] in jobstatus.ACTIVE:  # No run survives a restart.
+                self.store.update(job['id'], status='paused', error=None, waiting_for_slot=None)
                 self.store.event(
                     job['id'], 'job.recovered', 'Interrupted job retained. Resume when ready.', type='job', level='WARN'
                 )
@@ -70,6 +76,18 @@ class Runner:
                 await self.worker
             except asyncio.CancelledError:
                 pass
+        runs = list(self.running.values())  # each one marks its job paused as it stops
+        for task in runs:
+            task.cancel()
+        await asyncio.gather(*runs, return_exceptions=True)
+
+    def is_running(self, job_id) -> bool:
+        """Is a run of this job going, or still letting go of it? Other jobs running beside it do not count."""
+        return job_id in self.running
+
+    def limit(self) -> int:
+        """Read each time, so a change on the Settings page applies from the next free slot, without a restart."""
+        return self.store.settings()['runs_at_once']
 
     def playbook_changed(self, playbook_id: str, version: int, source: str) -> None:
         """A version was saved. Called from whichever thread saved it; the follow-up runs on the app's loop."""
@@ -152,41 +170,64 @@ class Runner:
     async def enqueue(self, job_id):
         """Queue a job whose status the caller has already set to queued, in the same write as what it queued for."""
         self.store.event(job_id, 'job.queued', 'Queued', type='job')
+        await self.put(job_id)
+
+    async def put(self, job_id):
+        """Put a job in line. When every slot is taken, its record says it is waiting for one."""
+        limit = self.limit()
+        if job_id not in self.running and len(self.running) + self.queue.qsize() >= limit:
+            self.store.update(job_id, waiting_for_slot=True)
+            self.store.event(job_id, 'job.waiting_for_slot', SLOT_NOTE.format(limit=limit), type='job', limit=limit)
         await self.queue.put(job_id)
 
     async def work(self):
+        """Take jobs from the line, in order, while a slot is free."""
         while True:
+            while len(self.running) >= self.limit():
+                self.freed.clear()
+                await self.freed.wait()
             job_id = await self.queue.get()
+            self.queue.task_done()
             try:
                 self.store.get(job_id)
             except (KeyError, ValueError):  # deleted while it waited in the queue: nothing to run or clean up
-                self.queue.task_done()
                 continue
-            self.active = job_id
+            if job_id in self.running:  # a second place in line for a job that is going: it waits for that run
+                self.again.add(job_id)
+                continue
+            self.running[job_id] = asyncio.create_task(self.run_one(job_id))
+
+    async def run_one(self, job_id):
+        try:
+            job = self.store.get(job_id)
+            if job.get('waiting_for_slot'):
+                self.store.update(job_id, waiting_for_slot=None)
+            # A job paused or cancelled while it waited in the queue is skipped.
+            if job['status'] == 'queued':
+                await self.run_with_limit(job_id)
+        except asyncio.CancelledError:
+            if self.store.get(job_id)['status'] in jobstatus.ACTIVE:
+                self.store.update(job_id, status='paused')
+                self.store.event(job_id, 'job.paused', 'Application stopped; checkpoint retained.', type='job')
+            raise
+        except JobTimeout as error:
+            self.fail(job_id, str(error), 'TimeoutError')
+        except Exception as error:
+            # Do not include HTTP headers or credential-bearing exceptions in events.
+            self.fail(job_id, clean(str(error) or type(error).__name__), type(error).__name__)
+        finally:
+            self.running.pop(job_id, None)
+            self.freed.set()
+            if job_id in self.again:  # skipped at once if nothing queued it again meanwhile
+                self.again.discard(job_id)
+                await self.queue.put(job_id)
+            await self.resume_if_answered(job_id)
             try:
-                # A job paused or cancelled while it waited in the queue is skipped.
-                if self.store.get(job_id)['status'] == 'queued':
-                    await self.run_with_limit(job_id)
-            except asyncio.CancelledError:
-                if self.store.get(job_id)['status'] in jobstatus.ACTIVE:
-                    self.store.update(job_id, status='paused')
-                    self.store.event(job_id, 'job.paused', 'Application stopped; checkpoint retained.', type='job')
-                raise
-            except JobTimeout as error:
-                self.fail(job_id, str(error), 'TimeoutError')
-            except Exception as error:
-                # Do not include HTTP headers or credential-bearing exceptions in events.
-                self.fail(job_id, clean(str(error) or type(error).__name__), type(error).__name__)
-            finally:
-                self.active = None
-                self.queue.task_done()
-                await self.resume_if_answered(job_id)
-                try:
-                    await self.replay_ended(job_id)
-                except Exception as error:  # noqa: BLE001 - scoring a replay never stops the queue
-                    self.store.event(
-                        job_id, 'replay.not_scored', clean(f'{type(error).__name__}: {error}'), level='WARN', type='job'
-                    )
+                await self.replay_ended(job_id)
+            except Exception as error:  # noqa: BLE001 - scoring a replay never stops the queue
+                self.store.event(
+                    job_id, 'replay.not_scored', clean(f'{type(error).__name__}: {error}'), level='WARN', type='job'
+                )
 
     async def resume_if_answered(self, job_id):
         """Queue a job whose question was answered after its run stopped holding the sandbox, or whose comments or
@@ -208,7 +249,7 @@ class Runner:
         self.store.mutate(job_id, claim)
         if queued:
             self.store.event(job_id, 'job.queued', f'Queued with your {queued[0]}', type='job')
-            await self.queue.put(job_id)
+            await self.put(job_id)
 
     async def run_with_limit(self, job_id):
         # The engine stops itself at the Settings-page limit and saves; this outer limit is only a backstop.

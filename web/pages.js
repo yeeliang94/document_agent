@@ -176,6 +176,7 @@ export function settingsPage() {
       panel(
         'Limits per day',
         number('daily_token_limit_thousands', 'AI usage (0 for no limit)') +
+          steps('runs_at_once', 'Runs at once') +
           field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
       ) +
       panel(
