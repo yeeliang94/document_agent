@@ -104,10 +104,10 @@
 const svg = (d) => `<svg viewBox="0 0 16 16"><path d="${d}"/></svg>`;
 const CHEV = 'M6 4l4 4-4 4', X = 'M4 4l8 8M12 4l-8 8', DOWN = 'M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10';
 const LEARNED = [
-  'The FINAL payroll register wins over a DRAFT or "superseded" copy of the same month.',
-  'Singapore amounts are converted at the month-end rate in fx_rates_2026.xlsx.',
-  'UK leavers after the 15th are paid in full this month and dropped next month.',
-  'Stipends go in Allowances; there is no separate one-time payment column.',
+  'FINAL register wins over drafts.',
+  'Singapore uses the month-end FX rate.',
+  'UK leavers after the 15th drop next month.',
+  'Stipends go in Allowances.',
 ];
 const NOTES = LEARNED.map((l) => `- ${l}`).join('\n');
 let state = {};
@@ -116,13 +116,13 @@ const RESET = { view: 'run', offer: 'folded', notes: '', saved: '' };
 function offerHtml() {
   if (state.offer === 'gone') return '';
   if (state.offer === 'saved') {
-    return `<div class="offer"><div class="saved"><span class="what">Saved to Northwind Trading's notes.</span>
+    return `<div class="offer"><div class="saved"><span class="what">Saved to Northwind's notes.</span>
       <button class="link" data-act="undo">Undo</button><button class="link" data-go="client">View notes</button>
       <button class="icon-btn" data-act="hide" aria-label="Close">${svg(X)}</button></div></div>`;
   }
   const open = state.offer === 'open';
   return `<div class="offer"><div class="offer-line">
-      <button class="open" data-act="toggle" aria-expanded="${open}">${svg(CHEV)}<span>First run for Northwind Trading: <span class="count">${LEARNED.length} things worth keeping for next time</span></span></button>
+      <button class="open" data-act="toggle" aria-expanded="${open}">${svg(CHEV)}<span>Keep ${LEARNED.length} things for Northwind's next run?</span></button>
       <button class="icon-btn" data-act="notnow" aria-label="Not now" title="Not now">${svg(X)}</button></div>
     ${open ? `<div class="offer-body"><ul>${LEARNED.map((l) => `<li>${l}</li>`).join('')}</ul>
       <div class="end"><button class="btn primary" data-act="save">Save to notes</button><button class="btn quiet" data-act="notnow">Not now</button></div></div>` : ''}</div>`;
