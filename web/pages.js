@@ -83,9 +83,13 @@ const UNITS = {
   versions_kept: ['versions'],
   daily_token_limit_thousands: ['million tokens', 1000],
   voice_max_minutes: ['minutes'],
+  // Prices are kept in ten-thousandths of a dollar, so a price can have four decimal places.
+  price_input_per_million: ['$ per million tokens', 10000],
+  price_cached_per_million: ['$ per million tokens', 10000],
+  price_output_per_million: ['$ per million tokens', 10000],
 };
 const scaleOf = (name) => UNITS[name]?.[1] || 1;
-const shownNumber = (n) => n.toLocaleString('en', { maximumFractionDigits: 3 });
+const shownNumber = (n) => n.toLocaleString('en', { maximumFractionDigits: 4 });
 
 // A typed number, in the units the server keeps; NaN when it is not a number.
 function storedValue(name, value) {
@@ -128,10 +132,10 @@ export function settingsPage() {
     return `<div class="row ${error ? 'err' : ''}"><span>${esc(label)}</span>${control}${error ? `<p class="problem" id="setting-${name}-error">${esc(error)}</p>` : ''}${note}</div>`;
   };
   const invalid = (name) => (errors[name] ? `aria-invalid="true" aria-describedby="setting-${name}-error"` : '');
-  const number = (name, label) => {
+  const number = (name, label, note = '') => {
     const [unit] = UNITS[name];
     const value = typeof v[name] === 'string' ? v[name] : shownNumber(v[name] / scaleOf(name)).replace(/,/g, '');
-    return field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" inputmode="decimal" autocomplete="off" value="${esc(value)}" aria-label="${esc(label)}" ${invalid(name)}><span>${esc(unit)}</span></label>`);
+    return field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" inputmode="decimal" autocomplete="off" value="${esc(value)}" aria-label="${esc(label)}" ${invalid(name)}><span>${esc(unit)}</span></label>`, note);
   };
   const choice = (name, label, labels) =>
     field(name, label, `<div class="seg" role="group" aria-label="${esc(label)}">${options[name].choices.map((c) => segment(name, c, labels[c] ?? c, v[name] === c)).join('')}</div>`);
@@ -177,6 +181,12 @@ export function settingsPage() {
         'Limits per day',
         number('daily_token_limit_thousands', 'AI usage (0 for no limit)') +
           field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
+      ) +
+      panel(
+        'Cost',
+        number('price_input_per_million', 'Input tokens') +
+          number('price_cached_per_million', 'Cached input tokens (0 for the input price)') +
+          number('price_output_per_million', 'Output tokens', '<p class="row-note">With both input and output at 0, runs show no cost.</p>'),
       ) +
       panel(
         'Notifications',
