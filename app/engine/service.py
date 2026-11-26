@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import io
 import json
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -369,7 +370,7 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
         return '\n\n'.join(parts + _still_holds(job, new, fresh=True))
     parts = [
         'You are resuming this job in a fresh sandbox; the earlier sandbox is gone. Continue from where the work '
-        f'stands rather than starting over. The previous run ended as "{last.get("status")}".'
+        f'stands rather than starting over. The previous run ended as "{last.get("status")}"{why_stopped(last)}.'
     ]
     start = job.get('resume_from')
     if start:
@@ -380,11 +381,41 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
         )
     check = last.get('final_check') or {}
     if check.get('issues'):
-        parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in check['issues'][:20]))
+        parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in some_issues(check['issues'])))
     notes = root / 'outputs' / 'notes.md'
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
     return '\n\n'.join(parts + _still_holds(job, new))
+
+
+CARD_ISSUES = 20  # check issues on the resume card
+MORE = re.compile(r'\.\.\. and (\d+) more\.')
+
+
+def why_stopped(last: dict) -> str:
+    """Why an earlier run ended, for the resume card: a limit, the AI service, the user, or a fault."""
+    cut, status, error = last.get('cut_short'), last.get('status'), last.get('error')
+    if cut in ('turns', 'tokens', 'time'):
+        return f', because it reached a limit ({error or cut})'
+    if cut == 'service':
+        return ', because the AI service stopped answering'
+    if status == 'paused':
+        return ', because the user paused it'
+    if status == 'cancelled':
+        return ', because the user stopped it'
+    if status == 'failed' and error:
+        return f', because of a fault ({error[:200]})'
+    return ''
+
+
+def some_issues(issues: list[str], limit: int = CARD_ISSUES) -> list[str]:
+    """The first issues, and how many were left out. The checks may already end the list with their own
+    '... and N more.' line; that count is added in."""
+    if len(issues) <= limit:
+        return issues
+    more = MORE.fullmatch(issues[-1])
+    left = len(issues) - limit - (1 if more else 0) + (int(more.group(1)) if more else 0)
+    return [*issues[:limit], f'... and {left} more.']
 
 
 def _still_holds(job: dict, new, fresh: bool = False) -> list[str]:

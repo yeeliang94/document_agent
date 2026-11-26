@@ -118,7 +118,10 @@ class JobSummary(BaseModel):
 
 class Doubt(BaseModel):
     issue: str = Field(description='What looks wrong in the deliverable, in one or two sentences')
-    evidence: str = Field(description='Where you saw it: file, sheet, row or value')
+    evidence: str = Field(
+        description='Where it is: the output file and cell or rows (Sheet!B4, rows 5-9), and the source file and value '
+        'it should match'
+    )
     severity: Literal['high', 'medium', 'low']
 
 
@@ -174,6 +177,7 @@ class Job:
     max_questions: int = MAX_QUESTIONS  # over the whole job, earlier runs' questions included (Settings page)
     calls: int = 0  # model calls in the current stream; with turns_used, the step the run is on
     stage: str = 'reading'  # reading, filling, checking: how far the work has got, for the screen
+    condensed_unsaid: bool = False  # the lead's history was condensed and it has not been told yet
 
 
 COORDINATOR = """You are a document-processing agent with a Python sandbox (the code interpreter). You own one job from start to finish: decide what matters, do the work, check it, and hand back a result a finance team can trust. The goal card at the end says what this job needs.
@@ -190,7 +194,7 @@ Besides the deliverables, save under {out}/:
 
 How to work:
 - Start from the goal: work out what the deliverables need, then which files can supply it.
-- Keep notes.md as you go, not only at the end: write each finding, decision and open point there when you reach it. In a long run the older part of this conversation is condensed and keeps only the gist, and a run that stops early continues in a fresh sandbox; your notes keep every word for both.
+- Keep notes.md from the start, not only at the end: write each finding there when you reach it, before your first save (which file wins where two compete, where each output column comes from, what you excluded and why, each open doubt). In a long run the older part of this conversation is condensed and keeps only the gist, and a run that stops early continues in a fresh sandbox; your notes keep every word for both. When you are told the conversation was condensed, re-read notes.md before you carry on.
 - Read the real files before you decide anything. Extract the packet zip (every part, if it comes in parts) into /mnt/data/packet and explore with code: walk the tree, open workbooks with openpyxl (hidden sheets too) and pandas, read documents (python-docx, pypdf), open nested zips, and print compact summaries. Never print whole large sheets. A scan or a photo has no text to pull out: recognise its text with code (OCR) to find the pages that matter, then look at those pages yourself (show the page, or the part you need enlarged, as an image) and take names, dates and figures from what you see. OCR misreads digits and drops faint or handwritten marks, so it finds the page; your eyes read it. Cover a lot of ground per call; one script can profile many files. Open each script with a one-line comment that says in plain words what it is for; the user sees that line as your progress.
 - Read each template the same way before you fill it: where its instructions, tables, totals and lookup lists sit, and what is example or leftover content. Templates vary and can be messy; decide from what you see.
 - Read a table the way the person who built it would. A row belongs to a table through the cells under that table's own headings; a note, source remark or label beside the table, outside those columns, does not make the row taken. Keep such notes where they are and fill the row if the table needs it. Leave a row inside a table empty only when the template's author clearly meant it (a spacer, a section break), and say why in notes.md.
@@ -232,7 +236,7 @@ Compare each filled template with its blank one as the person receiving it would
 
 The user's answers to the other agent's questions are decisions, not claims to check: {answers}
 
-Report only real problems you can point to. Say "ok" if you find none. Do not change any file."""
+Report only real problems you can point to, and for each one name the file and the cell or row it is about (Sheet!B4, or rows 5-9), and the source file it should match. Say "ok" if you find none. Do not change any file."""
 
 SCOUT = """You profile files for a coordinating agent. Your sandbox holds {zip_path}, a zip of the folder "{folder}" from a larger packet. Paths inside the zip are already relative to the packet's top folder, so report them exactly as they appear in the zip.
 
@@ -260,10 +264,19 @@ def _record_calls(store: RunStore, who: str, result) -> None:
             _note_condensed(store, who, response)
 
 
-def _note_condensed(store: RunStore, who: str, response) -> None:
-    """Say when OpenAI condensed the older history in this reply (a compaction item in its output)."""
+def _note_condensed(store: RunStore, who: str, response) -> bool:
+    """Say when OpenAI condensed the older history in this reply (a compaction item in its output); True if it did."""
     if any(getattr(item, 'type', '') == 'compaction' for item in getattr(response, 'output', None) or ()):
         store.event('history.condensed', who=who, input_tokens=response.usage.input_tokens)
+        return True
+    return False
+
+
+# Told to the lead agent once after its history is condensed, so it goes back to what it wrote down.
+CONDENSED_NOTE = (
+    'The older part of this conversation was just condensed and now keeps only the gist. Re-read notes.md for the '
+    'details you wrote down, then carry on.'
+)
 
 
 def _call_usage(usage) -> dict:
@@ -313,11 +326,19 @@ def _slug(text: str) -> str:
 
 
 def _tool_error(ctx: RunContextWrapper[Job], error: Exception) -> str:
-    """Show the agent the real cause of a tool failure, and log it, instead of the SDK's generic message."""
+    """Show the agent the real cause of a tool failure, and log it, instead of the SDK's generic message. The SDK
+    passes a ToolContext, which names the tool and the input it was called with."""
     message = f'{type(error).__name__}: {error}'
-    ctx.context.store.event('tool.failed', error=message)
+    tool = getattr(ctx, 'tool_name', None)
+    given = getattr(ctx, 'tool_arguments', None)
+    given = given if isinstance(given, str) and given.strip() not in ('', '{}') else None
+    ctx.context.store.event('tool.failed', tool=tool, arguments=given, error=message)
+    said = f'{tool} failed' if tool else 'The tool failed'
+    if given:
+        said += f' on the input {given[:300]}' + (' ...' if len(given) > 300 else '')
     return (
-        f'The tool failed with {message}. Fix the cause if it is yours; otherwise try once more or continue without it.'
+        f'{said}: {message}. Fix the cause if it is yours (the input, or a file it names); otherwise try once more or '
+        'carry on without it.'
     )
 
 
@@ -647,7 +668,11 @@ def _check(job: Job) -> dict:
         return run_checks(job.store.outputs, job.spec, job.files, job.proof)
     except Exception as error:  # noqa: BLE001 - a fault in the checks must reach the agent and the record, not end the run
         job.store.event('check.crashed', error=f'{type(error).__name__}: {error}')
-        problem = f'The checks could not run on the saved files ({type(error).__name__}: {error}).'
+        problem = (
+            f'The checks themselves crashed ({type(error).__name__}: {error}). This is a fault in the checks, not in '
+            'your work. Call save_outputs once more; if they crash again, carry on without them and say in notes.md '
+            'that the checks could not run.'
+        )
         return {'passed': False, 'issues': [problem], 'template_changes': [], 'empty_rows': [], 'summary': {}}
 
 
@@ -970,6 +995,8 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
                     _take_more_turns(job, store, control)
                     if near := _near_limits(job, job.turns_used + result.current_turn, result.context_wrapper.usage):
                         warning = _warn(job, store, near)
+                    if getattr(job, 'condensed_unsaid', False):
+                        warning = f'{warning} {CONDENSED_NOTE}'.strip()
                 if stop or messages or warning:
                     result.cancel(mode='after_turn')  # finish the current turn, so no tool call is left half done
         except MaxTurnsExceeded:
@@ -1031,7 +1058,11 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
 
 
 async def _carry_on(job: Job, store: RunStore, echo, base, messages: list, warning: str, **cut) -> list:
-    """The conversation `base` with the user's messages and a warning about the run's limits added, either or both."""
+    """The conversation `base` with the user's messages and a warning about the run's limits added, either or both.
+    The warning may also carry the line saying the history was condensed; once sent, it is not sent again."""
+    if CONDENSED_NOTE in warning:
+        job.condensed_unsaid = False
+        store.event('history.condensed_told')
     prompt = await _deliver(job, store, echo, base, messages, **cut) if messages else base
     return _with_message(prompt, warning) if warning else prompt
 
@@ -1044,6 +1075,27 @@ async def _upload_outputs(box: Sandbox, outputs: Path) -> str:
             remote = await box.upload_bytes(path.relative_to(outputs).as_posix().replace('/', '__'), path.read_bytes())
             folder = remote.rsplit('/', 1)[0]
     return folder or '/mnt/data'
+
+
+def fix_pass_follow_up(check: dict) -> str:
+    """What the lead agent is told when it finished as complete but its saved files fail the check: the whole check
+    (issues, template_changes, empty_rows, totals, looks and the rest), as save_outputs would have shown it."""
+    return (
+        'You finished as complete, but the check of your saved files lists these problems. Fix them, call '
+        'save_outputs until it passes, then finish. The whole check:\n' + json.dumps(check, indent=1)
+    )
+
+
+def review_follow_up(serious: list[dict], minor: int) -> str:
+    """What the lead agent is told about the reviewer's high and medium doubts; minor: the low ones left out."""
+    told = (
+        'An independent reviewer checked your saved deliverables and raised these doubts. Check each against the '
+        'sources. Where it is right, fix the outputs and call save_outputs again. Where it is wrong, say why in '
+        'notes.md. Then finish.'
+    )
+    if minor:
+        told += f' {minor} low-severity doubt{"" if minor == 1 else "s"} {"was" if minor == 1 else "were"} left out.'
+    return told + '\n' + json.dumps(serious, indent=1)
 
 
 async def review(job: Job, round_number: int, changes: list[str]) -> dict:
@@ -1302,11 +1354,7 @@ async def run_job(
                             fixes_left -= 1
                             store.event('check.returned', issues=check['issues'][:20])
                             echo('  the final check lists problems; the lead agent is fixing them')
-                            follow_up = (
-                                'You finished as complete, but the check of your saved files lists these problems. '
-                            )
-                            follow_up += 'Fix them, call save_outputs until it passes, then finish.\n'
-                            result = await _drive(lead, _continue(result, follow_up + '\n'.join(check['issues'])),
+                            result = await _drive(lead, _continue(result, fix_pass_follow_up(check)),
                                                   job, store, echo, control)  # fmt: skip
                             continue
                         passed = True
@@ -1341,11 +1389,7 @@ async def run_job(
                         # The checks cannot judge these doubts, so the work no longer counts as passed until the
                         # agent has dealt with them: a limit reached meanwhile leaves the run partly done.
                         passed = False
-                        follow_up = (
-                            'An independent reviewer checked your saved deliverables and raised these doubts. Check '
-                            'each against the sources. Where it is right, fix the outputs and call save_outputs again. '
-                            'Where it is wrong, say why in notes.md. Then finish.\n' + json.dumps(serious, indent=1)
-                        )
+                        follow_up = review_follow_up(serious, len(report['doubts']) - len(serious))
                         result = await _drive(lead, _continue(result, follow_up), job, store, echo, control)
                 status = 'complete' if result.final_output.status == 'complete' else 'partial'
             except RunStopped as stopped:
@@ -1467,7 +1511,8 @@ def _log_stream(event, store: RunStore, echo, files=(), live: dict | None = None
         if kind == 'response.completed' and getattr(data.response, 'usage', None) is not None:
             # One line per model call, so the run record shows which calls reused OpenAI's prompt cache.
             store.event('model.usage', who='main', **_call_usage(data.response.usage))
-            _note_condensed(store, 'main', data.response)
+            if _note_condensed(store, 'main', data.response) and job is not None:
+                job.condensed_unsaid = True
         elif kind == 'response.code_interpreter_call.in_progress':
             store.event('code.started')
             echo('  ...   running code in the sandbox')
