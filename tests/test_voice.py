@@ -77,10 +77,26 @@ def make(tmp_path):
 
 
 def start(client, token=''):
+    # Off by default: not every gateway offers it. Switched on with the app's own token, whatever the socket sends.
+    token_header = {'authorization': f'Bearer {client.app.state.settings.access_token}'}
+    client.put('/api/settings', json={'values': {'voice_live': True}}, headers=token_header)
     ws = client.websocket_connect(LIVE, headers=ORIGIN)
     socket = ws.__enter__()
     socket.send_json({'type': 'start', 'token': token})
     return ws, socket
+
+
+def test_live_words_are_off_until_switched_on_and_voice_then_waits_for_the_stop(make):
+    with make() as client:
+        assert client.get('/api/voice').json()['mode'] == 'after'  # the saved choice is live, but live is off
+        ws = client.websocket_connect(LIVE, headers=ORIGIN)
+        socket = ws.__enter__()
+        socket.send_json({'type': 'start', 'token': ''})
+        refused = socket.receive_json()
+        assert refused == {'type': 'error', 'message': 'Live transcription is turned off in Settings.', 'action': 'settings'}
+        ws.__exit__(None, None, None)
+        client.put('/api/settings', json={'values': {'voice_live': True}})
+        assert client.get('/api/voice').json()['mode'] == 'live'
 
 
 def test_words_arrive_in_order_while_audio_is_still_sent(make, tmp_path):

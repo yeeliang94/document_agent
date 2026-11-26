@@ -71,6 +71,9 @@ OPTIONS = {
     'litellm_provider': Option('', 'LiteLLM provider header', pattern=r'[A-Za-z0-9_.-]{0,64}'),
     'model_on_create': Option(False, 'Name the model when creating a sandbox (LiteLLM)'),
     # Speak instead of type: live words while speaking, or the words after the person stops (see app/voice.py).
+    # Live words need the service's Realtime transcription, which some gateways (enterprise ones) do not offer.
+    # Off: voice always shows the words after the person stops, and the live choices are hidden.
+    'voice_live': Option(False, 'Live transcription'),
     'voice_mode': Option('live', 'Voice words appear', ('live', 'after')),
     'voice_live_model': Option('gpt-live-transcribe', 'Live voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),
     'voice_file_model': Option('gpt-transcribe', 'Recording voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),

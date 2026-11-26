@@ -195,8 +195,11 @@ export function settingsPage() {
       ) +
       panel(
         'Voice',
-        choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) +
-          text('voice_live_model', 'Live model') +
+        // Live words are hidden unless the service offers Realtime transcription; off, words appear after you stop.
+        onOff('voice_live', 'Live transcription') +
+          (v.voice_live
+            ? choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) + text('voice_live_model', 'Live model')
+            : '') +
           text('voice_file_model', 'Recording model') +
           number('voice_max_minutes', 'Longest recording'),
       ) +

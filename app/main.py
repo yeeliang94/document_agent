@@ -1150,6 +1150,8 @@ def create_app(settings_override: Settings | None = None):
         if not conf.api_key:
             return await refuse('Add OPENAI_API_KEY to .env and restart the application.')
         values = store.settings()
+        if not values['voice_live']:
+            return await refuse('Live transcription is turned off in Settings.', 'settings')
         minutes = values['voice_max_minutes']
         opened = False
         try:
@@ -1185,7 +1187,8 @@ def create_app(settings_override: Settings | None = None):
     def voice_config():
         values = store.settings()
         minutes = values['voice_max_minutes']
-        return {'mode': values['voice_mode'], 'max_minutes': minutes, 'limit_message': voice.limit_message(minutes)}
+        mode = values['voice_mode'] if values['voice_live'] else 'after'  # live only where the service offers it
+        return {'mode': mode, 'max_minutes': minutes, 'limit_message': voice.limit_message(minutes)}
 
     @api.post('/api/voice/transcribe')
     async def voice_transcribe(request: Request):
