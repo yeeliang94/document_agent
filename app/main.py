@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import InvalidStatus
 
-from . import app_settings, cases, feedback, jobstatus, links, plain_errors, preview, replay, tuning, voice
+from . import app_settings, cases, costs, feedback, jobstatus, links, plain_errors, preview, replay, tuning, voice
 from .config import ROOT, Settings, settings
 from .engine import versions
 from .engine.agent import UPLOAD_LIMIT
@@ -182,7 +182,8 @@ def create_app(settings_override: Settings | None = None):
 
     @api.get('/api/playbooks/{playbook_id}')
     def playbook_get(playbook_id):
-        return playbook_call(lambda: playbooks.get(playbook_id))
+        # cost: its kept runs and its replayed tests, priced now (app/costs.py); None when no price is set.
+        return playbook_call(lambda: {**playbooks.get(playbook_id), 'cost': costs.playbook_cost(store, playbook_id)})
 
     @api.patch('/api/playbooks/{playbook_id}')
     def playbook_rename(playbook_id, body: PlaybookInput):
@@ -493,7 +494,9 @@ def create_app(settings_override: Settings | None = None):
 
     @api.get('/api/jobs/{job_id}')
     async def job(job_id):
-        return get(job_id)
+        found = get(job_id)
+        # Every engine run of the job, priced now (app/costs.py); None when no price is set.
+        return {**found, 'cost': costs.job_cost(found, store.settings())}
 
     class JobInput(BaseModel):
         name: str = Field(max_length=MAX_NAME * 2)

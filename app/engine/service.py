@@ -443,6 +443,16 @@ def _still_holds(job: dict, new, fresh: bool = False) -> list[str]:
     return parts
 
 
+def run_spent(parts: list[dict], seconds: float) -> dict:
+    """What one engine run took, from its lead, scout and review usage entries: an entry of the job's runs.
+    cached_input_tokens is the part of the input the service had cached, which costs less (app/costs.py)."""
+    return {
+        'seconds': seconds,
+        'requests': sum(p.get('requests', 0) for p in parts),
+        **{k: sum(p.get(k, 0) for p in parts) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')},
+    }
+
+
 def shown_issues(issues: list[str], limit: int = 10) -> list[str]:
     more = len(issues) - limit
     return issues[:limit] + ([f'... and {more} more.'] if more > 0 else [])
@@ -587,19 +597,26 @@ class SandboxEngine:
         except BaseException:
             # Cut off before it could settle (the app stopping, the backstop time limit): what it used still counts
             # towards the day. The engine writes its record as it ends, so read the usage from there.
-            await asyncio.shield(asyncio.to_thread(self.count_unsettled, root / 'engine' / run_id))
+            await asyncio.shield(asyncio.to_thread(self.count_unsettled, job_id, root / 'engine' / run_id))
             raise
         if day_bound and record.get('cut_short') == 'tokens':
             record.update(error=DAY_USED_UP, cut_short='day')
         await asyncio.to_thread(self.settle, job_id, record, control.waiting)
 
-    def count_unsettled(self, run_folder) -> None:
+    def count_unsettled(self, job_id: str, run_folder) -> None:
         try:
-            usage = json.loads((run_folder / 'run.json').read_text(encoding='utf-8')).get('usage') or {}
+            record = json.loads((run_folder / 'run.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             return
+        usage = record.get('usage') or {}
         parts = [*usage.get('lead', []), *usage.get('scouts', []), *usage.get('reviews', [])]
-        self.store.add_spend(sum(p.get('input_tokens', 0) + p.get('output_tokens', 0) for p in parts))
+        spent = run_spent(parts, record.get('seconds') or 0)
+        self.store.add_spend(spent['input_tokens'] + spent['output_tokens'])
+        # It is one of the job's runs too, so the job's whole time, usage and cost count it.
+        try:
+            self.store.mutate(job_id, lambda job: job.update(runs=[*(job.get('runs') or []), spent]))
+        except KeyError:  # the job was removed meanwhile
+            pass
 
     async def _run(
         self, spec, options, root, run_id, on_event, control, resume, pictures, ask, job, max_tokens
@@ -674,6 +691,7 @@ class SandboxEngine:
         tokens = record.get('usage') or {}
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
         reviews = record.get('reviews') or []
+        spent = run_spent(parts, record.get('seconds') or 0)
         updates = {
             # None when the run never reached its checks, so the screen shows no green pills for a failed start.
             'engine_check': {
@@ -694,21 +712,11 @@ class SandboxEngine:
             'summary': summary,
             'report': final_report,  # None for a run that ended without one; older runs have only the summary
             'unresolved': unresolved,
-            'request_count': sum(p.get('requests', 0) for p in parts),
-            'usage': {
-                'input_tokens': sum(p.get('input_tokens', 0) for p in parts),
-                'output_tokens': sum(p.get('output_tokens', 0) for p in parts),
-            },
+            'request_count': spent['requests'],
+            'usage': {k: spent[k] for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')},  # this run's
         }
         final = {}
-        store.add_spend(updates['usage']['input_tokens'] + updates['usage']['output_tokens'])
-
-        spent = {
-            'seconds': record.get('seconds') or 0,
-            'requests': updates['request_count'],
-            'input_tokens': updates['usage']['input_tokens'],
-            'output_tokens': updates['usage']['output_tokens'],
-        }
+        store.add_spend(spent['input_tokens'] + spent['output_tokens'])
 
         def apply(job):
             # What each run of this job took, so the job's whole time and usage can be shown, not only the last run's.
