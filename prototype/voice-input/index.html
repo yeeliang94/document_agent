@@ -1,0 +1,262 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: speak instead of type (plan Phase 12, Step 42). Made-up data. Open this file in a browser; no
+     server needed. The dark bar at the bottom jumps between states; it is not part of the design. Nothing here is
+     wired to the app or to a microphone: the words are played back on a timer.
+     Drawn to sit with the app as it is: the message box, comment box, New run goal and notes boxes are the app's own,
+     with one shared microphone button added. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice input prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f5f6; --sheet: #ffffff; --text: #18181b; --muted: #6e6e76; --faint: #a3a3ab;
+    --line: #e7e7ea; --accent: #2f6fdb; --accent-bg: #e8f0fd; --bad-bg: #fbeaea; --bad-fg: #8a2a22;
+    --grey-bg: #ececee;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.6 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { border: 0; background: none; cursor: pointer; padding: 0; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; font-weight: 500; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
+  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); background: var(--sheet); }
+  .btn.small { padding: 4px 12px; font-size: 13px; }
+
+  /* The shared microphone button. Grey at rest; while listening it turns into a stop button in the accent colour
+     with a soft ring that follows the voice. */
+  .mic { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; position: relative; }
+  .mic:hover { background: var(--grey-bg); color: var(--text); }
+  .mic.on { background: var(--accent); color: #fff; }
+  .mic.on::before { content: ''; position: absolute; inset: -4px; border-radius: 50%; background: var(--accent-bg); z-index: -1; animation: ring 1.2s ease-in-out infinite; }
+  .mic.busy { color: var(--accent); }
+  .mic.busy svg { animation: spin 1s linear infinite; }
+  @keyframes ring { 50% { transform: scale(1.18); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .timer { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+
+  /* Words still being heard are grey; they turn black once the model settles them. */
+  .heard { color: var(--faint); }
+
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100%; }
+  .side { padding: 24px 12px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .brand { font-weight: 500; padding: 0 12px; }
+  .item { display: block; padding: 8px 12px; border-radius: 12px; color: var(--muted); text-align: left; width: 100%; }
+  .item.on { background: var(--panel); color: var(--text); }
+  main { min-width: 0; overflow: auto; padding: 16px 32px 120px; }
+  .view { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px; }
+  .view[hidden] { display: none; }
+  .head { display: flex; align-items: center; gap: 12px; padding: 16px 0 0; min-height: 60px; }
+  .head h1 { flex: 1; }
+
+  .say { max-width: 60ch; }
+  .me { align-self: flex-end; max-width: 80%; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+
+  /* The message box, as the app draws it, with the microphone beside Send. */
+  .composer { background: var(--panel); border-radius: 12px; padding: 12px 8px 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .composer .text { min-height: 24px; outline: none; white-space: pre-wrap; }
+  .composer .text:empty::before { content: attr(data-placeholder); color: var(--faint); }
+  .tools { display: flex; align-items: center; gap: 8px; }
+  .tools .spacer { flex: 1; }
+  .send { width: 32px; height: 32px; border-radius: 50%; background: var(--text); color: #fff; display: grid; place-items: center; }
+  .send:disabled { opacity: .3; cursor: not-allowed; }
+
+  /* A plain sentence under the box when the microphone cannot be used. */
+  .problem { display: flex; gap: 12px; align-items: flex-start; background: var(--bad-bg); color: var(--bad-fg); border-radius: 12px; padding: 12px 16px; }
+  .problem p { flex: 1; }
+  .hint { color: var(--muted); font-size: 13px; padding: 0 16px; }
+
+  /* Other boxes */
+  .box { background: var(--panel); border-radius: 12px; padding: 12px 8px 8px 16px; display: flex; gap: 8px; align-items: flex-start; }
+  .box .text { flex: 1; min-height: 72px; white-space: pre-wrap; outline: none; }
+  .box.tall .text { min-height: 160px; }
+  .box .text:empty::before { content: attr(data-placeholder); color: var(--faint); }
+  .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .comment { width: 320px; background: var(--bg); border-radius: 12px; padding: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.12); display: flex; flex-direction: column; gap: 12px; }
+  .comment .where { font-size: 13px; color: var(--muted); }
+  .comment .box { background: var(--panel); }
+  .comment .box .text { min-height: 56px; }
+  .row-end { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* Settings rows, as the Settings page draws them */
+  .rows { background: var(--panel); border-radius: 12px; padding: 8px 24px; }
+  .rows h2 { padding: 16px 0 8px; }
+  .srow { display: flex; align-items: center; gap: 16px; padding: 12px 0; box-shadow: inset 0 -1px 0 var(--line); }
+  .srow:last-child { box-shadow: none; }
+  .srow > span:first-child { flex: 1; }
+  .seg { background: var(--grey-bg); border-radius: 999px; padding: 2px; display: flex; }
+  .seg button { padding: 2px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); }
+  .seg button.on { background: var(--sheet); color: var(--text); }
+  .unit { display: inline-flex; align-items: center; gap: 8px; background: var(--sheet); border-radius: 12px; padding: 4px 12px; }
+  .unit input { border: 0; outline: none; width: 168px; background: none; }
+  .unit input.short { width: 48px; text-align: right; }
+  .unit span { color: var(--muted); font-size: 13px; }
+
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 999px; padding: 4px; display: flex; gap: 2px; font-size: 12px; z-index: 9; flex-wrap: wrap; justify-content: center; max-width: calc(100% - 32px); }
+  .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; }
+  .switcher button.on { background: #fff; color: #18181b; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">Document Agent</div>
+    <div>
+      <button class="item on">Runs</button>
+      <button class="item">Playbooks</button>
+      <button class="item">Clients</button>
+      <button class="item">Settings</button>
+    </div>
+  </nav>
+  <main>
+    <!-- 1. The message box: rest, live, after stopping, settled, and the problems -->
+    <section class="view" id="v-message">
+      <div class="head"><h1>March payroll</h1></div>
+      <p class="say">The summary sheet is ready. The March total is $412,000 across 38 employees. Two people joined mid-month, and their pay is prorated from their start dates.</p>
+      <div id="composer-wrap" style="display:flex;flex-direction:column;gap:8px">
+        <div class="composer">
+          <div class="text" id="msg" contenteditable="true" data-placeholder="Reply, or ask for a change"></div>
+          <div class="tools">
+            <button class="mic" aria-label="Attach files" title="Attach files"><svg viewBox="0 0 16 16"><path d="M10.5 4.5 5.6 9.4a1.4 1.4 0 0 0 2 2l5-5a2.8 2.8 0 0 0-4-4l-5 5a4.2 4.2 0 0 0 6 6l4-4"/></svg></button>
+            <span class="spacer"></span>
+            <span class="timer" id="timer"></span>
+            <button class="mic" id="mic" aria-label="Speak" title="Speak (Ctrl+M)"><svg viewBox="0 0 16 16" id="mic-icon"></svg></button>
+            <button class="send" id="send" aria-label="Send" disabled><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button>
+          </div>
+        </div>
+        <div id="under"></div>
+      </div>
+    </section>
+
+    <!-- 2. Every other box gets the same button -->
+    <section class="view" id="v-boxes" hidden>
+      <div class="head"><h1>The same button on every box</h1></div>
+      <div>
+        <div class="label">New run</div>
+        <div class="box">
+          <div class="text" contenteditable="true" data-placeholder="What should the agent produce?">Build the March payroll summary from the timesheets and the rate card. Prorate anyone who joined mid-month.</div>
+          <button class="mic" aria-label="Speak"><svg viewBox="0 0 16 16" class="mic-svg"></svg></button>
+        </div>
+      </div>
+      <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">
+        <div class="comment">
+          <div class="where">Summary · B4</div>
+          <div class="box">
+            <div class="text" contenteditable="true" data-placeholder="What should change?"></div>
+            <button class="mic on" aria-label="Stop"><svg viewBox="0 0 16 16"><rect x="5" y="5" width="6" height="6" rx="1" fill="currentColor" stroke="none"/></svg></button>
+          </div>
+          <div class="row-end"><button class="btn quiet small">Cancel</button><button class="btn primary small">Comment</button></div>
+        </div>
+        <div class="comment">
+          <div class="where">Reply to your comment on Summary · B4</div>
+          <div class="box">
+            <div class="text" contenteditable="true">That total should exclude <span class="heard">the two contractors who are paid</span></div>
+            <button class="mic on" aria-label="Stop"><svg viewBox="0 0 16 16"><rect x="5" y="5" width="6" height="6" rx="1" fill="currentColor" stroke="none"/></svg></button>
+          </div>
+          <div class="row-end"><button class="btn quiet small">Cancel</button><button class="btn primary small">Reply</button></div>
+        </div>
+      </div>
+      <div>
+        <div class="label">Notes for Acme</div>
+        <div class="box tall">
+          <div class="text" contenteditable="true">Acme pays on the 25th. Contractors are on a separate sheet and never in the payroll total.</div>
+          <button class="mic" aria-label="Speak"><svg viewBox="0 0 16 16" class="mic-svg"></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Settings -->
+    <section class="view" id="v-settings" hidden>
+      <div class="head"><h1>Settings</h1><button class="btn primary" disabled style="opacity:.4">Save</button></div>
+      <section class="rows">
+        <h2>Voice</h2>
+        <div class="srow"><span>Words appear</span><div class="seg"><button class="on">As you speak</button><button>After you stop</button></div></div>
+        <div class="srow"><span>Live model</span><label class="unit"><input value="gpt-live-transcribe"></label></div>
+        <div class="srow"><span>Recording model</span><label class="unit"><input value="gpt-transcribe"></label></div>
+        <div class="srow"><span>Longest recording</span><label class="unit"><input class="short" value="2"><span>minutes</span></label></div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<div class="switcher" id="switcher"></div>
+
+<script>
+const MIC = '<path d="M8 2.5a2 2 0 0 0-2 2v3a2 2 0 0 0 4 0v-3a2 2 0 0 0-2-2Z"/><path d="M4 7.5a4 4 0 0 0 8 0M8 11.5v2"/>';
+const STOP = '<rect x="5" y="5" width="6" height="6" rx="1" fill="currentColor" stroke="none"/>';
+const SPIN = '<path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5"/>';
+document.querySelectorAll('.mic-svg').forEach((s) => (s.innerHTML = MIC));
+
+const SPOKEN = 'Can you take the two contractors out of the total in B4 and put them on their own sheet? Keep the prorated joiners as they are.';
+const $ = (s) => document.querySelector(s);
+let timers = [];
+const clear = () => { timers.forEach(clearTimeout); timers.forEach(clearInterval); timers = []; };
+
+function box({ mic = 'rest', text = '', heard = '', time = '', under = '', send = false }) {
+  $('#mic').className = 'mic' + (mic === 'on' ? ' on' : mic === 'busy' ? ' busy' : '');
+  $('#mic').setAttribute('aria-label', mic === 'on' ? 'Stop' : 'Speak');
+  $('#mic-icon').innerHTML = mic === 'on' ? STOP : mic === 'busy' ? SPIN : MIC;
+  $('#msg').innerHTML = text + (heard ? `<span class="heard">${heard}</span>` : '');
+  $('#timer').textContent = time;
+  $('#under').innerHTML = under;
+  $('#send').disabled = !send && !text;
+}
+
+// Plays the sentence back word by word: grey while heard, black a moment later, as the live model settles it.
+function live(thenStop) {
+  const words = SPOKEN.split(' ');
+  let i = 0, secs = 0;
+  box({ mic: 'on', time: '0:00' });
+  timers.push(setInterval(() => { secs++; $('#timer').textContent = `0:${String(secs).padStart(2, '0')}`; }, 1000));
+  timers.push(setInterval(() => {
+    if (i >= words.length) { if (thenStop) { clear(); box({ text: SPOKEN, send: true }); } return; }
+    i++;
+    const settled = Math.max(0, i - 4);
+    box({ mic: 'on', text: words.slice(0, settled).join(' ') + (settled ? ' ' : ''), heard: words.slice(settled, i).join(' '), time: $('#timer').textContent });
+  }, 260));
+}
+
+const problem = (sentence, action = '') => `<div class="problem"><p>${sentence}</p>${action}</div>`;
+
+const STATES = [
+  ['Rest', () => box({})],
+  ['As you speak', () => live(false)],
+  ['Stopped', () => box({ text: SPOKEN, send: true })],
+  ['After you stop', () => { box({ mic: 'busy', time: '0:09' }); timers.push(setTimeout(() => box({ text: SPOKEN, send: true }), 1800)); }],
+  ['Time limit', () => box({ text: SPOKEN, send: true, under: `<p class="hint">Stopped at 2 minutes, the longest recording set in Settings.</p>` })],
+  ['Microphone blocked', () => box({ under: problem('The browser is blocking the microphone. Allow it from the icon at the left of the address bar, then press the microphone again.') })],
+  ['No microphone', () => box({ under: problem('No microphone was found on this computer.') })],
+  ['Not secure', () => box({ under: problem('Browsers allow the microphone only on a secure (https) address or on this computer. Ask whoever runs the app to put it behind https.') })],
+  ['Service refused', () => box({ text: 'Can you take the two contractors out of the total in B4 ', send: true, under: problem('The transcription service refused the request: the model name was not found. Check the voice models in Settings.', '<button class="btn quiet small">Settings</button>') })],
+  ['Connection lost', () => box({ text: 'Can you take the two contractors out of the total in B4 ', send: true, under: problem('The connection to the transcription service dropped. What was heard so far is kept.', '<button class="btn quiet small">Try again</button>') })],
+  ['Other boxes', null, 'v-boxes'],
+  ['Settings', null, 'v-settings'],
+];
+
+const bar = $('#switcher');
+STATES.forEach(([name, run, view], n) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => {
+    clear();
+    bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    document.querySelectorAll('.view').forEach((v) => (v.hidden = v.id !== (view || 'v-message')));
+    if (run) run();
+  };
+  bar.appendChild(b);
+  if (n === 0) b.click();
+});
+$('#mic').onclick = () => { const on = $('#mic').classList.contains('on'); clear(); on ? box({ text: SPOKEN, send: true }) : live(true); };
+</script>
+</body>
+</html>
