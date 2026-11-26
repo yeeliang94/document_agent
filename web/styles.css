@@ -381,22 +381,32 @@ body.loading #main {
   min-width: 0;
   min-height: 0;
 }
+/* When the conversation is narrow (a file open, the divider dragged), the buttons drop under the title rather than
+   slide under the Files panel; the title keeps at least a readable width and is cut with … past that. */
 .chat-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 24px 32px 12px;
   min-height: 72px;
 }
 .chat-head h1 {
-  margin-right: auto;
+  flex: 1 1 200px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .controls {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
+  min-width: 0;
+}
+.chat-head .controls .pill {
+  margin-right: 8px;
 }
 .stages {
   display: flex;
@@ -969,10 +979,7 @@ button.file:hover {
 .page-head .field {
   background: var(--panel);
 }
-/* With a file open the conversation is narrow, so the controls drop under the title instead of squeezing it. */
-.work.viewing .chat-head {
-  flex-wrap: wrap;
-}
+/* With a file open the conversation is narrow, so the title takes its own line. */
 .work.viewing .chat-head h1 {
   flex-basis: 100%;
 }
@@ -2026,7 +2033,6 @@ dialog > h3 {
     display: none;
   }
   .chat-head {
-    flex-wrap: wrap;
     padding: 12px 16px;
     min-height: 0;
   }

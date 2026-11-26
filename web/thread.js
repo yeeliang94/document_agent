@@ -406,7 +406,7 @@ export function headHtml() {
     `<span class="hide-narrow">${btn('log', 'Technical log', 'text')}</span>`,
     `<span class="only-narrow">${btn('toggle-files', 'Files')}</span>`,
   ].join('');
-  return `<h1>${esc(jobTitle(state.job))}</h1>${pill(tone, label)}<div class="controls">${controls}</div>`;
+  return `<h1>${esc(jobTitle(state.job))}</h1><div class="controls">${pill(tone, label)}${controls}</div>`;
 }
 
 // Three stages and how far the run has got against its limits: "Step 14 of 60 · 6 of 30 min". The engine sends
