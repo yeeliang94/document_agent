@@ -526,7 +526,9 @@ def create_app(settings_override: Settings | None = None):
             if offer.get('saved'):
                 return job  # a second click
             text = '\n'.join(f'- {line}' for line in keep)
-            client = client_call(lambda: clients.save(client_id, text, 'learned', f'From the run {job_id[:8]}', append=True, run=job_id))
+            client = client_call(
+                lambda: clients.save(client_id, text, 'learned', f'From the run {job_id[:8]}', append=True, run=job_id)
+            )
             return store.update(job_id, offer={'saved': client['version']})
         saved = offer.get('saved')
         if not saved:

@@ -36,8 +36,11 @@ def goal_card(job: JobSpec, remote: dict[str, str], proof: str) -> str:
             f"# Client notes for {job.client}\nThe user's standing notes for this client, for all their work. They "
             'apply the way the house rules do. Where they and the house rules disagree, follow the client notes and '
             'say in notes.md which rule you followed and why.\n'
-            + (job.client_notes.strip() or '(No notes yet. In your final answer, put in for_next_time what a later run '
-               'for this client should follow, so the user can keep it as their notes.)')
+            + (
+                job.client_notes.strip()
+                or '(No notes yet. In your final answer, put in for_next_time what a later run '
+                'for this client should follow, so the user can keep it as their notes.)'
+            )
         )
     elif job.known_clients:
         parts.append(
