@@ -1,8 +1,8 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `88%` (37 of 42 steps) (Phases 1-10 done; Phases 11-12 left)
+**Overall Progress:** `93%` (39 of 42 steps) (Phases 1-11 done; Phase 12 left)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
-**Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7 (there is no PRD)
+**Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
 
 ## Summary
@@ -55,7 +55,7 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 - [x] 🟩 The three client decisions confirmed: main form, optional, text only
 - [x] 🟩 How client folders are named: no fixed pattern, so the suggestion looks for a known client's name anywhere in folder and file names
 - [x] 🟩 An OpenAI key is set on this machine, and live steps may use it; each live run is announced with its rough cost first
-- [x] 🟩 Prototype for batch 7 approved: comments that answer back, links to the spot, versions to compare (`prototype/comment-answers/index.html`, 2026-11-26)
+- [x] 🟩 Prototype for batch 7 approved: comments that answer back, links to the spot, versions to compare (`prototype/comment-answers/index.html` on the `prototypes` branch, 2026-11-26)
 - [x] 🟩 No conflicting in-progress work: chat-and-zoom is committed (PR yeeliang94/document_agent#1), and this plan builds on that branch
 
 ## Tasks
@@ -278,11 +278,13 @@ From the study of Claude's document panel (26 Nov). A comment gets an answer, wh
 
 ### Phase 11: Keep it from drifting
 
-- [ ] 🟥 **Step 38: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
+- [x] 🟩 **Step 38: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
   - **Verify:** I add a dummy setting, show the test failing, and remove it.
+  - **Result:** `tests/test_settings_controls.py` checks both ways (no setting without a control, no control without a setting). With a dummy setting added it failed naming it; removed again. The rule is in the new `AGENTS.md` (read by `CLAUDE.md`).
 
-- [ ] 🟥 **Step 39: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
+- [x] 🟩 **Step 39: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
   - **Verify:** I report the test and build results, the review verdict, and the git state.
+  - **Result:** README now covers answers, replies, links, versions, clients and every setting. The screen designs moved to the `prototypes` branch; `prototype/sandbox_agent` stays, because it holds the engine's main tests and test packets (the review caught that moving it dropped those tests and un-hid about 5,000 local run files). 434 app tests and 102 engine tests pass; lint clean.
 
 ### Phase 12: Speak instead of type (its own branch, after Phase 11)
 

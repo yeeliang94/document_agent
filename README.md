@@ -80,7 +80,8 @@ A playbook holds what the agent should know for one kind of work: written instru
 - **Lessons.** While it acts on your comments, the agent may note a lasting rule it took from one. The rule is added to the instructions as a new version only when that run finishes with its checks passing; the conversation then shows it with an Undo.
 - **Past corrections as tests.** Each lesson keeps a test: the run's files, the spot you corrected and the value you accepted. A playbook holds at most 20. The app retires tests whose rule is gone, and replays them when instructions change (Settings: never, after a rewrite or tidy, or after every change). A replay is a full run and costs model usage.
 - **Tidying.** When lessons pile up, the agent proposes a tidier version of the instructions. It is saved only if every test still passes.
-- **Comments.** On a run's output files, click a cell, a line, or a spot on a page or picture and type what is wrong. Comments go to the agent as one round; it then reports what it changed. Tick "Remember for next time" to add a comment to the playbook's instructions as a new version.
+- **Comments.** On a run's output files, click a cell, a line, or a spot on a page or picture and type what is wrong. Comments go to the agent as one round. It answers each one in a sentence or two, and the app shows beside it whether that spot really changed; where the two disagree, the app's check wins. Reply to a comment to send it back with the earlier exchange, or resolve it to put it away. A comment can also be kept for later runs: for the run's client, when it has one, or for every run of the playbook.
+- **Links.** A cell (`Sheet!B4`) or file the agent names in the conversation opens at that spot, but only when it exists.
 
 Comment rounds are recorded in a run's Technical log and its export, together with the playbook version the run used. Changes to a playbook itself (saves, skill uploads, proposals) are kept in that playbook's own activity record, read at `/api/playbooks/{id}/events`; no screen shows it yet.
 
@@ -97,7 +98,13 @@ The app zips the uploaded sources and gives them to one agent with a Python sand
 
 Every save is checked: the deliverable against its template or format rules, a decision for every file, and a source for every written row. A run is Finished only when the checks pass; otherwise it is Partly done and lists what is still to fix. An optional independent reviewer and parallel scouts can be switched on.
 
-Settings that shape a run live on the Settings page: scouts, reviewer, proof level, reasoning effort, turn/time/token limits, how long the sandbox waits for an answer, and sandbox memory. `.env` holds only secrets and connection details.
+Every save is also kept as a version. A run that stops can continue from its current files or from any version, or start over; the Changes switch compares the files with the last round of comments or with any version, and an older version can be opened.
+
+Settings that shape a run live on the Settings page: scouts, reviewer, proof level, reasoning effort, how many questions the agent may ask, turn/time/token limits (per run and per day), when history is condensed, how many versions are kept, how long the sandbox waits for an answer, and sandbox memory. Every setting has a control there; a test fails when one does not. `.env` holds only secrets and connection details.
+
+## Clients
+
+A client is optional on a run and is chosen on the New run form; the app suggests one when a known client's name appears in the folder or file names, and never attaches one silently. Each client has its own notes, with versions and Undo. A run follows them on top of its playbook, and where the two disagree the client's notes win. Earlier runs for the same client are offered first as examples.
 
 ## Runtime and observability
 
