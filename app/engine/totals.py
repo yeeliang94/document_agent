@@ -33,6 +33,7 @@ class Totals:
     errors: set = field(default_factory=set)  # (sheet, formula) of every cell showing an error
     short: set = field(default_factory=set)  # (sheet, formula) of every total that leaves a number out
     unsupported: int = 0  # formulas the calculator could not work out
+    unsupported_at: list = field(default_factory=list)  # where they are, as Sheet!B4
     formulas: int = 0
 
 
@@ -154,6 +155,7 @@ def work_out(path: Path, known: frozenset = frozenset()) -> Totals:
                 parsed = formula_calc._parse(text[1:], sheet)  # noqa: SLF001 - the calculator's own parse
             except Exception:  # noqa: BLE001 - a formula the calculator trips on is counted, never a reason to fail
                 out.unsupported += 1
+                out.unsupported_at.append(place)
                 continue
             if isinstance(value, str) and value in formula_calc.ERRORS:
                 out.errors.add((sheet, text))

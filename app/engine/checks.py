@@ -361,7 +361,10 @@ def _duplicate_rows(title: str, alignment: Alignment) -> list[str]:
     for number in sorted(alignment.written):
         key = tuple(sorted(alignment.after[number].items()))
         if key in seen:
-            issues.append(f'{title} row {number} duplicates row {seen[key]}.')
+            issues.append(
+                f'{title} row {number} duplicates row {seen[key]}. Remove one; if both are real records, keep both '
+                'and say why in notes.md.'
+            )
         seen.setdefault(key, number)
     return issues
 
@@ -613,6 +616,12 @@ def read_map(outputs: Path) -> tuple[dict[str, dict] | None, str | None]:
         return None, f'{DOCUMENT_MAP} is not valid JSON: {error}'
 
 
+def some(items: list, limit: int = 10) -> str:
+    """The first `limit` items, and how many were left out: 'a, b, c ... and 4 more'."""
+    shown = ', '.join(str(i) for i in items[:limit])
+    return shown + (f' ... and {len(items) - limit} more' if len(items) > limit else '')
+
+
 def check_map(entries: dict[str, dict], files: list[dict]) -> tuple[list[str], int]:
     """Problems with the map, and how many files that need a decision have a valid one."""
     missing, bad, unexplained, decided = [], [], [], 0
@@ -629,11 +638,11 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> tuple[list[str], i
                 unexplained.append(f['path'])
     issues = []
     if missing:
-        issues.append(f'{DOCUMENT_MAP} has no entry with "path" for {len(missing)} file(s): {missing[:10]}')
+        issues.append(f'{DOCUMENT_MAP} has no entry with "path" for {len(missing)} file(s): {some(missing)}')
     if bad:
-        issues.append(f'{DOCUMENT_MAP}: "decision" must be one of {list(DECISIONS)} for {bad[:10]}')
+        issues.append(f'{DOCUMENT_MAP}: "decision" must be one of {list(DECISIONS)} for {some(bad)}')
     if unexplained:
-        issues.append(f'{DOCUMENT_MAP}: give a one-line "reason" for {unexplained[:10]}')
+        issues.append(f'{DOCUMENT_MAP}: give a one-line "reason" for {some(unexplained)}')
     return issues, decided
 
 
@@ -721,10 +730,11 @@ def check_provenance(
     # "used" means the deliverable takes data from the file, and people reading the map trust that word. A used file no
     # written row cites is listed for the agent to look at, not refused: it may feed only a memo or another output
     # without rows.
-    counts['used_not_cited'] = sorted(
+    uncited = sorted(
         f['path'] for f in files
         if f['path'] not in cited and normal_decision((entry_for(entries or {}, f['path']) or {}).get('decision')) == 'used'
-    )[:10]  # fmt: skip
+    )  # fmt: skip
+    counts['used_not_cited'] = uncited[:10] + ([f'... and {len(uncited) - 10} more'] if len(uncited) > 10 else [])
     return issues, counts
 
 
@@ -791,7 +801,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
             written |= {(name, sheet): numbers for sheet, numbers in rows.items()}
             if path.suffix.lower() in WORKBOOKS and not problem:
                 books.append((name, path, None, None))
-    totals_issues, totals_lines, unsupported, looks = [], [], 0, []
+    totals_issues, totals_lines, unsupported, looks = [], [], [], []
     for name, path, template, format_spec in books:
         if not path.exists():
             continue
@@ -801,7 +811,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
             continue
         totals_issues += [f'{name}: {line}' for line in found.problems]
         totals_lines += listed(name, found)
-        unsupported += found.unsupported
+        unsupported += [f'{name}: {place}' for place in found.unsupported_at]
         rows = {sheet: numbers for (book, sheet), numbers in written.items() if book == name}
         try:
             looks += [f'{name}: {line}' for line in look_warnings(path, rows, format_spec)]
@@ -830,7 +840,8 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         result['used_not_cited'] = used_not_cited
     if unsupported:
         result['totals_not_worked_out'] = (
-            f'{unsupported} formula(s) use something this machine cannot work out; check those in the sandbox.'
+            f'{len(unsupported)} formula(s) use something this machine cannot work out: {some(unsupported)}. Check '
+            'those cells in the sandbox.'
         )
     return result
 
