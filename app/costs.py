@@ -44,7 +44,9 @@ def cost(used: dict, settings: dict) -> dict | None:
 
 
 def job_cost(job: dict, settings: dict) -> dict | None:
-    return cost(job_tokens(job), settings)
+    """A run's figure; None also for a run that has not asked the AI anything yet, rather than $0."""
+    used = job_tokens(job)
+    return cost(used, settings) if used['input_tokens'] or used['output_tokens'] else None
 
 
 def playbook_cost(store, playbook_id: str) -> dict | None:

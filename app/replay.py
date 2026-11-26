@@ -14,6 +14,7 @@ applied only if its check passes, see app/tidy.py).
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import threading
 import uuid
@@ -21,6 +22,8 @@ from pathlib import Path
 
 from . import cases, costs, feedback, preview
 from .cleaning import now
+
+log = logging.getLogger(__name__)
 
 LOCK = threading.Lock()  # one writer at a time for a check's record
 KEPT_CHECKS = 10  # records kept per playbook; the jobs of a check are removed once a later check starts
@@ -229,8 +232,12 @@ def finished(store, job: dict) -> dict | None:
         entry.update(status=status, **{k: result[k] for k in ('got', 'note', 'tokens') if k in result})
         closed = _settle(check)
         _write(store, check)
-        # Counted once, here, as its case gets its result: the job itself is removed when a later check starts.
-        store.add_replay_spend(playbook_id, used)
+        # Counted once, here, as its case gets its result: the job itself is removed when a later check starts. A
+        # failed tally is logged and never stops the case being scored or the check closing.
+        try:
+            store.add_replay_spend(playbook_id, used)
+        except Exception:  # noqa: BLE001 - see above
+            log.exception('Could not add a replayed test to its playbook spend')
     if case and check.get('candidate') is None:  # a candidate's results say nothing about the saved instructions
         cases.add_replay(store, playbook_id, case['id'], {**result, 'version': check['version']})
     words = {'passed': 'still right', 'failed': 'no longer right', 'error': 'could not be checked'}[status]
