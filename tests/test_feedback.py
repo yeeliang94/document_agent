@@ -26,6 +26,11 @@ from helpers import wait_for_job
 ROUND = 'round-0001-abcd'
 
 
+
+# What the engine's save keeps on its job besides what these tests set: the look, versions and progress of the run.
+ENGINE_DEFAULTS = dict(look_before_finish=False, looked_before_finish=False, versions=None, versions_kept=20,
+                       stage='reading', turns_used=0, calls=0, max_turns=60, time_limit=0, clock=None, waits=0)  # fmt: skip
+
 def workbook(path, basic=4200, net='=C2-462'):
     book = Workbook()
     sheet = book.active
@@ -294,7 +299,7 @@ def test_comments_reach_a_running_job_between_steps_and_stay_for_a_resumed_run(t
     assert content[1]['text'] == 'Picture round-01-picture-01.png:'
     assert content[2]['image_url'].startswith('data:image/png;base64,iVBOR')
     assert engine._instructions(['Only text']) == (
-        'New message from the user. Answer anything it asks in your summary; where it changes the work, redo only the affected work and save again:\nOnly text'
+        'New message from the user. Answer anything it asks in your report: the short answer in the headline, any detail under what you did; where it changes the work, redo only the affected work and save again:\nOnly text'
     )
     # The run record keeps the conversation without the bytes of the pictures.
     kept = engine.without_pictures([{'role': 'user', 'content': content}])
@@ -505,6 +510,7 @@ def test_save_outputs_tells_the_agent_what_the_caller_adds(tmp_path):
             proof='none',
             saved=False,
             control=control,
+            **ENGINE_DEFAULTS,
         )
 
     def save(control):
@@ -684,7 +690,7 @@ def test_a_remembered_round_is_never_added_to_the_playbook_twice(tmp_path):
     store, job = job_with_outputs(tmp_path)
     keep = [{'n': 1, 'text': 'Use the signed form.', 'remember': True}]
     first = feedback._remember(store, job, ROUND, 1, keep)
-    assert feedback._remember(store, job, ROUND, 1, keep) == first == 2
+    assert feedback._remember(store, job, ROUND, 1, keep) == first == {'playbook': 2}
     # The round was cut off after it was remembered and sent again: it gets a new number, and is still found.
     assert feedback._remember(store, job, ROUND, 2, keep) == first
     assert store.playbooks.get('payroll')['text'].count('Use the signed form.') == 1
@@ -711,6 +717,7 @@ def test_a_comparison_that_cannot_be_made_is_told_to_the_agent_not_raised(tmp_pa
         proof='none',
         saved=False,
         control=Failing(),
+        **ENGINE_DEFAULTS,
     )
     context = ToolContext(run, tool_name='save_outputs', tool_call_id='1', tool_arguments='{}')
     saved = json.loads(asyncio.run(engine.save_outputs.on_invoke_tool(context, '{}')))

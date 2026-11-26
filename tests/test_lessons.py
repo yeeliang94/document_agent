@@ -43,7 +43,9 @@ def test_the_agent_notes_a_lesson_only_for_an_open_comment_and_in_few_words(tmp_
     assert 'already asked for this comment to be remembered' in lessons.note(store, job['id'], '1.2', RULE)
     # Noting again for the same comment replaces the lesson.
     lessons.note(store, job['id'], '1.1', 'A better wording.')
-    assert store.get(job['id'])['lessons'] == [{'round': 1, 'n': 1, 'lesson': 'A better wording.', 'status': 'noted'}]
+    assert store.get(job['id'])['lessons'] == [
+        {'round': 1, 'n': 1, 'lesson': 'A better wording.', 'status': 'noted', 'scope': 'playbook'}
+    ]
     assert names(store.events(job['id'])).count('lesson.noted') == 2
     # A job with no playbook has nowhere to keep one.
     store.mutate(job['id'], lambda j: j.update(playbook=None))
@@ -70,14 +72,14 @@ def test_a_lesson_is_kept_when_the_run_ends_well_and_gets_a_test(tmp_path):
     assert control.can_remember and control.remember('1.1', RULE).startswith('Noted.')
     done = finish(store, job)
     assert done['status'] == 'completed'
-    assert done['lessons'] == [{'round': 1, 'n': 1, 'lesson': RULE, 'status': 'saved', 'version': 3, 'case': done['lessons'][0]['case']}]  # fmt: skip
+    assert done['lessons'] == [{'round': 1, 'n': 1, 'lesson': RULE, 'status': 'saved', 'scope': 'playbook', 'version': 3, 'case': done['lessons'][0]['case']}]  # fmt: skip
     book = store.playbooks.get('payroll')
     assert (book['version'], book['text']) == (3, f'Edited since the job started\n\n{RULE}')
     newest = store.playbooks.versions('payroll')[0]
     assert (newest['source'], newest['change']) == ('learned', RULE)
     assert newest['detail'] == {'job_id': job['id'], 'round': 1, 'round_id': ROUND, 'learned': True}
     shown = feedback.rounds(store, job['id'])[0]
-    assert (shown['learned_version'], shown['learned']) == (3, [{'n': 1, 'lesson': RULE}])
+    assert (shown['learned_version'], shown['learned']) == (3, [{'n': 1, 'lesson': RULE, 'scope': 'playbook'}])
     assert 'lesson.saved' in names(store.events(job['id']))
     # The test kept with it: the spot, what the user accepted there, and the run's files.
     case = cases.cases(store, 'payroll')[0]
@@ -198,7 +200,7 @@ def test_the_agent_gets_the_remember_tool_only_when_the_caller_can_keep_a_lesson
     spec = spec_with_skills(tmp_path, skills=())
     _, seen, _ = run_with_fake_sandbox(monkeypatch, spec, tmp_path, control=Keeping())
     tool = next(t for t in seen['agent'].tools if getattr(t, 'name', '') == 'remember')
-    assert tool.params_json_schema['required'] == ['comment', 'lesson']
+    assert tool.params_json_schema['required'] == ['comment', 'lesson', 'scope']
     _, seen, _ = run_with_fake_sandbox(monkeypatch, spec, tmp_path)
     assert 'remember' not in [getattr(t, 'name', '') for t in seen['agent'].tools]
     assert engine.Control().remember('1.1', 'x') == 'Nothing can be remembered in this run.'

@@ -82,6 +82,7 @@ export function settingsPage() {
   const agent =
     row('Parallel scouts', stepper('max_scouts', 'Parallel scouts', v.max_scouts, options.max_scouts.low, options.max_scouts.high)) +
     row('Independent reviewer', toggle('reviewer', 'Independent reviewer', v.reviewer)) +
+    row('Show the agent its files before it finishes', toggle('look_before_finish', 'Show the agent its files before it finishes', v.look_before_finish)) +
     row('Proof level', select('proof', { row: 'Sources for every row', none: 'None' })) +
     row('Reasoning effort', select('effort', { low: 'Low', medium: 'Medium', high: 'High' })) +
     row('Re-check past corrections', select('replay_tests', { never: 'Never', large: 'After a rewrite or tidy', every: 'After every change' }));
@@ -95,6 +96,7 @@ export function settingsPage() {
       row('Used today (thousands)', `<span class="value">${Math.round((state.settings.tokens_today || 0) / 1000).toLocaleString()}</span>`) +
       row('Hold sandbox for an answer (minutes)', number('question_wait_minutes')) +
       row('Condense history at (thousands of tokens, 0 for never)', number('condense_at_thousands')) +
+      row('Versions kept per run', number('versions_kept')) +
       row('Sandbox memory', select('sandbox_memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' })),
   );
   const link =

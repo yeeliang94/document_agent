@@ -72,7 +72,8 @@ export function threadItems() {
       const asked = e.changed + e.unchanged;
       const also = e.elsewhere ? ` ${plural(e.elsewhere, 'other change')} in the files.` : '';
       push({ kind: 'note', ...base, text: `Changed ${e.changed} of ${plural(asked, 'commented spot')}.${also}` });
-    } else if (e.name === 'lesson.saved') push({ kind: 'learned', ...base, lesson: e.lesson, version: e.version });
+    } else if (e.name === 'lesson.saved' && e.scope === 'client') push({ kind: 'note', ...base, text: e.message }); // Undo comes with the Clients screens
+    else if (e.name === 'lesson.saved') push({ kind: 'learned', ...base, lesson: e.lesson, version: e.version });
     else if (e.type === 'user') push({ kind: 'me', ...base, text: e.message, files: e.files || [], id: e.message_id });
     else if (e.name === 'engine.instructions.delivered' && e.interrupted) push({ kind: 'note', ...base, text: 'Stopped the current step to read your message.' });
     else if (e.type === 'question' || e.name === 'engine.question.asked') {

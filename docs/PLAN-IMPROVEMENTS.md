@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `24%` (8 of 34 steps) (Phases 1-2 built, not yet on screen: the warning card and "20 more steps" button come with the Batch screens)
+**Overall Progress:** `71%` (24 of 34 steps) (Phases 1-8 done, not yet on screen: what they show comes with the Phase 9 screens)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -94,90 +94,114 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 
 ### Phase 3: The agent sees its totals (engine)
 
-- [ ] 🟥 **Step 9: Work out formulas on every save** — the save reply lists each total with its value and any formula that fails or misses rows.
-  - [ ] 🟥 Reuse the calculator the preview already uses
-  - [ ] 🟥 Add "Totals add up" to the check summary
+- [x] 🟩 **Step 9: Work out formulas on every save** — the save reply lists each total with its value and any formula that fails or misses rows.
+  - [x] 🟩 Reuse the calculator the preview already uses
+  - [x] 🟩 Add "Totals add up" to the check summary
   - **Verify:** a test saves a workbook whose total misses the last row; the reply names the cell and the run does not pass.
+  - **Result:** each save lists every total with its value; an error value, or a plain number between a total's range and the total that the formula reads nowhere else, is a problem, so the save does not pass. A fault the blank template already had is not blamed on the agent. A formula this machine cannot work out is counted, never guessed. The check summary has `totals` and `totals_problems`.
 
 ### Phase 4: The agent sees and shapes its output (engine)
 
 Today the agent can only draw a rough chart of cell values, and in the live runs it never did. It cannot see fonts, fills, borders, widths or number formats, and a workbook built from a written format has no look at all. These steps give it a real view of its files and a ready-made way to format them.
 
-- [ ] 🟥 **Step 10: Draw a sheet as Excel shows it** — on this machine, from the saved file, using the code the file preview already uses (cell formats and formula results), drawn into a picture with Pillow (already installed).
-  - [ ] 🟥 Fonts, fills, borders, column widths, row heights, merged cells, number formats, formula results, hidden rows and columns left out
-  - [ ] 🟥 A sheet too big for one picture is drawn as tiles with row and column labels; anything it cannot draw (charts, pictures in cells, conditional colours) is named under the picture, not guessed
+- [x] 🟩 **Step 10: Draw a sheet as Excel shows it** — on this machine, from the saved file, using the code the file preview already uses (cell formats and formula results), drawn into a picture with Pillow (already installed).
+  - [x] 🟩 Fonts, fills, borders, column widths, row heights, merged cells, number formats, formula results, hidden rows and columns left out
+  - [x] 🟩 A sheet too big for one picture is drawn as tiles with row and column labels; anything it cannot draw (charts, pictures in cells, conditional colours) is named under the picture, not guessed
   - **Verify:** tests draw a sample template and check a merged title, a bold shaded header, a date shown as 31/10/2026 and a total shown with its formula result.
+  - **Result:** drawn at 1.25x Excel's size with Arial (Mac, Windows) or DejaVu (Linux), else Pillow's own font with bold faked. Numbers that do not fit show ####, text spills into empty cells, frozen panes show as a line. Up to 200 rows and 40 columns per call, in at most 4 tiles; the rest is named.
 
-- [ ] 🟥 **Step 11: A tool to look at the output** — `look_at_output(file, sheet, cells)` returns the picture to the agent, with the whole sheet as the default.
-  - [ ] 🟥 Pictures kept small enough to send (the existing size limits), at most a few per call
-  - [ ] 🟥 One briefing line replaces the matplotlib advice: look at each finished sheet before you finish, as the person receiving it would
+- [x] 🟩 **Step 11: A tool to look at the output** — `look_at_output(file, sheet, cells)` returns the picture to the agent, with the whole sheet as the default.
+  - [x] 🟩 Pictures kept small enough to send (the existing size limits), at most a few per call
+  - [x] 🟩 One briefing line replaces the matplotlib advice: look at each finished sheet before you finish, as the person receiving it would
   - **Verify:** a test calls the tool and gets a picture back; a scripted run sees a missing border it was asked to fix.
+  - **Result:** the tool reads the file straight from the sandbox, so no save is needed first. The scripted "missing border" run was not built: the test shows the border's line in one picture and its absence in the other instead.
 
-- [ ] 🟥 **Step 12: A look before finishing** — the first save that passes every check also returns a picture of the top of each deliverable and of the rows around its totals.
-  - [ ] 🟥 Switched on or off on the Settings page ("Show the agent its files before it finishes"), on by default
-  - [ ] 🟥 The cost is noted in the Technical log (each picture is roughly 1,000–2,000 tokens)
+- [x] 🟩 **Step 12: A look before finishing** — the first save that passes every check also returns a picture of the top of each deliverable and of the rows around its totals.
+  - [x] 🟩 Switched on or off on the Settings page ("Show the agent its files before it finishes"), on by default
+  - [x] 🟩 The cost is noted in the Technical log (each picture is roughly 1,000–2,000 tokens)
   - **Verify:** a test's passing save carries the pictures; with the setting off it does not.
+  - **Result:** the top 30 rows of each deliverable (up to two workbooks) and, when the last total is further down, the rows around it; at most 4 pictures. A sample sheet's picture costs about 255 tokens, so the estimate in the log is usually below the 1,000-2,000 guessed above.
 
-- [ ] 🟥 **Step 13: A house style for workbooks built from a format** — a written format can say how it looks: header style, number and date formats per column type, column widths, a frozen header row. A format with no style gets a plain, tidy default.
-  - [ ] 🟥 A small helper placed in the sandbox (`from house_style import apply`) applies the style, so the agent does not hand-code it each run
-  - [ ] 🟥 New save warnings that need no model: a value too wide for its column (Excel shows ####), numbers or dates stored as text, a number column with no number format, data rows hidden. Shown as "Looks right" in the check summary
-  - [ ] 🟥 A filled template keeps its own look; the warnings name only cells the agent wrote
+- [x] 🟩 **Step 13: A house style for workbooks built from a format** — a written format can say how it looks: header style, number and date formats per column type, column widths, a frozen header row. A format with no style gets a plain, tidy default.
+  - [x] 🟩 A small helper placed in the sandbox (`from house_style import apply`) applies the style, so the agent does not hand-code it each run
+  - [x] 🟩 New save warnings that need no model: a value too wide for its column (Excel shows ####), numbers or dates stored as text, a number column with no number format, data rows hidden. Shown as "Looks right" in the check summary
+  - [x] 🟩 A filled template keeps its own look; the warnings name only cells the agent wrote
   - **Verify:** a test builds a workbook from a format, applies the helper and passes; a workbook with a ##### column and a date stored as text gets both warnings.
+  - **Result:** the helper (`app/engine/house_style.py`) is copied into the sandbox for runs with no template. It also turns numbers and dates written as text into real ones in number and date columns. Look warnings are listed as `looks` in the save reply and `looks_right` in the summary; they do not stop a save from passing.
 
 ### Phase 5: Runs that stop can be picked up (backend)
 
-- [ ] 🟥 **Step 14: A version at every save** — a copy of the outputs, with the step number, time and a one-line description.
-  - [ ] 🟥 A cap on versions kept per run, on the Settings page
-  - [ ] 🟥 API: list a run's versions
+- [x] 🟩 **Step 14: A version at every save** — a copy of the outputs, with the step number, time and a one-line description.
+  - [x] 🟩 A cap on versions kept per run, on the Settings page
+  - [x] 🟩 API: list a run's versions
   - **Verify:** run the demo; the API lists one version per save, newest first.
+  - **Result:** versions are copies, not links, so a file saved from Excel in the outputs folder cannot change an older version. Kept under `<job>/versions/`. There is no demo mode, so the check is a scripted run through the API.
 
-- [ ] 🟥 **Step 15: Continue from a version** — restores that copy as the outputs and resumes from it.
-  - [ ] 🟥 The resume note tells the agent which version it starts from
+- [x] 🟩 **Step 15: Continue from a version** — restores that copy as the outputs and resumes from it.
+  - [x] 🟩 The resume note tells the agent which version it starts from
   - **Verify:** a test stops a run after two saves, continues from the first, and the outputs match the first.
+  - **Result:** `POST /api/jobs/{id}/versions/{n}/continue`, for a run that has stopped or finished; refused while a run is going.
 
-- [ ] 🟥 **Step 16: Plain errors** — one place turns a failure into a plain sentence and a next step; the raw text is kept for the Technical log.
-  - [ ] 🟥 Used for run failures, tool failures and the connection test
-  - [ ] 🟥 Form errors return a sentence, not "Request failed (422)"
-  - [ ] 🟥 "See the run record" replaced by the issues themselves
+- [x] 🟩 **Step 16: Plain errors** — one place turns a failure into a plain sentence and a next step; the raw text is kept for the Technical log.
+  - [x] 🟩 Used for run failures, tool failures and the connection test
+  - [x] 🟩 Form errors return a sentence, not "Request failed (422)"
+  - [x] 🟩 "See the run record" replaced by the issues themselves
   - **Verify:** tests feed in the known failures (no key, lost workspace, refused, over the day's limit) and read back plain sentences.
+  - **Result:** `app/plain_errors.py`. The raw text is kept as `error_detail` on the job and `raw` on the event. Unknown failures say so plainly and ask for the Technical log.
 
-- [ ] 🟥 **Step 17: Progress the screen can show** — the run carries steps used, minutes used, both limits and its stage.
+- [x] 🟩 **Step 17: Progress the screen can show** — the run carries steps used, minutes used, both limits and its stage.
   - **Verify:** the run's API answer shows "14 of 60" style numbers changing during a demo run.
+  - **Result:** the job carries `progress`: steps, max_steps, minutes, max_minutes, stage (reading, filling, checking) and clock_paused, updated at each step of the lead agent.
 
 ### Phase 6: A proper finish report (engine)
 
-- [ ] 🟥 **Step 18: The agent ends with a report** — a headline, what it did, decisions it made, what to check before sending.
-  - [ ] 🟥 Stored with the run; the downloadable summary file uses the same text
+- [x] 🟩 **Step 18: The agent ends with a report** — a headline, what it did, decisions it made, what to check before sending.
+  - [x] 🟩 Stored with the run; the downloadable summary file uses the same text
   - **Verify:** a test run ends with all four parts filled; an older run still opens and shows its one paragraph.
+  - **Result:** the agent's final answer has headline, done, decisions and to_check (assumptions count as decisions). The job keeps it as `report`; `summary` is the headline, so lists and the current screen show one line. processing_summary.txt holds the whole report, with why a run stopped after the headline. A run from before keeps its paragraph (`app/engine/report.py`).
 
 ### Phase 7: Clients (backend and engine)
 
-- [ ] 🟥 **Step 19: Client storage and API** — create, rename, list, edit notes; versions and Undo as playbooks have.
+- [x] 🟩 **Step 19: Client storage and API** — create, rename, list, edit notes; versions and Undo as playbooks have.
   - **Verify:** tests create a client, save twice, restore the first version.
+  - **Result:** `app/clients.py` on the version store playbooks now share (`app/versioned.py`). Routes under `/api/clients`. Clients cannot be deleted yet.
 
-- [ ] 🟥 **Step 20: A run follows its client's notes** — the run copies the notes when it is created, so later edits do not change it.
-  - [ ] 🟥 Shown to the agent beside the house rules, with one rule: where they disagree, the client wins and the notes say so
+- [x] 🟩 **Step 20: A run follows its client's notes** — the run copies the notes when it is created, so later edits do not change it.
+  - [x] 🟩 Shown to the agent beside the house rules, with one rule: where they disagree, the client wins and the notes say so
   - **Verify:** a test run's briefing contains the client's notes; a run with no client is unchanged.
+  - **Result:** New run takes an optional `client_id`. The job keeps `client` and `client_notes`; the house-rules check after a pass covers the client notes too.
 
-- [ ] 🟥 **Step 21: Remembering has a scope** — a lesson goes to the client or the playbook.
-  - [ ] 🟥 The agent's remember tool takes the scope; a comment can set it
-  - [ ] 🟥 Undo works for both
+- [x] 🟩 **Step 21: Remembering has a scope** — a lesson goes to the client or the playbook.
+  - [x] 🟩 The agent's remember tool takes the scope; a comment can set it
+  - [x] 🟩 Undo works for both
   - **Verify:** tests save one lesson to each, and each lands in the right notes and can be undone.
+  - **Result:** a comment's `remember_to` (client or playbook) wins over the agent's choice. Undo is a restore, on either. A client lesson gets no replay test (tests replay playbooks). Until the Clients screens (Step 32), the run shows a client lesson as a plain line with no Undo button.
 
-- [ ] 🟥 **Step 22: Earlier runs of the same client first** — as examples of layout.
+- [x] 🟩 **Step 22: Earlier runs of the same client first** — as examples of layout.
   - **Verify:** a test with runs for two clients offers only the same client's.
+  - **Result:** a run for a client is offered that client's runs, then runs with no client, never another client's. A run with no client is offered what it was before.
 
-- [ ] 🟥 **Step 23: Suggest the client** — from folder and file names when files are chosen; if left empty, the agent asks once when it sees a known client in the documents.
+- [x] 🟩 **Step 23: Suggest the client** — from folder and file names when files are chosen; if left empty, the agent asks once when it sees a known client in the documents.
   - **Verify:** tests match "Acme/October 2026", "Payroll/acme_oct.xlsx" and "October/ACME Sdn Bhd" to Acme, and suggest nothing for an unrelated folder.
+  - **Result:** `POST /api/clients/suggest` with the chosen paths. A name matches when its words appear in a row (legal words such as Sdn Bhd ignored); two clients equally named give no suggestion. A run with no client sees the known clients' names; its follow_client tool attaches one only after the user answered a question naming it.
 
 ### Phase 8: Does it work with the real model?
 
-- [ ] 🟥 **Step 24: Live runs** — the sample payroll packet and one long packet, before and after.
-  - [ ] 🟥 Compare accuracy, steps, time and tokens
-  - [ ] 🟥 One run stopped on purpose and continued from a version
-  - [ ] 🟥 One run with a client and one without
-  - [ ] 🟥 One run built from a format, with the look before finishing on and off: did the agent fix what it saw?
+- [x] 🟩 **Step 24: Live runs** — the sample payroll packet and one long packet, before and after.
+  - [x] 🟩 Compare accuracy, steps, time and tokens
+  - [x] 🟩 One run stopped on purpose and continued from a version
+  - [x] 🟩 One run with a client and one without
+  - [x] 🟩 One run built from a format, with the look before finishing on and off: did the agent fix what it saw?
   - **Verify:** I give you the before and after numbers and the output files.
+  - **Result (2026-11-26, direct OpenAI, gpt-6-luna, team A, one run each):**
+
+    | Packet | Cells right before → after | Model calls | Minutes | Input tokens |
+    |---|---|---|---|---|
+    | payroll_consolidation | 100% → 100% | 4 → 6 | 3.4 → 4.2 | 267k → 294k |
+    | large_packet (122 files) | 100% → 100% | 3 → 10 | 3.3 → 4.8 | 85k → 374k |
+    | payment_journal (format), look on / off | 100% / 100% | 3 / 4 | 2.9 / 2.9 | 108k / 132k |
+
+    Accuracy held. The cost rose because the agent now looks at its sheets with look_at_output, one sheet per step (up to six), and each step re-sends the conversation; the pictures themselves were 3–5k tokens a run. In these runs the looks found nothing to fix. Through the app: a run for a client finished with every cell right and followed its notes (notes.md opened with the line they asked for). A run with no client was paused after its sixth step and continued from version 1 (step 5); it finished with every cell right. Both reports' headlines described only the last check, not the whole job; the briefing now says the report covers the whole job (not yet tried live). Files: the scratchpad's `live/` folder, and `prototype/sandbox_agent/app_resume_client.py` reruns the app part.
 
 ### Phase 9: Screens (each batch after its prototype is approved)
 

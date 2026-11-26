@@ -28,6 +28,7 @@ Rules (in a format's "rules" or a job's "rules"; "file" limits a rule to one del
 
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -229,6 +230,8 @@ def describe_format(spec: dict) -> str:
         for combo in sheet.get('unique', []):
             lines.append(f'  No two rows share {combo}.')
     lines += describe_rules(spec.get('rules', []))
+    if spec.get('style'):
+        lines.append(f'Look (applied by the house-style helper): {json.dumps(spec["style"])}')
     if spec.get('notes'):
         lines.append(f'Notes: {spec["notes"]}')
     return '\n'.join(lines)
@@ -290,6 +293,10 @@ def check_format_definition(spec) -> None:
             names.append(column['name'])
         columns[sheet['name']] = set(names)
     check_rule_definitions(spec.get('rules', []))
+    if 'style' in spec:
+        from .house_style import check_style  # imported here: only a format with a style needs it
+
+        check_style(spec['style'])
     for rule in spec.get('rules', []):
         named = [rule.get(k) for k in ('debit', 'credit', 'column') if rule.get(k)] + list(rule.get('columns', []))
         if rule['sheet'] not in columns:

@@ -66,6 +66,11 @@ class JobSpec:
     # Finished runs of the same playbook the agent may open as examples: label, title, finished, goal and the
     # folder that holds that run's saved files (see pastruns.py).
     past_runs: tuple[dict, ...] = ()
+    # The client whose notes this run follows, and those notes as they were when the job was created. A run with
+    # no client gets instead the names of the known clients, so it can ask when the documents name one.
+    client: str = ''
+    client_notes: str = ''
+    known_clients: tuple[str, ...] = ()
 
     @property
     def inputs(self) -> list[Path]:

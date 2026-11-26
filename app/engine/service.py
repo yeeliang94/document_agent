@@ -19,10 +19,11 @@ import time
 import zipfile
 from pathlib import Path
 
-from .. import feedback, lessons, preview
+from .. import clients, feedback, lessons, plain_errors, preview
 from ..jobstatus import FINISHED, stop_status
 from ..modules import MODULE_LABELS
 from ..store import clean
+from . import report as finish
 from .agent import Control, run_job
 from .endpoint import Settings as Endpoint
 from .jobspec import DEFAULT_ANSWER, Answerer, Deliverable, JobSpec
@@ -38,7 +39,7 @@ MESSAGES = {
     'sandbox.ready': lambda d: 'Sandbox ready; inputs uploaded',
     'code.started': lambda d: 'Running code in the sandbox',
     'tool.called': lambda d: f'Using {d.get("tool")}',
-    'tool.failed': lambda d: f'A tool failed: {d.get("error")}',
+    'tool.failed': lambda d: tool_failure(d.get('error')),
     'scout.started': lambda d: f'Scouting {d.get("folder")} ({d.get("files")} files)',
     'scout.finished': lambda d: f'Scout finished {d.get("folder")}',
     'scout.failed': lambda d: f'Scout stopped on {d.get("folder")}',
@@ -78,34 +79,23 @@ MESSAGES = {
         'OpenAI could not find an earlier sandbox step; it is sent as a note and the run carries on'
     ),
     'model.unavailable': lambda d: 'The AI service stopped answering; saved work is kept',
+    'outputs.versioned': lambda d: f'Kept version {d.get("number")}: {d.get("description")}',
+    'output.looked': lambda d: f'Looking at {d.get("file")} as Excel shows it',
+    'outputs.pictured': lambda d: (
+        f'Showed the agent {d.get("pictures")} picture(s) of its files before it finishes '
+        f'(about {d.get("tokens") or 0:,} tokens)'
+    ),
 }
 WARNINGS = {'limit.near', 'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable'}
 DAY_USED_UP = (
     "Today's token limit is used up. Saved work is kept. Continue tomorrow, or raise the limit on the Settings page."
 )
 
-HINTS = [
-    (
-        ('container', 'not found'),
-        'The sandbox was not found. The model alias and the endpoint may point to different regions; use a model '
-        'alias from the same region as OPENAI_BASE_URL (for example an "eu" alias with an EMEA address).',
-    ),
-    (
-        ('error code: 403',),  # the status, not any 403 inside an item id
-        'The endpoint refused a sandbox call. Ask the proxy team to allow the /v1/containers routes, or set the '
-        'LiteLLM options on the Settings page.',
-    ),
-]
-
-
-def with_hint(error: str | None) -> str | None:
-    if not error:
-        return error
-    lower = error.lower()
-    for words, hint in HINTS:
-        if all(w in lower for w in words):
-            return f'{error} {hint}'
-    return error
+def tool_failure(raw) -> str:
+    """A tool failure for the feed: the plain reason when it is a known one; the agent itself is told the raw text."""
+    found = plain_errors.explain(raw)
+    known = found is not None and found.message != plain_errors.UNKNOWN[0]
+    return f'A tool failed: {found.message}' if known else 'A tool the agent used failed; it was told why and carries on'
 
 
 def message_text(message) -> str:
@@ -228,8 +218,11 @@ class AppControl(Control):
     def can_remember(self) -> bool:
         return bool((self._current().get('playbook') or {}).get('id'))
 
-    def remember(self, comment: str, lesson: str) -> str:
-        return lessons.note(self.store, self.job_id, comment, lesson)
+    def remember(self, comment: str, lesson: str, scope: str = 'playbook') -> str:
+        return lessons.note(self.store, self.job_id, comment, lesson, scope)
+
+    def follow_client(self, name: str) -> dict:
+        return clients.follow(self.store, self.job_id, name)
 
     def after_save(self) -> dict:
         """After comments, tell the agent what its save changed where they asked and what else changed."""
@@ -275,15 +268,26 @@ def choose_past_runs(store, job: dict) -> list[dict]:
     first runs, and kept on the job: a run that continues later sees the same list under the same labels."""
     if job.get('past_runs') is not None:
         return job['past_runs']
-    found = []
+    client = (job.get('client') or {}).get('id')
+    same_client, no_client = [], []
     for other in store.jobs():  # newest first
         same = other['id'] != job['id'] and other['module'] == job['module'] and other['status'] == 'completed'
         same = same and not other.get('replay')  # a replayed test is not work the user accepted
-        if same and other['created_at'] <= job['created_at'] and past_files(store.path(other['id']) / 'outputs'):
-            found.append({'label': f'earlier-{len(found) + 1}', 'id': other['id'], 'title': job_title(other),
-                          'finished': other['updated_at'][:10]})  # fmt: skip
-        if len(found) == PAST_LIMIT:
+        if not same or other['created_at'] > job['created_at']:
+            continue
+        # A run for a client is shown that client's earlier runs first, then runs for no client, never another
+        # client's: their layout and conventions are that client's own.
+        theirs = (other.get('client') or {}).get('id')
+        group = same_client if client and theirs == client else no_client if not client or not theirs else None
+        if group is not None and len(group) < PAST_LIMIT and past_files(store.path(other['id']) / 'outputs'):
+            group.append(other)
+        if len(same_client if client else no_client) == PAST_LIMIT:
             break
+    found = [
+        {'label': f'earlier-{n}', 'id': other['id'], 'title': job_title(other), 'finished': other['updated_at'][:10],
+         **({'client': other['client']['name']} if other.get('client') else {})}
+        for n, other in enumerate((same_client + no_client)[:PAST_LIMIT], 1)
+    ]  # fmt: skip
     store.mutate(job['id'], lambda j: j.setdefault('past_runs', found))
     return found
 
@@ -334,6 +338,9 @@ def job_spec(store, job: dict) -> JobSpec:
         zip=packet_zip(root, job['files'], root / 'working' / 'engine'),
         deliverables=deliverables,
         context=job.get('context') or '',
+        client=(job.get('client') or {}).get('name', ''),
+        client_notes=job.get('client_notes') or '',
+        known_clients=() if job.get('client') else tuple(c['name'] for c in store.clients.list()),
     )
 
 
@@ -349,6 +356,13 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
         'You are resuming this job in a fresh sandbox; the earlier sandbox is gone. Continue from where the work '
         f'stands rather than starting over. The previous run ended as "{last.get("status")}".'
     ]
+    start = job.get('resume_from')
+    if start:
+        parts.append(
+            f'The user chose to continue from version {start["number"]}, saved at step {start["step"]} of '
+            f'{start["run"]} ({start["description"]}). Your outputs and notes.md are as they were then; anything '
+            'done after that version was set aside. Check what that version still needs before you change it.'
+        )
     check = last.get('final_check') or {}
     if check.get('issues'):
         parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in check['issues'][:20]))
@@ -374,7 +388,7 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
 
 def shown_issues(issues: list[str], limit: int = 10) -> list[str]:
     more = len(issues) - limit
-    return issues[:limit] + ([f'... and {more} more; see the run record.'] if more > 0 else [])
+    return issues[:limit] + ([f'... and {more} more.'] if more > 0 else [])
 
 
 def _asked(q: dict) -> str:
@@ -443,6 +457,9 @@ class SandboxEngine:
         spec = await asyncio.to_thread(job_spec, store, store.get(job_id))
 
         def on_event(name: str, data: dict):
+            if name == 'run.progress':  # how far the run has got, on the job for the screen; not a feed line
+                store.update(job_id, progress={**data, 'run': attempt})
+                return
             message = MESSAGES.get(name)
             text = message(data) if message is not None else None
             if text:
@@ -547,6 +564,9 @@ class SandboxEngine:
                 max_turns=options['max_turns'],
                 max_tokens=max_tokens,
                 condense_at=options['condense_at_thousands'] * 1000,
+                look_before_finish=options['look_before_finish'],
+                versions=root / 'versions',
+                versions_kept=options['versions_kept'],
                 timeout_seconds=options['time_limit_minutes'] * 60,
                 echo=lambda _: None,
             )
@@ -567,7 +587,11 @@ class SandboxEngine:
     def settle(self, job_id: str, record: dict, waiting: bool):
         store = self.store
         check = record.get('final_check') or {}
-        summary = (record.get('summary') or {}).get('summary', '')
+        final_report = finish.from_answer(record.get('summary'))
+        # The line the run screen shows until it shows the whole report (plan Step 27): the headline, then what to check.
+        summary = (final_report or {}).get('headline', '')
+        if (final_report or {}).get('to_check'):
+            summary += ' Check before sending: ' + ' '.join(final_report['to_check'])
         unresolved = (record.get('summary') or {}).get('open_questions', [])
         status = {
             'complete': 'completed',  # run_job already turns a complete claim with failing checks into partial
@@ -578,14 +602,17 @@ class SandboxEngine:
         }.get(record['status'], 'failed')
         if waiting:
             status = 'waiting'
-        error = clean(with_hint(record.get('error')) or '') or None
-        if status == 'partial' and error:
-            summary = (summary + '\n' if summary else '') + error
+        raw = clean(record.get('error') or '') or None  # kept for the Technical log
+        error = plain_errors.sentence(raw)
+        added = error if status == 'partial' and error else ''
         if status == 'partial' and check.get('issues'):
-            summary += '\nThe last check still lists problems; see the run record.'
+            left = check['issues']
+            added += '\nStill to fix: ' + ' '.join(left[:3]) + (f' ... and {len(left) - 3} more.' if len(left) > 3 else '')
+        added = added.strip()
+        summary = '\n'.join(part for part in (summary, added) if part)
         if status in ('completed', 'partial'):
-            report = summary + ('\n' + '\n'.join(unresolved) if unresolved else '')
-            (store.path(job_id) / 'outputs' / 'processing_summary.txt').write_text(report, encoding='utf-8')
+            text = finish.as_text(final_report, unresolved, added)
+            (store.path(job_id) / 'outputs' / 'processing_summary.txt').write_text(text, encoding='utf-8')
         tokens = record.get('usage') or {}
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
         reviews = record.get('reviews') or []
@@ -601,9 +628,11 @@ class SandboxEngine:
             if check
             else None,
             'error': error if status in ('failed', 'paused') else None,
+            'error_detail': raw,
             'cut_short': record.get('cut_short'),  # turns, tokens, day, time or service: the agent did not finish
             'artifacts': self.artifacts(job_id, status == 'completed'),
             'summary': summary,
+            'report': final_report,  # None for a run that ended without one; older runs have only the summary
             'unresolved': unresolved,
             'request_count': sum(p.get('requests', 0) for p in parts),
             'usage': {
@@ -627,6 +656,8 @@ class SandboxEngine:
             # A cancel the run did not see in time still wins; nothing the run reports overrides it.
             final['status'] = 'cancelled' if job['status'] == 'cancelled' else status
             job.update(updates, status=final['status'])
+            if record['status'] != 'failed':  # the version a run started from is said once, by a run that got going
+                job.pop('resume_from', None)
             if final['status'] != 'waiting':
                 job['question'] = None
             # Steps given too late for this run to take go no further; a paused or waiting run takes them on restart.
@@ -663,4 +694,5 @@ class SandboxEngine:
         message = {'failed': error or 'The run failed.', 'waiting': 'Waiting for your answer.'}.get(
             final['status'], final.get('summary', summary)
         )
-        store.event(job_id, 'job.' + final['status'], message or final['status'], type='job', level=level)
+        detail = {'raw': raw} if raw and final['status'] in ('failed', 'paused', 'partial') else {}
+        store.event(job_id, 'job.' + final['status'], message or final['status'], type='job', level=level, **detail)

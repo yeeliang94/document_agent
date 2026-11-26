@@ -44,6 +44,10 @@ def _run_options(parser: argparse.ArgumentParser):
     parser.add_argument('--max-turns', type=int, default=60)
     parser.add_argument('--timeout', type=int, default=1800, help='seconds')
     parser.add_argument('--memory', default='4g', choices=['1g', '4g', '16g', '64g'])
+    parser.add_argument(
+        '--look', action=argparse.BooleanOptionalAction, default=True,
+        help='--no-look: no pictures of the files on the first passing save, to compare',
+    )  # fmt: skip
 
 
 def _options(args) -> dict:
@@ -56,6 +60,7 @@ def _options(args) -> dict:
         'effort': args.effort,
         'scout_model': args.scout_model,
         'memory': args.memory,
+        'look_before_finish': args.look,
     }
 
 

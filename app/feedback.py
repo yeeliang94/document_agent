@@ -30,7 +30,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 
-from . import preview
+from . import clients, preview, versioned
 from .cleaning import now
 from .engine.checks import DOCUMENT_MAP, PROVENANCE
 from .files import within
@@ -245,7 +245,7 @@ def pin_pictures(root: Path, number: int, entries: list[dict]) -> dict[str, byte
     return made
 
 
-def round_message(number: int, entries: list[dict], lessons: bool = False) -> str:
+def round_message(number: int, entries: list[dict], lessons: bool = False, client: str = '') -> str:
     """The comments as the agent reads them: one line each, with its file, its spot, what is there now and what the
     user wrote. What comes from a file or from the user is quoted, so it can only ever be read as content."""
     lines = [
@@ -263,6 +263,12 @@ def round_message(number: int, entries: list[dict], lessons: bool = False) -> st
             'example where the comment gives one. A fix that is only about this '
             'file is not a lesson, and most comments are just fixes.'
         )
+        if client:
+            lines[0] += (
+                f' Say where the rule belongs: scope "client" when it is about how {client} wants things, '
+                '"playbook" when anyone doing this kind of work should follow it. Where the comment says where it '
+                'is remembered, that place is used.'
+            )
     if any(entry.get('picture') for entry in entries):
         lines[0] += (
             ' The pictures that come with this message show where the pins are. They are for you to look at; they '
@@ -298,7 +304,8 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
     playbook; nothing is queued then and nothing is left behind."""
     root = store.path(job_id)
     entries = [
-        {'n': n, **spot, 'text': comment['text'].strip(), 'remember': bool(comment.get('remember'))}
+        {'n': n, **spot, 'text': comment['text'].strip(), 'remember': bool(comment.get('remember')),
+         'remember_to': comment.get('remember_to')}
         for n, (spot, comment) in enumerate(zip(locate(root, comments), comments, strict=True), 1)
     ]
     claim = {}
@@ -325,12 +332,15 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
             (folder / 'pins').mkdir(exist_ok=True)
             (folder / 'pins' / name).write_bytes(data)
         # A job with a playbook can keep a lesson (app/lessons.py); the message says so only then.
-        message = round_message(number, entries, lessons=bool((job.get('playbook') or {}).get('id')))
+        message = round_message(number, entries, lessons=bool((job.get('playbook') or {}).get('id')),
+                                client=(job.get('client') or {}).get('name', ''))
         record = {'id': round_id, 'number': number, 'created_at': now(), 'comments': entries, 'message': message,
                   'pictures': sorted(pictures), 'remembered_version': None}  # fmt: skip
         (folder / 'round.json').write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding='utf-8')
         # Last, because it is the one step that reaches outside this job.
-        record['remembered_version'] = version = _remember(store, job, round_id, number, entries)
+        kept = _remember(store, job, round_id, number, entries)
+        record['remembered_version'] = version = kept.get('playbook')
+        record['remembered_client_version'] = client_version = kept.get('client')
         (folder / 'round.json').write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding='utf-8')
     except Exception as error:
         _drop(store, job_id, round_id, folder)
@@ -342,7 +352,7 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
 
     def send(job):
         entry = next(r for r in job['feedback'] if r['id'] == round_id)
-        entry.update(status='sent', remembered_version=version)
+        entry.update(status='sent', remembered_version=version, remembered_client_version=client_version)
         job['pending_messages'] = [*(job.get('pending_messages') or []), {'text': message, 'round': number, 'images': images}]  # fmt: skip
         sent.update(entry)
 
@@ -350,7 +360,8 @@ def create_round(store, job_id: str, round_id: str, comments: list[dict]) -> dic
     store.event(
         job_id, 'feedback.sent', f'{len(entries)} comment{"" if len(entries) == 1 else "s"} sent to the agent',
         type='user', round=number, round_id=round_id, remembered_version=version,
-        comments=[{k: e.get(k) for k in ('n', 'path', 'where', 'text', 'remember')} for e in entries],
+        remembered_client_version=client_version,
+        comments=[{k: e.get(k) for k in ('n', 'path', 'where', 'text', 'remember', 'remember_to')} for e in entries],
     )  # fmt: skip
     return sent
 
@@ -369,27 +380,37 @@ def recover(store, job: dict) -> None:
             store.event(job['id'], 'feedback.dropped', 'Comments that were being saved when the app stopped were not sent. Send them again.', type='job', level='WARN', round=entry['number'])  # fmt: skip
 
 
-def _remember(store, job: dict, round_id: str, number: int, entries: list[dict]) -> int | None:
-    """Add the comments marked "remember" to the job's playbook as one new version; returns its number. A round
-    remembered once is never added twice."""
-    lines = [e['text'] for e in entries if e['remember']]
-    if not lines:
-        return None
-    playbook_id = (job.get('playbook') or {}).get('id') or job.get('module') or ''
+def _remember(store, job: dict, round_id: str, number: int, entries: list[dict]) -> dict:
+    """Add the comments marked "remember" to where each is kept: the job's playbook (the default) or its client's
+    notes, one new version for each. Returns {"playbook": version, "client": version}, each only when added to. A
+    round remembered once is never added twice. Every place is checked before any is written, so a round that
+    cannot be kept in one place changes neither."""
+    plan = {}
+    for scope in clients.SCOPES:
+        lines = [e['text'] for e in entries if e['remember'] and (e.get('remember_to') or 'playbook') == scope]
+        if not lines:
+            continue
+        place = clients.where(store, job, scope)
+        if not place:
+            raise ValueError('This run has no client, so a comment can only be remembered in the playbook')
+        books, target = place
+        try:
+            latest, history = books.get(target), books.versions(target)
+        except KeyError:
+            raise ValueError(f"This run's {books.label} no longer exists, so a comment cannot be remembered") from None
+        # Found again by the job and the round's own id, not its number: a round cut off after this saved and sent
+        # again is given a new number, and must still not add the same text twice.
+        earlier = next((v for v in history if (v['detail'].get('job_id'), v['detail'].get('round_id')) == (job['id'], round_id)), None)  # fmt: skip
+        if not earlier and len(latest['text'].rstrip()) + 2 + len('\n\n'.join(lines)) > versioned.MAX_TEXT:
+            raise ValueError(f'The {books.text} of {latest["name"]} would pass {versioned.MAX_TEXT:,} characters. Shorten them first.')  # fmt: skip
+        plan[scope] = (books, target, lines, earlier)
     detail = {'job_id': job['id'], 'round': number, 'round_id': round_id}
-    # Found again by the job and the round's own id, not its number: a round cut off after this saved and sent
-    # again is given a new number, and must still not add the same instructions twice.
-    same = lambda d: (d.get('job_id'), d.get('round_id')) == (job['id'], round_id)  # noqa: E731
-    try:
-        earlier = next((v for v in store.playbooks.versions(playbook_id) if same(v['detail'])), None)
-        if earlier:
-            return earlier['version']
-        saved = store.playbooks.save(
-            playbook_id, '\n\n'.join(lines), 'remembered', ' '.join(lines), append=True, **detail
-        )
-    except KeyError:
-        raise ValueError("This run's playbook no longer exists, so a comment cannot be remembered") from None
-    return saved['version']
+    found = {}
+    for scope, (books, target, lines, earlier) in plan.items():
+        found[scope] = earlier['version'] if earlier else books.save(
+            target, '\n\n'.join(lines), 'remembered', ' '.join(lines), append=True, **detail
+        )['version']  # fmt: skip
+    return found
 
 
 def rounds(store, job_id: str) -> list[dict]:
@@ -402,7 +423,7 @@ def rounds(store, job_id: str) -> list[dict]:
         except (OSError, ValueError):
             continue  # still being saved
         report = folder / 'report.json'
-        learned = {k: entry[k] for k in ('learned_version', 'learned') if k in entry}  # see app/lessons.py
+        learned = {k: entry[k] for k in ('learned_version', 'learned_client_version', 'learned') if k in entry}  # see app/lessons.py
         found.append({**record, **learned, 'status': entry['status'], 'report': json.loads(report.read_text(encoding='utf-8')) if report.exists() else None})  # fmt: skip
     return found
 

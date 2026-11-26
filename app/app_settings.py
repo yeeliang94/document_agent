@@ -50,6 +50,9 @@ OPTIONS = {
     'daily_token_limit_thousands': Option(30000, 'Token limit per day, all runs (thousands)', low=0, high=500000),
     # OpenAI condenses the older history once a request reaches this size; tried live at 20 (see PLAN-IMPROVEMENTS).
     'condense_at_thousands': Option(200, 'Condense history at (thousands of tokens, 0 for never)', low=0, high=1000),
+    # The first save that passes also shows the agent pictures of its deliverables (about 1,000-2,000 tokens each).
+    'look_before_finish': Option(True, 'Show the agent its files before it finishes'),
+    'versions_kept': Option(20, 'Versions kept per run', low=1, high=100),  # a copy of the outputs at each save
     'question_wait_minutes': Option(10, 'Minutes to hold the sandbox while a question waits', low=1, high=18),
     'replay_tests': Option('large', 'Check playbook changes against past corrections', ('never', 'large', 'every')),
     'litellm_provider': Option('', 'LiteLLM provider header', pattern=r'[A-Za-z0-9_.-]{0,64}'),

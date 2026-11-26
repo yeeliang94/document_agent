@@ -16,6 +16,14 @@ def _skill_line(skill: dict) -> str:
     return f'- {skill["name"]}: {skill["description"]}' + (f' Programs: {", ".join(held)}.' if held else '')
 
 
+def _style_call(remote: dict[str, str], name: str, format_path: str = '') -> str:
+    """The line of code that runs the house-style helper on one output, with its format when it has one."""
+    folder = remote['house_style.py'].rsplit('/', 1)[0]
+    extra = f", '{format_path}'" if format_path else ''
+    return (f"import sys; sys.path.insert(0, '{folder}'); from house_style import apply; "
+            f"apply('/mnt/data/outputs/{name}'{extra})")  # fmt: skip
+
+
 def goal_card(job: JobSpec, remote: dict[str, str], proof: str) -> str:
     """remote maps each input file name to its path in the sandbox."""
     # A job made from a playbook follows its text exactly, empty included; the built-in rules are for the rest.
@@ -23,6 +31,19 @@ def goal_card(job: JobSpec, remote: dict[str, str], proof: str) -> str:
     parts = [f'# Goal\n{job.goal}']
     if context:
         parts.append(f'# House rules for {job.playbook or job.module}\n{context}')
+    if job.client:
+        parts.append(
+            f"# Client notes for {job.client}\nThe user's standing notes for this client, for all their work. They "
+            'apply the way the house rules do. Where they and the house rules disagree, follow the client notes and '
+            'say in notes.md which rule you followed and why.\n' + (job.client_notes.strip() or '(No notes yet.)')
+        )
+    elif job.known_clients:
+        parts.append(
+            '# Known clients\nThe user keeps notes for these clients: ' + ', '.join(job.known_clients) + '. No client '
+            'was chosen for this run. If the documents clearly belong to one of them, call ask_user once to ask '
+            "whether this run is for that client; if the user says yes, call follow_client with its name to get its "
+            'notes, which then apply as if the client had been chosen at the start. Do not ask otherwise.'
+        )
     if job.skills:
         parts.append(
             "# Skills\nThe user's written know-how for this kind of work. It applies the way the house rules do. "
@@ -47,6 +68,12 @@ def goal_card(job: JobSpec, remote: dict[str, str], proof: str) -> str:
             'and figures, a document for something to read, more than one file when the goal has more than one '
             'part. Give each file a clear name and save it under /mnt/data/outputs/. Say in notes.md which files you '
             'made and why in that form.'
+            + (
+                ' To give a workbook you build a plain, tidy look (header row, number and date formats, widths), '
+                f'run {_style_call(remote, "<file>.xlsx")}.'
+                if 'house_style.py' in remote
+                else ''
+            )
             + (
                 ' In a workbook you build, put the headings in the first row of each sheet: every filled row below '
                 'it counts as a row you wrote, and needs its sources in provenance.json.'
@@ -73,6 +100,12 @@ def goal_card(job: JobSpec, remote: dict[str, str], proof: str) -> str:
                 f'## {d.name}\nA new workbook built to this format (full specification: {remote[d.format_path.name]}):\n'
                 + describe_format(d.format)
                 + ('\n' + '\n'.join(job_rules) if job_rules else '')
+                + (
+                    '\nOnce the data is in, give it its look with the house-style helper: '
+                    + _style_call(remote, d.name, remote[d.format_path.name])
+                    if 'house_style.py' in remote
+                    else ''
+                )
             )
     done = [
         'Every deliverable above is saved and save_outputs reports no problems.'

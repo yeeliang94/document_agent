@@ -14,9 +14,7 @@ from itertools import chain
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.styles.numbers import is_date_format
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.datetime import from_excel
 
 from . import cell_format, formula_calc
 from .engine.checks import PROVENANCE, parse_rows
@@ -85,7 +83,7 @@ def _sheet(path: Path, wanted: str | None) -> dict:
             zip(values[title].iter_rows(**box), formulas[title].iter_rows(**box, values_only=True), strict=False), 1
         ):
             shown = [
-                _shown(cell, typed, calc, title, r, c) for c, (cell, typed) in enumerate(zip(a, b, strict=False), 1)
+                formula_calc.shown_value(cell, typed, calc, title, r, c) for c, (cell, typed) in enumerate(zip(a, b, strict=False), 1)
             ]
             rows.append([_cell(value) for value, _ in shown])
             looks.append([_look(cell, styles, *pair) for cell, pair in zip(a, shown, strict=False)])
@@ -110,23 +108,6 @@ def _sheet(path: Path, wanted: str | None) -> dict:
         'more': more,
         **_columns(rows),
     }
-
-
-def _shown(cell, typed, calc: 'formula_calc.Calculator', sheet: str, row: int, col: int) -> tuple:
-    """A cell's value as Excel shows it, and its formula when the preview worked the value out itself."""
-    if cell.value is not None or not (isinstance(typed, str) and typed.startswith('=')):
-        return (cell.value if cell.value is not None else typed), None
-    try:
-        value = calc.result(sheet, row, col)
-    except Exception:  # noqa: BLE001 - a formula the calculator cannot work out keeps its text, and never stops the preview
-        return typed, None
-    code = getattr(cell, 'number_format', None)
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and code and is_date_format(code):
-        try:
-            value = from_excel(value)  # a date sum like =B2+30 comes out as a day number
-        except (ValueError, OverflowError):
-            pass
-    return value, typed
 
 
 def _look(cell, styles: 'cell_format.Styles', value, formula: str | None) -> dict:

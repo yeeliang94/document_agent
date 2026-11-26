@@ -5,7 +5,7 @@ and, depending on the Settings page, replayed (app/replay.py). Replays are ordin
 
 import asyncio
 
-from . import cases, curator, feedback, jobstatus, replay, tidy
+from . import cases, curator, feedback, jobstatus, plain_errors, replay, tidy
 from .config import Settings
 from .engine.agent import MAX_QUESTIONS
 from .engine.service import SandboxEngine
@@ -226,5 +226,7 @@ class Runner:
             ) from error
 
     def fail(self, job_id, message, error_type):
-        self.store.update(job_id, status='failed', error=message, artifacts=self.engine.artifacts(job_id, False))
-        self.store.event(job_id, 'job.failed', message, level='ERROR', type='job', error_type=error_type)
+        plain = plain_errors.sentence(f'{error_type}: {message}')  # the raw text stays in the Technical log
+        self.store.update(job_id, status='failed', error=plain, error_detail=message,
+                          artifacts=self.engine.artifacts(job_id, False))  # fmt: skip
+        self.store.event(job_id, 'job.failed', plain, level='ERROR', type='job', error_type=error_type, raw=message)

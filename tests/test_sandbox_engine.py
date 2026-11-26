@@ -15,8 +15,9 @@ import app.main as main_module
 from app.config import Settings
 from app.engine import service
 from app.engine.runstore import RunStore
-from app.engine.service import AppControl, resume_card, with_hint
+from app.engine.service import AppControl, resume_card
 from app.main import create_app
+from app.plain_errors import sentence
 from app.store import Store
 
 from helpers import LOCAL, create_job, wait_for_job
@@ -347,10 +348,10 @@ def test_failures_explain_the_proxy_region_and_permission_errors(tmp_path, monke
         failed = wait_for_job(client, job['id'])
         assert failed['status'] == 'failed' and 'different regions' in failed['error']
         assert failed['engine_check'] is None  # never checked, so no green pills
-    assert 'allow the /v1/containers routes' in with_hint('PermissionDeniedError: Error code: 403')
-    assert with_hint('something else') == 'something else'
+    assert 'allow the /v1/containers routes' in sentence('PermissionDeniedError: Error code: 403')
+    assert sentence('something else').startswith('The run stopped because of an unexpected error.')
     missing = "NotFoundError: Error code: 404 - Item with id 'ci_0134039a' not found."
-    assert with_hint(missing) == missing  # a 403 inside an item id is not a refusal
+    assert 'containers routes' not in sentence(missing)  # a 403 inside an item id is not a refusal
 
 
 def test_a_partial_run_keeps_its_workbook_as_a_draft(tmp_path, monkeypatch):
@@ -362,7 +363,7 @@ def test_a_partial_run_keeps_its_workbook_as_a_draft(tmp_path, monkeypatch):
     with client_for(tmp_path) as client:
         job = start_sandbox_job(client)
         done = wait_for_job(client, job['id'])
-        assert done['status'] == 'partial' and 'turn limit' in done['summary']
+        assert done['status'] == 'partial' and 'The run used all its steps.' in done['summary']
         assert next(a for a in done['artifacts'] if a['name'] == 'template_output.xlsx')['status'] == 'draft'
 
 
@@ -375,7 +376,7 @@ def test_a_limit_stop_is_partial_and_can_continue(tmp_path, monkeypatch):
     with client_for(tmp_path) as client:
         job = start_sandbox_job(client)
         done = wait_for_job(client, job['id'])
-        assert done['status'] == 'partial' and 'token limit' in done['summary']
+        assert done['status'] == 'partial' and 'all the AI usage it was allowed' in done['summary']
         assert (tmp_path / 'jobs' / job['id'] / 'outputs' / 'processing_summary.txt').exists()
 
 
@@ -667,9 +668,9 @@ def test_a_run_that_crashes_or_was_cut_off_by_a_restart_is_kept_for_resuming(tmp
     with client_for(tmp_path) as client:
         job = start_sandbox_job(client)
         failed = wait_for_job(client, job['id'])
-        assert (
-            failed['status'] == 'failed' and 'sandbox vanished' in failed['error'] and 'sk-abc' not in failed['error']
-        )
+        # A plain sentence on the screen; the raw text, with any secret taken out, for the Technical log.
+        assert failed['status'] == 'failed' and failed['error'].startswith('The run stopped because of an unexpected')
+        assert 'sandbox vanished' in failed['error_detail'] and 'sk-abc' not in failed['error_detail']
         assert [a['name'] for a in failed['artifacts']] == ['notes.md', 'template_output.xlsx']  # drafts are kept
         wait_for_runner_idle(client)
         client.app.state.store.update(job['id'], status='running')  # as if the app stopped mid-run

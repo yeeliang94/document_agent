@@ -12,18 +12,20 @@ import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 
-from . import app_settings, cases, feedback, jobstatus, preview, replay, tuning
+from . import app_settings, cases, feedback, jobstatus, plain_errors, preview, replay, tuning
 from .config import ROOT, Settings, settings
+from .engine import versions
 from .engine.agent import UPLOAD_LIMIT
 from .engine.checks import normal_decision, read_map
 from .engine.rules import check_format_definition
@@ -101,6 +103,11 @@ def create_app(settings_override: Settings | None = None):
                 if not hmac.compare_digest(token.encode(), conf.access_token.encode()):
                     return JSONResponse({'detail': 'Access token required.'}, 401)
         return await call_next(request)
+
+    @api.exception_handler(RequestValidationError)
+    async def form_error(request: Request, error: RequestValidationError):
+        """A value the form or address got wrong, as a sentence the page can show beside it."""
+        return JSONResponse({'detail': plain_errors.field_errors(error.errors())}, 422)
 
     def get(job_id):
         try:
@@ -282,6 +289,68 @@ def create_app(settings_override: Settings | None = None):
             return playbook_call(lambda: playbooks.recent(playbook_id, recent))
         return playbook_call(lambda: (playbooks.get(playbook_id), playbooks.events(playbook_id, after))[1])
 
+    clients = store.clients
+
+    class ClientInput(BaseModel):
+        name: str = Field(max_length=MAX_NAME * 2)
+        notes: str = Field(default='', max_length=MAX_TEXT_CHARS)
+
+    class SuggestInput(BaseModel):
+        paths: list[str] = Field(max_length=5000)  # the chosen folder and file names, as the browser has them
+
+    def client_call(action):
+        """Run one client action, turning its refusals into answers the screen can show."""
+        try:
+            return action()
+        except KeyError:
+            raise HTTPException(404, 'Client or version not found') from None
+        except StaleVersion as error:
+            raise HTTPException(409, {'message': str(error), 'version': error.current}) from None
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+
+    @api.get('/api/clients')
+    def client_list():
+        return clients.list()
+
+    @api.post('/api/clients', status_code=201)
+    def client_create(body: ClientInput):
+        return client_call(lambda: clients.create(body.name, body.notes))
+
+    @api.post('/api/clients/suggest')
+    def client_suggest(body: SuggestInput):
+        """The client the chosen files point to, for the New run form to offer. It is only ever a suggestion."""
+        found = clients.suggest([p[:1000] for p in body.paths])
+        return {'client': {k: found[k] for k in ('id', 'name')} if found else None}
+
+    @api.get('/api/clients/{client_id}')
+    def client_get(client_id):
+        return client_call(lambda: clients.get(client_id))
+
+    @api.patch('/api/clients/{client_id}')
+    def client_rename(client_id, body: PlaybookInput):
+        return client_call(lambda: clients.rename(client_id, body.name))
+
+    @api.get('/api/clients/{client_id}/versions')
+    def client_versions(client_id):
+        return client_call(lambda: clients.versions(client_id))
+
+    @api.get('/api/clients/{client_id}/versions/{version}')
+    def client_version(client_id, version: int = Path(ge=1, le=MAX_VERSION)):
+        return client_call(lambda: clients.version(client_id, version))
+
+    @api.post('/api/clients/{client_id}/versions')
+    def client_save(client_id, body: VersionInput):
+        return client_call(lambda: clients.save(client_id, body.text, 'edited', based_on=body.based_on))
+
+    @api.post('/api/clients/{client_id}/restore')
+    def client_restore(client_id, body: RestoreInput):
+        return client_call(lambda: clients.restore(client_id, body.version, body.based_on))
+
+    @api.get('/api/clients/{client_id}/events')
+    def client_events(client_id, recent: int = Query(100, ge=1, le=500)):
+        return client_call(lambda: clients.recent(client_id, recent))
+
     class SettingsInput(BaseModel):
         values: dict = Field(default_factory=dict)
 
@@ -315,6 +384,7 @@ def create_app(settings_override: Settings | None = None):
         period: str = Form(''),  # optional: a reporting month, for work that has one
         instructions: str = Form(''),
         context: str = Form(''),
+        client_id: str = Form(''),  # optional: the client whose notes the run follows on top of its playbook
         template: UploadFile | None = File(None),  # optional: a workbook to fill, or a written format
         files: list[UploadFile] = File(...),
     ):
@@ -322,6 +392,10 @@ def create_app(settings_override: Settings | None = None):
             playbook = playbooks.get(playbook_id)
         except KeyError:
             raise HTTPException(400, 'Unknown playbook') from None
+        try:
+            client = clients.get(client_id) if client_id else None
+        except KeyError:
+            raise HTTPException(400, 'Unknown client') from None
         if period and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', period):
             raise HTTPException(400, 'Use a reporting month in YYYY-MM format')
         # A run fills an .xlsx template or builds a workbook from a written format (.json, see app/engine/rules.py).
@@ -349,6 +423,10 @@ def create_app(settings_override: Settings | None = None):
             skills = await asyncio.to_thread(
                 playbooks.skills.copy_to_job, playbook['id'], store.path(job_id) / 'skills'
             )
+            # Like the playbook's text, the client's notes are copied now, so a later edit never changes this run.
+            if client:
+                following = {'id': client['id'], 'name': client['name'], 'version': client['version']}
+                store.update(job_id, client=following, client_notes=client['text'])
             store.update(job_id, files=manifest, skills=skills)
             store.event(
                 job_id,
@@ -358,6 +436,7 @@ def create_app(settings_override: Settings | None = None):
                 files=manifest,
                 playbook=used,
                 skills=skills,
+                client=client and client['name'],
             )
             return store.get(job_id)
         except Exception as error:
@@ -609,6 +688,48 @@ def create_app(settings_override: Settings | None = None):
         store.event(job_id, 'user.more_steps', f'Gave the agent {added} more steps', type='user', added=added)
         return get(job_id)
 
+    @api.get('/api/jobs/{job_id}/versions')
+    def job_versions(job_id):
+        """The outputs kept at each save of every run of this job, newest first."""
+        get(job_id)
+        return {'versions': versions.listed(store.path(job_id) / 'versions')}
+
+    @api.post('/api/jobs/{job_id}/versions/{number}/continue')
+    async def continue_from(job_id, number: int = Path(ge=1, le=MAX_VERSION)):
+        """Make one kept version the outputs again and start a run that carries on from it in a fresh sandbox."""
+        get(job_id)
+        if not conf.api_key:
+            raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
+        if store.day_used_up():
+            raise HTTPException(409, DAY_USED_UP)
+        before = {}
+
+        def claim(job):  # in one write with the check, so a second click or a Start cannot run alongside
+            if job['status'] not in jobstatus.STARTABLE | {'completed'} or job.get('legacy'):
+                before['refused'] = 'Stop the run before continuing from a version.'
+            elif runner.active == job_id:
+                before['refused'] = 'The previous operation is still finishing'
+            else:
+                before['status'] = job['status']
+                job['status'] = 'queued'
+
+        store.mutate(job_id, claim)
+        if 'refused' in before:
+            raise HTTPException(409, before['refused'])
+        root = store.path(job_id)
+        try:
+            version = await asyncio.to_thread(versions.restore, root / 'versions', number, root / 'outputs')
+        except (KeyError, OSError) as error:
+            store.update(job_id, status=before['status'])
+            if isinstance(error, KeyError):
+                raise HTTPException(404, 'That version is no longer kept.') from None
+            raise HTTPException(409, plain_errors.sentence(error)) from None
+        store.update(job_id, resume_from=version, error=None, artifacts=runner.engine.artifacts(job_id, False))
+        store.event(job_id, 'user.continue_from', f'Continuing from version {number}: {version["description"]}',
+                    type='user', version=number)  # fmt: skip
+        await runner.enqueue(job_id)
+        return get(job_id)
+
     # Synchronous handlers run in the threadpool, so file and SQLite waits never block the event loop.
     class CommentInput(BaseModel):
         """One comment and the spot it points at: a cell on a sheet, a place on a page or picture, or a line."""
@@ -616,6 +737,9 @@ def create_app(settings_override: Settings | None = None):
         path: str = Field(max_length=1000)
         text: str = Field(min_length=1, max_length=feedback.MAX_TEXT)
         remember: bool = False
+        # Where a lesson from this comment is kept: for this client only, or in the playbook for everyone. Unset,
+        # a remembered comment goes to the playbook and the agent proposes a place for a lesson it takes.
+        remember_to: Literal['client', 'playbook'] | None = None
         sheet: str | None = Field(default=None, max_length=200)
         cell: str | None = Field(default=None, max_length=25)  # one cell, or a block such as C3:E5
         page: int | None = Field(default=None, ge=1, le=100_000)
@@ -838,7 +962,8 @@ def create_app(settings_override: Settings | None = None):
                 'usage': response.usage.model_dump() if response.usage else None,
             }
         except Exception as error:
-            raise HTTPException(502, clean(str(error))) from None
+            raw = clean(f'{type(error).__name__}: {error}')
+            raise HTTPException(502, {'message': plain_errors.sentence(raw), 'raw': raw}) from None
 
     api.mount('/', Frontend(directory=ROOT / 'web', html=True), name='frontend')
     return api
