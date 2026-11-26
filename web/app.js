@@ -7,7 +7,7 @@ import {
 } from './core.js'; // prettier-ignore
 import {
   MAX_BLOCK, blockCells, chooseRemember, columnName, commentAction, commenting, dropComment, editPin, forget, keepComment,
-  loadRounds, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
+  loadRounds, placePop, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
 } from './comments.js'; // prettier-ignore
 import {
   chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, offerHtml, offerLocal, offerServer,
@@ -941,6 +941,7 @@ function leaveFullWhenNarrow() {
 }
 narrow.addEventListener('change', leaveFullWhenNarrow);
 addEventListener('resize', leaveFullWhenNarrow);
+addEventListener('resize', placePop); // the comment box keeps beside its spot, or becomes a sheet below 560 wide
 
 document.addEventListener('input', (e) => {
   const { id, value } = e.target;

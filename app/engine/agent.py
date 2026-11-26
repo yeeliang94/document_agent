@@ -688,7 +688,8 @@ class CommentAnswer(BaseModel):
     answer: str = Field(
         description='One or two plain sentences the user reads under their comment: what you changed (e.g. '
         '"Changed Payroll!E3 from 4,200.00 to 4,560.00, adding the overtime in timesheet_march.pdf."), or why you '
-        'left the spot as it was.'
+        'left the spot as it was. For a comment on a file you were given, which is a note or a question: what you did '
+        'with the note, or the answer to the question.'
     )
 
 

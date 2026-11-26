@@ -103,9 +103,14 @@ export function threadItems() {
     } else if (e.name === 'feedback.sent') push({ kind: 'round', ...base, event: e });
     else if (e.name === 'feedback.done') {
       // What the agent's work did to the spots the comments pointed at, once it has finished.
+      // Notes and questions on uploaded files are answered, not changed, so they are counted apart.
       const asked = e.changed + e.unchanged;
-      const also = e.elsewhere ? ` ${plural(e.elsewhere, 'other change')} in the files.` : '';
-      push({ kind: 'note', ...base, text: `Changed ${e.changed} of ${plural(asked, 'commented spot')}.${also}` });
+      const said = [
+        asked ? `Changed ${e.changed} of ${plural(asked, 'commented spot')}.` : '',
+        e.notes ? `${plural(e.notes, 'note')} on ${e.notes > 1 ? 'uploaded files' : 'an uploaded file'}.` : '',
+        e.elsewhere ? `${plural(e.elsewhere, 'other change')} in the files.` : '',
+      ];
+      push({ kind: 'note', ...base, text: said.filter(Boolean).join(' ') });
     } else if (e.name === 'lesson.saved') push({ kind: 'learned', ...base, lesson: e.lesson, version: e.version, scope: e.scope || 'playbook' });
     else if (e.name === 'user.more_steps') push({ kind: 'note', ...base, text: `Gave the agent ${e.added} more steps.` });
     else if (['user.continue_from', 'user.start_over'].includes(e.name)) push({ kind: 'note', ...base, text: e.message + '.' });
