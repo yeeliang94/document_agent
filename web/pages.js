@@ -88,11 +88,13 @@ export function settingsPage() {
   const limits = panel(
     'Limits',
     row('Turn limit per run', number('max_turns')) +
+      row('Steps added by "More steps"', number('more_steps')) +
       row('Time limit per run (minutes)', number('time_limit_minutes')) +
       row('Token limit per run (thousands)', number('token_limit_thousands')) +
       row('Token limit per day, all runs (thousands, 0 for none)', number('daily_token_limit_thousands')) +
       row('Used today (thousands)', `<span class="value">${Math.round((state.settings.tokens_today || 0) / 1000).toLocaleString()}</span>`) +
       row('Hold sandbox for an answer (minutes)', number('question_wait_minutes')) +
+      row('Condense history at (thousands of tokens, 0 for never)', number('condense_at_thousands')) +
       row('Sandbox memory', select('sandbox_memory', { '1g': '1 GB', '4g': '4 GB', '16g': '16 GB' })),
   );
   const link =

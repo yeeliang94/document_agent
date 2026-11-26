@@ -93,7 +93,7 @@ def drive(monkeypatch, runs, prompt=None):
     store = SimpleNamespace(event=lambda name, **kw: events.append((name, kw)))
     job = agent.Job(settings=None, store=store, spec=None, main=None, zip_path=None, files=[], scout_model='', effort='low',
                     max_scouts=0, answerer=None)  # fmt: skip
-    control = SimpleNamespace(stop_requested=lambda: None, new_messages=lambda: [])
+    control = SimpleNamespace(stop_requested=lambda: None, new_messages=lambda: [], more_turns=lambda: 0)
     conversation = prompt or [{'role': 'user', 'content': 'go'}, STEP, {'role': 'user', 'content': 'carry on'}]
     result = asyncio.run(agent._drive(None, conversation, job, store, lambda *_: None, control))
     sent = [

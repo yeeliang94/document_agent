@@ -124,5 +124,14 @@ def test_the_main_run_goes_through_the_filter(monkeypatch):
 
     monkeypatch.setattr(agent.Runner, 'run_streamed', run_streamed)
     with pytest.raises(RuntimeError, match='stop here'):
-        asyncio.run(agent._drive(None, 'go', SimpleNamespace(max_turns=5, turns_used=0), None, None, None))
+        asyncio.run(
+            agent._drive(
+                None,
+                'go',
+                SimpleNamespace(max_turns=5, turns_used=0),
+                None,
+                None,
+                SimpleNamespace(more_turns=lambda: 0),
+            )
+        )
     assert seen['run_config'] is agent.RUN_CONFIG

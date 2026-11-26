@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `0%`
+**Overall Progress:** `30%` (Phases 1-2 built, not yet on screen: the warning card and "20 more steps" button come with the Batch screens)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -50,40 +50,43 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 
 ### Phase 1: The agent knows its limits (engine)
 
-- [ ] 🟥 **Step 1: Only describe tools the agent has** — the briefing mentions scouts only when scouts are switched on.
-  - [ ] 🟥 Build the scout line the way the source-proof line is already built
+- [x] 🟩 **Step 1: Only describe tools the agent has** — the briefing mentions scouts only when scouts are switched on.
+  - [x] 🟩 Build the scout line the way the source-proof line is already built
   - **Verify:** tests pass; a test reads the briefing with scouts at 0 and finds no mention of them.
 
-- [ ] 🟥 **Step 2: A warning before each limit** — at about 80% of the step, time or token limit the agent is told what is left and to save and note what is open.
-  - [ ] 🟥 One message per limit, sent once
-  - [ ] 🟥 An event the screen can show ("8 steps left")
+- [x] 🟩 **Step 2: A warning before each limit** — at about 80% of the step, time or token limit the agent is told what is left and to save and note what is open.
+  - [x] 🟩 One message per limit, sent once
+  - [x] 🟩 An event the screen can show ("8 steps left")
   - **Verify:** a test with a 10-step limit shows the warning reaching the agent at step 8 and a save before the cut.
 
-- [ ] 🟥 **Step 3: A passed run stays passed** — if a limit is hit during the follow-up checks after the work already passed, the run still ends as Finished.
+- [x] 🟩 **Step 3: A passed run stays passed** — if a limit is hit during the follow-up checks after the work already passed, the run still ends as Finished.
   - **Verify:** a test that hits the limit in the follow-up ends as Finished, not Partly done.
 
-- [ ] 🟥 **Step 4: The clock stops while a question waits** — time spent waiting for your answer no longer counts against the run's time limit.
-  - [ ] 🟥 The "no answer yet" reply tells the agent to write its findings to the notes and save before it ends
+- [x] 🟩 **Step 4: The clock stops while a question waits** — time spent waiting for your answer no longer counts against the run's time limit.
+  - [x] 🟩 The "no answer yet" reply tells the agent to write its findings to the notes and save before it ends
   - **Verify:** a test with a 1-minute limit and a 2-minute wait finishes normally once answered.
 
-- [ ] 🟥 **Step 5: More steps on request** — a paused or nearly finished run can be given 20 more steps.
-  - [ ] 🟥 One API route; the amount is a Settings value
+- [x] 🟩 **Step 5: More steps on request** — a paused or nearly finished run can be given 20 more steps.
+  - [x] 🟩 One API route; the amount is a Settings value
   - **Verify:** a test extends a run at its limit and it continues without restarting.
 
 ### Phase 2: A smaller context (engine)
 
-- [ ] 🟥 **Step 6: Try compaction against the real endpoint** — a long scripted run with compaction on, before building on it.
-  - [ ] 🟥 Confirm it triggers, with our settings and through the gateway
-  - [ ] 🟥 Record what the condensed history keeps and loses
+- [x] 🟩 **Step 6: Try compaction against the real endpoint** — a long scripted run with compaction on, before building on it.
+  - [x] 🟩 Confirm it triggers, with our settings and through the gateway
+  - [x] 🟩 Record what the condensed history keeps and loses
   - **Verify:** I report the result. If it does not trigger, we stop here and choose again; nothing else depends on it yet.
+  - **Result (2026-11-26, direct OpenAI, gpt-6-luna):** with a 20k trigger it condensed at about 23k tokens, twice in a 9-call run, and the next call fell to about 9k. A new run sent the whole list again (as the engine does after a message) and was billed about 16k, not 120k, so OpenAI honours the condensed item in a re-sent history. Kept: the facts the task named. Lost: other detail (a figure nobody asked about could not be recalled). Not tried: a LiteLLM gateway.
 
-- [ ] 🟥 **Step 7: Compaction with its trigger on the Settings page** — "Condense history at" with a tested default.
-  - [ ] 🟥 Setting, with a range; passed to every agent call
-  - [ ] 🟥 An event when it happens, shown in the Technical log
+- [x] 🟩 **Step 7: Compaction with its trigger on the Settings page** — "Condense history at" with a tested default.
+  - [x] 🟩 Setting, with a range; passed to every agent call
+  - [x] 🟩 An event when it happens, shown in the Technical log
   - **Verify:** change the value on Settings, start a run, and the Technical log shows the condense event at that size.
+  - **Result:** a live 12-file payroll run with the trigger at 20k condensed three times and finished passing. One reply can grow past the trigger on its own (many sandbox steps in one reply), so the log line gives no size.
 
-- [ ] 🟥 **Step 8: Notes as lasting memory** — one general line in the briefing: write findings and decisions to the notes as you go.
+- [x] 🟩 **Step 8: Notes as lasting memory** — one general line in the briefing: write findings and decisions to the notes as you go.
   - **Verify:** in a live run the notes file fills in during the run, not only at the end.
+  - **Result:** in the live run notes.md was saved at 2.5 minutes of 13, and at every save after.
 
 ### Phase 3: The agent sees its totals (engine)
 

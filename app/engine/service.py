@@ -68,13 +68,18 @@ MESSAGES = {
     # At the end of a model reply. Shown only when the stream did not already show it, and the script opened with a
     # comment saying what it is for.
     'code.ran': lambda d: None if d.get('shown') else d.get('summary'),
+    'limit.near': lambda d: f'{d.get("said")}. The agent is saving its work and writing down what is still open',
+    'limit.extended': lambda d: f'{d.get("added")} more steps given; the limit is now {d.get("max_turns")}',
+    'limit.after_pass': lambda d: 'A limit was reached after the work passed its checks; the checked result stands',
+    # No size: one reply can grow past the limit by itself, so the size it started at says little.
+    'history.condensed': lambda d: 'Condensed the older conversation to keep it small',
     'model.retry': lambda d: 'OpenAI dropped a reply; carrying on',
     'model.item_refused': lambda d: (
         'OpenAI could not find an earlier sandbox step; it is sent as a note and the run carries on'
     ),
     'model.unavailable': lambda d: 'The AI service stopped answering; saved work is kept',
 }
-WARNINGS = {'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable'}
+WARNINGS = {'limit.near', 'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable'}
 DAY_USED_UP = (
     "Today's token limit is used up. Saved work is kept. Continue tomorrow, or raise the limit on the Settings page."
 )
@@ -201,6 +206,19 @@ class AppControl(Control):
             else:
                 messages.append(item['text'])
         return messages
+
+    def more_turns(self) -> int:
+        if not self._current().get('more_turns'):
+            return 0
+        taken = []
+
+        def take(job):
+            taken.append(job.get('more_turns') or 0)
+            job['more_turns'] = 0
+
+        self.store.mutate(self.job_id, take)
+        self._job = {**self._job, 'more_turns': 0}
+        return taken[0]
 
     def interrupt_requested(self) -> bool:
         job = self._current()
@@ -479,8 +497,10 @@ class SandboxEngine:
                 raise
             control.waiting = True
             return (
-                'The user has not answered yet. End your turn now with status partial; the job resumes with their '
-                'answer in a fresh sandbox.'
+                'The user has not answered yet, and this sandbox will not be kept. The job resumes with their answer '
+                'in a fresh one, which starts from your saved outputs and notes.md. So first write in notes.md what '
+                'you found, what you decided and what is still open, and call save_outputs (problems it lists can '
+                'wait for the answer). Then end your turn with status partial.'
             )
 
         run_id = f'run-{attempt:02d}'
@@ -526,6 +546,7 @@ class SandboxEngine:
                 memory=options['sandbox_memory'],
                 max_turns=options['max_turns'],
                 max_tokens=max_tokens,
+                condense_at=options['condense_at_thousands'] * 1000,
                 timeout_seconds=options['time_limit_minutes'] * 60,
                 echo=lambda _: None,
             )
@@ -608,6 +629,9 @@ class SandboxEngine:
             job.update(updates, status=final['status'])
             if final['status'] != 'waiting':
                 job['question'] = None
+            # Steps given too late for this run to take go no further; a paused or waiting run takes them on restart.
+            if final['status'] not in ('paused', 'waiting'):
+                job.pop('more_turns', None)
             # A message that arrived after the agent's last turn was never read. The runner starts the job again for it
             # as soon as this run lets go (runtime.resume_if_answered), so the run ends as it is; only its lessons wait.
             if final['status'] in FINISHED and job.get('pending_messages'):

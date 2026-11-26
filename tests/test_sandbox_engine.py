@@ -14,6 +14,7 @@ from openpyxl import Workbook
 import app.main as main_module
 from app.config import Settings
 from app.engine import service
+from app.engine.runstore import RunStore
 from app.engine.service import AppControl, resume_card, with_hint
 from app.main import create_app
 from app.store import Store
@@ -229,7 +230,9 @@ def test_a_question_reaches_the_app_with_its_choices_and_evidence(tmp_path, monk
     evidence = [Evidence(value='4,200', file='HR/Reports/employees.txt', where='line 1')]
 
     async def behaviour(answerer, outputs, store=None, **_):
-        job = SimpleNamespace(store=SimpleNamespace(event=lambda *a, **k: None), answerer=answerer)
+        job = SimpleNamespace(
+            store=SimpleNamespace(event=lambda *a, **k: None), answerer=answerer, waits=0, clock=None, held=()
+        )
         reply = await ask(job, 'Which salary is right for EMP001?', choices, evidence)
         write_output(outputs)
         assert reply == 'Option 2'
@@ -257,6 +260,7 @@ def test_an_unanswered_question_parks_the_job_and_the_answer_resumes_it(tmp_path
         write_output(outputs)
         reply = await answerer.answer('Which salary is right for EMP001?')
         assert 'not answered yet' in reply and control.stop_requested() == 'waiting'
+        assert 'notes.md' in reply and 'save_outputs' in reply  # a fresh sandbox picks up from what was saved
         return finished(status='waiting')
 
     async def second(outputs, **_):
@@ -947,3 +951,62 @@ def test_a_file_sent_as_a_run_restarts_is_in_its_packet(tmp_path, monkeypatch):
             assert time.monotonic() < deadline, 'the second run never finished'
             time.sleep(0.02)
         assert 'HR/Added/late.csv' in zipfile.ZipFile(fake.calls[1].spec.zip).namelist()
+
+
+def test_more_steps_go_to_a_run_that_is_going_or_paused_and_are_taken_once(tmp_path):
+    store = Store(tmp_path)
+    job = store.create('payroll', '2026-10', 'x', 'y')
+    with client_for(tmp_path) as client:
+        url = f'/api/jobs/{job["id"]}/more-steps'
+        store.update(job['id'], status='completed')
+        refused = client.post(url)
+        assert refused.status_code == 409 and 'more steps' in refused.json()['detail']
+        store.update(job['id'], status='paused')
+        assert client.post(url).json()['more_turns'] == 20  # the Settings-page amount
+        assert client.put('/api/settings', json={'values': {'more_steps': 30}}).status_code == 200
+        assert client.post(url).json()['more_turns'] == 50
+        control = AppControl(client.app.state.store, job['id'])
+        assert control.more_turns() == 50 and control.more_turns() == 0  # given to the run once
+        assert any(e['name'] == 'user.more_steps' for e in client.get(f'/api/jobs/{job["id"]}/events').json())
+
+
+def test_condensing_is_asked_for_at_the_settings_size_and_noted_when_it_happens(tmp_path):
+    from app.engine import agent
+    from app.engine.service import MESSAGES
+
+    assert agent._settings('low', None, 150_000).context_management == [
+        {'type': 'compaction', 'compact_threshold': 150_000}
+    ]
+    assert agent._settings('low').context_management is None  # 0: never
+    store = RunStore(tmp_path)
+    usage = SimpleNamespace(input_tokens=23_000, output_tokens=10, input_tokens_details=None)
+    condensed = SimpleNamespace(
+        usage=usage, output=[SimpleNamespace(type='compaction'), SimpleNamespace(type='message')]
+    )
+    plain = SimpleNamespace(usage=usage, output=[SimpleNamespace(type='message')])
+    agent._record_calls(store, 'review', SimpleNamespace(raw_responses=[plain, condensed]))
+    lines = [json.loads(line) for line in (store.dir / 'events.jsonl').read_text().splitlines()]
+    [event] = [e for e in lines if e['event'] == 'history.condensed']
+    assert event['who'] == 'review' and event['input_tokens'] == 23_000
+    assert MESSAGES['history.condensed'](event) == 'Condensed the older conversation to keep it small'
+
+
+def test_every_setting_has_a_control_on_the_settings_page():
+    from pathlib import Path
+
+    from app.app_settings import OPTIONS
+
+    page = (Path(__file__).parent.parent / 'web' / 'pages.js').read_text(encoding='utf-8')
+    missing = [name for name in OPTIONS if f"'{name}'" not in page and f'"{name}"' not in page]
+    assert missing == [], f'Settings with no control on the Settings page: {missing}'
+
+
+def test_steps_given_too_late_for_a_run_do_not_carry_into_the_next(tmp_path):
+    store = Store(tmp_path)
+    engine = service.SandboxEngine(store, Settings())
+    for ended, kept in (('complete', None), ('paused', 20)):
+        job = store.create('payroll', '2026-10', 'x', 'y')
+        (store.path(job['id']) / 'outputs').mkdir(parents=True, exist_ok=True)
+        store.update(job['id'], status='running', more_turns=20)
+        engine.settle(job['id'], {'status': ended}, waiting=False)
+        assert store.get(job['id']).get('more_turns') == kept

@@ -590,6 +590,25 @@ def create_app(settings_override: Settings | None = None):
             store.event(job_id, 'user.interrupt', 'Stopping the current step to read your message', type='job')
         return get(job_id)
 
+    @api.post('/api/jobs/{job_id}/more-steps')
+    def more_steps(job_id):
+        """Give a run more steps (the amount is a Settings-page value). A run that is going takes them at its next
+        step and carries on in the same sandbox; a paused one takes them when it starts again."""
+        get(job_id)
+        added = store.settings()['more_steps']
+        given = []
+
+        def give(job):
+            if job['status'] in jobstatus.ACTIVE | {'waiting', 'paused'}:
+                job['more_turns'] = (job.get('more_turns') or 0) + added
+                given.append(True)
+
+        store.mutate(job_id, give)
+        if not given:
+            raise HTTPException(409, 'Only a run that is going or paused can be given more steps')
+        store.event(job_id, 'user.more_steps', f'Gave the agent {added} more steps', type='user', added=added)
+        return get(job_id)
+
     # Synchronous handlers run in the threadpool, so file and SQLite waits never block the event loop.
     class CommentInput(BaseModel):
         """One comment and the spot it points at: a cell on a sheet, a place on a page or picture, or a line."""

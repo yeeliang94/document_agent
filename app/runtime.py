@@ -7,6 +7,7 @@ import asyncio
 
 from . import cases, curator, feedback, jobstatus, replay, tidy
 from .config import Settings
+from .engine.agent import MAX_QUESTIONS
 from .engine.service import SandboxEngine
 from .store import Store, clean
 
@@ -207,8 +208,11 @@ class Runner:
 
     async def run_with_limit(self, job_id):
         # The engine stops itself at the Settings-page limit and saves; this outer limit is only a backstop.
-        minutes = self.store.settings()['time_limit_minutes']
-        deadline = asyncio.timeout(minutes * 60 + 300)
+        options = self.store.settings()
+        minutes = options['time_limit_minutes']
+        # Time spent waiting for answers does not count against the engine's limit, so the backstop allows for it.
+        waits = options['question_wait_minutes'] * MAX_QUESTIONS
+        deadline = asyncio.timeout((minutes + waits) * 60 + 300)
         try:
             async with deadline:
                 await self.engine.run(job_id)
