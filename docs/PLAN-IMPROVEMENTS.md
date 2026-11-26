@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `83%` (53 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
+**Overall Progress:** `88%` (56 of 64 steps) (Phases 1-11 and 14-17 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 18 built, its live check left)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -408,23 +408,27 @@ The tester's first batch (source links, runs told apart, Settings errors in view
 - [x] 🟩 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.
   - **Verify:** in a browser at both widths.
   - **Result (2026-11-26):** already in place: the narrow-screen menu (the select at the top) lists Technical log for the open run, at 642 and 375 wide; choosing it opens the log, and Back to run returns. Checked in a browser.
-- [ ] 🟥 **Step 59: No "What should change?" on input files** (prototype first) — input files the agent does not edit get a note or a question, not a change request; the comment box no longer covers the cell it is about.
+- [x] 🟩 **Step 59: No "What should change?" on input files** (prototype first) — input files the agent does not edit get a note or a question, not a change request; the comment box no longer covers the cell it is about.
   - **Verify:** in a browser: a comment on an input file and an output file, at 642 and 1440 wide.
-- [ ] 🟥 **Step 60: Look at a past playbook version before restoring it** (prototype first).
+  - **Result (2026-11-27):** on a file the agent was given, the box says "Add a note or ask a question" and opens beside or above the cell, leaving it in view (a bottom sheet on a phone). The agent is told once that it changes only its outputs: a comment on a given file is a note to take into account or a question to answer, never a change. The chat counts these as notes and the comment shows Answered. Tests in `tests/test_feedback.py`; checked in a browser at 1440, 642 and 375. Not yet seen in a live run.
+- [x] 🟩 **Step 60: Look at a past playbook version before restoring it** (prototype first).
   - **Verify:** in a browser: open two past versions, then restore one.
-- [ ] 🟥 **Step 61: Polish** (one prototype for the lot) — names cut short in the chat file card, step chips and the mobile file title; long step text readable in full; the blank-rename message shown inside the dialog and cleared on Cancel; one number format per column in the workbook view; the total time moved off the Notes row; "run" used everywhere instead of "job"; plainer Settings labels; the Playbook dropdown sized like Client; one accent colour; a hint on why Start is greyed out; placeholder text for empty playbook instructions.
+  - **Result (2026-11-27):** History rows open a version (its own address), with Full text and "What Restore changes", Older and Newer, and Restore only inside. Restore is off with the reason while edits are unsaved. Undo after a Restore keeps edits typed since and never replaces a newer version. Client notes use the same view. Checked in a browser at 1440, 642 and 375, on a playbook and a client.
+- [x] 🟩 **Step 61: Polish** (one prototype for the lot) — names cut short in the chat file card, step chips and the mobile file title; long step text readable in full; the blank-rename message shown inside the dialog and cleared on Cancel; one number format per column in the workbook view; the total time moved off the Notes row; "run" used everywhere instead of "job"; plainer Settings labels; the Playbook dropdown sized like Client; one accent colour; a hint on why Start is greyed out; placeholder text for empty playbook instructions.
   - **Verify:** each item checked in a browser at 375, 642 and 1440 wide.
+  - **Result (2026-11-27):** all 11 items as in the prototype; checked at 375, 642 and 1440. On a phone, "Test playbook changes on past corrections" is too long for its three buttons, which drop below it.
 
 ### Phase 18: How a run shows its work (asked 2026-11-26)
 
 Today a run shows one line per action the agent took (20-40 in a normal run), each cut short, and none can be opened. The person can't tell at a glance what stage the run is in or what is left. Codex and similar tools fold the actions under short headings and show the agent's own checklist. Each step that changes a screen starts with a prototype.
 
-- [ ] 🟥 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
+- [ ] 🟨 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
   - **Verify:** in a browser, a live run and a finished run of the sample packet: fold and unfold each stage, open three actions, at 642 and 1440 wide.
-- [ ] 🟥 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
+- [ ] 🟨 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
   - **Verify:** a live run with each setting; I report the extra cost per run, and the switch reaches the run.
-- [ ] 🟥 **Step 64: The agent keeps a plan** — a tool the agent uses to write its plan as a short checklist and tick steps off as it goes. The plan is kept with the run, survives condensed history and a picked-up run, and is shown at the top of the run (prototype first).
+- [ ] 🟨 **Step 64: The agent keeps a plan** — a tool the agent uses to write its plan as a short checklist and tick steps off as it goes. The plan is kept with the run, survives condensed history and a picked-up run, and is shown at the top of the run (prototype first).
   - **Verify:** tests for writing, updating and restoring the plan after a stop; a live run of the sample packet with and without the tool: the score, the cost, and whether the plan matched what it did.
+  - **Built (2026-11-27), live check left for Steps 62-64:** the agent keeps its plan with an `update_plan` tool; the plan is stored with the run, given back after condensing and on a continued run, and dropped on Start over or Continue from an earlier version. Stages fold with the plan steps ticked in them (counts when there is none); an action opens in full with its code folded. "Show the agent's thinking" (Off, Short, Detailed; Short by default) asks for summaries, and a service that refuses them is asked again once without. Tests in `tests/test_run_work.py`; screens checked at 1440, 642 and 375 on written test data. Not yet known: whether the gateway sends summaries, their cost, and the score with the plan tool.
 
 ## Risks
 
