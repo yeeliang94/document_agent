@@ -1,7 +1,7 @@
 // The pages around a run: starting a new one, the reusable instructions, Settings and the technical log.
 
 import {
-  attr, btn, bytes, currentPlaybook, esc, fmtTime, isWarning, playbooks, state,
+  attr, btn, bytes, currentPlaybook, esc, fmtTime, icon, isWarning, playbooks, state,
 } from './core.js'; // prettier-ignore
 import { micButton, voiceNote } from './voice.js';
 import { clientRow } from './clients.js';
@@ -252,7 +252,7 @@ export function logPage() {
   return page(
     'wide',
     `<div class="page-head"><h1>Technical log</h1>
-      <div class="controls">${state.job ? btn('run', 'Back to run', 'quiet', false, 'back') : ''}${btn('export', 'Export', 'quiet', !state.job, 'down')}</div></div>
+      <div class="controls">${state.job ? `<button class="btn quiet" data-back="run">${icon('back')}Back to run</button>` : ''}${btn('export', 'Export', 'quiet', !state.job, 'down')}</div></div>
     ${facts(state.job)}
     <div class="toolbar">
       <div class="filter">${FILTERS.map(([id, label]) => `<button data-filter="${id}" class="${state.filter === id ? 'on' : ''}">${label}</button>`).join('')}</div>

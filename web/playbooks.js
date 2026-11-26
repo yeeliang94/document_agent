@@ -229,7 +229,7 @@ export function playbookPage() {
   if (!book?.data) return page('<p class="empty">Loading</p>');
   const tabs = TABS.map(([id, label]) => `<button class="${book.tab === id ? 'on' : ''}" data-book-tab="${id}">${label}</button>`).join('');
   const body = { instructions: instructionsTab, skills: skillsTab, tests: testsTab, activity: activityTab, history: historyTab }[book.tab](book);
-  return page(`<div class="page-head"><button class="icon-btn" data-view="playbooks" aria-label="Back to playbooks">${icon('back')}</button>
+  return page(`<div class="page-head"><button class="icon-btn" data-back="playbooks" aria-label="Back" title="Back">${icon('back')}</button>
       <h1>${esc(book.data.name)}</h1>${btn('rename-playbook', 'Rename', 'text')}</div>
     <div class="filter">${tabs}</div>${body}`);
 }

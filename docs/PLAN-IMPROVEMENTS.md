@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `69%` (44 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
+**Overall Progress:** `70%` (45 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -394,8 +394,9 @@ The design is `prototype/full-screen-files/index.html` on the `prototypes` branc
 
 The tester's first batch (source links, runs told apart, Settings errors in view, the source panel's wording, "used" counts) was fixed in commit 9bbcc64. These are the rest. Steps that change a screen get a prototype first.
 
-- [ ] 🟥 **Step 56: The page address follows the screen** — each run, playbook, client and Settings has its own address, so Refresh and Back keep your place; a run that is opening shows a loading sign, not the old page.
+- [x] 🟩 **Step 56: The page address follows the screen** — each run, playbook, client and Settings has its own address, so Refresh and Back keep your place; a run that is opening shows a loading sign, not the old page.
   - **Verify:** in a browser: Refresh and Back on each screen, an address for a run that no longer exists, and a slow run opening.
+  - **Result (2026-11-26):** each run, its Technical log, each playbook and client, the lists and Settings have their own address (`web/routes.js`). Browser Back, Forward and Refresh, the back arrows and "Back to run" all return to the page before. A deleted run's address opens New run with a sentence; an opening run fades the page. Checked in a browser; not checked: Back to a client's Runs tab (the test data had no client runs).
 - [ ] 🟥 **Step 57: Delete a playbook** (prototype first) — with a confirmation that names what goes with it; its past runs stay and still open. Long names show in full on hover and are not cut mid-word. Then remove the "QA test playbook" the tester left in the scratch data.
   - **Verify:** tests that a deleted playbook's runs still open and its clients are unaffected; the flow checked in a browser.
 - [ ] 🟥 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.

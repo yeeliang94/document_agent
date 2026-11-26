@@ -10,8 +10,8 @@ import {
   loadRounds, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
 } from './comments.js'; // prettier-ignore
 import {
-  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, refreshClients, submitClientDialog,
-  suggestClient, syncClient, typeNotes,
+  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, openClient, refreshClients,
+  submitClientDialog, suggestClient, syncClient, typeNotes,
 } from './clients.js'; // prettier-ignore
 import { backFile, closeFile, filesHtml, loadMap, openFile, openSpot, proofHtml, turnPage } from './files.js';
 import { loadLinks } from './links.js';
@@ -21,9 +21,10 @@ import {
   applyPlace, canFind, closeFind, foundFor, loadChanges, locateRow, openFind, revealMarks, stepChange, stepFind, typed,
 } from './review.js'; // prettier-ignore
 import {
-  askTune, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab, startDraft,
-  submitDialog, syncPlaybook, uploadSkill,
+  askTune, openPlaybook, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab,
+  startDraft, submitDialog, syncPlaybook, uploadSkill,
 } from './playbooks.js'; // prettier-ignore
+import { pageAddress, parseAddress } from './routes.js';
 import { confirmStartOver, deleteRun, renameRun, runItems, submitRun } from './runs.js';
 import { composerHtml, headHtml, nearLimits, stagesHtml, threadHtml } from './thread.js';
 import { continueFrom, loadVersions } from './versions.js';
@@ -125,6 +126,7 @@ function render() {
   const selection = focused ? document.activeElement.selectionStart : null;
   paint('#side', sideHtml());
   paint('#topnav', topnavHtml());
+  document.body.classList.toggle('loading', !!state.loading);
   document.title = `${state.job && state.view === 'run' ? jobTitle(state.job) + ' · ' : ''}Document Intelligence`;
 
   if (state.view === 'run' && state.job) {
@@ -148,6 +150,8 @@ function render() {
     applyZoom(drawn);
     revealMarks($('#files'));
     tick();
+  } else if (starting) {
+    paint('#main', '<div class="page"><p class="empty">Loading</p></div>');
   } else {
     const pages = {
       run: setupPage, playbooks: playbooksPage, playbook: playbookPage, clients: clientsPage, client: clientPage,
@@ -169,6 +173,7 @@ function render() {
     el.focus();
     if (typeof selection === 'number' && ['textarea', 'search', 'text'].includes(el.type)) el.setSelectionRange(selection, selection);
   }
+  syncAddress();
 }
 
 function detail(event) {
@@ -218,19 +223,25 @@ function leaveRun() {
   state.toggled.clear();
 }
 
+let loads = 0; // each run opened counts one; a load another page or run has overtaken is dropped
+
 async function loadJob(id) {
+  const ticket = ++loads;
+  const from = state.view;
   state.loading = true;
+  render(); // the page on show fades while the run loads, so a click is seen to have done something
   try {
     const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
     const events = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=0`);
+    if (ticket !== loads || state.view !== from) return; // the person went elsewhere meanwhile
     leaveRun();
     Object.assign(state, { job, events, view: 'run', notice: '' });
     state.seen = events.reduce((n, e) => Math.max(n, e.seq), 0); // an opened run appears whole, without animating in
     await Promise.all([loadMap(), loadRounds(), loadVersions()]);
   } finally {
-    state.loading = false;
+    if (ticket === loads) state.loading = false;
+    render(); // also after a failure, so the page does not stay faded
   }
-  render();
 }
 
 function newRun() {
@@ -257,6 +268,59 @@ async function uploadAndStart() {
   else toast('Files uploaded. Add OPENAI_API_KEY to .env and restart to run.');
   state.job = await api(jobUrl());
   state.jobs = await api('/api/jobs');
+}
+
+// --- Page addresses: Back, Forward and Refresh go by them (routes.js) ---------------------------------------------
+
+let restoring = true; // until the page the app was opened at is on screen, and while going to an address
+let starting = true; // until then, the page says Loading rather than showing New run
+let replaceNext = false; // the next page takes the place of this one in history (a run just deleted)
+
+// A new page on screen gets its own entry in the browser's history; `depth` counts the app's own entries, so a back
+// arrow can tell whether there is a page of this app to go back to.
+function syncAddress() {
+  if (restoring) return;
+  const want = pageAddress();
+  if (!want || location.hash === want) return;
+  if (replaceNext) history.replaceState(history.state, '', want);
+  else history.pushState({ depth: (history.state?.depth || 0) + 1 }, '', want);
+  replaceNext = false;
+}
+
+async function goTo({ view, id }) {
+  if (view === 'run' || view === 'log') {
+    if (state.job?.id !== id) await loadJob(id);
+    state.view = view;
+  } else if (view === 'playbook') await openPlaybook(id);
+  else if (view === 'client') await openClient(id, { keepTab: true });
+  else if (view === 'new') newRun();
+  else await openView(view);
+}
+
+// Opens the page the address names. One that is gone (a deleted run or playbook) opens its list, or New run.
+async function followAddress(first = false) {
+  restoring = true;
+  const page = parseAddress(location.hash);
+  try {
+    await goTo(page);
+  } catch (error) {
+    const list = { playbook: 'playbooks', client: 'clients' }[page.view];
+    if (list) await openView(list).catch(() => newRun());
+    else newRun();
+    toast(page.view === 'run' || page.view === 'log' ? 'That run could not be opened. It may have been deleted.' : error.message);
+  } finally {
+    // The address now names the page on show, without adding a step to Back.
+    if (first || pageAddress() !== location.hash) history.replaceState({ depth: history.state?.depth || 0 }, '', pageAddress() || '#/new');
+    restoring = starting = false;
+    render();
+  }
+}
+addEventListener('popstate', () => followAddress());
+
+// A back arrow goes to the page before, as the browser's Back does; opened straight at this page, to its list.
+async function goBack(list) {
+  if (history.state?.depth > 0) history.back();
+  else await openView(list);
 }
 
 // Actions that only change the screen; they run instantly.
@@ -587,6 +651,7 @@ document.addEventListener('click', async (e) => {
       render();
     }
     else if ((el = target('[data-answer]'))) await answerWith(el.dataset.answer);
+    else if ((el = target('[data-back]'))) await goBack(el.dataset.back);
     else if ((el = target('[data-view]'))) await openView(el.dataset.view);
     else if ((el = target('[data-job]'))) await loadJob(el.dataset.job);
     else if ((el = target('[data-download]'))) {
@@ -958,7 +1023,10 @@ document.addEventListener('submit', async (e) => {
     if (form === 'composer') return await sendText();
     if (form === 'run-form') {
       const starting = e.target.dataset.does === 'start-over';
-      if ((await submitRun(e.target)) === state.job?.id) newRun(); // the run on show was deleted
+      if ((await submitRun(e.target)) === state.job?.id) {
+        newRun(); // the run on show was deleted: New run takes its place in history, so Back does not reach it
+        replaceNext = true;
+      }
       if (starting) {
         state.showVersions = false;
         await refreshJob();
@@ -1087,6 +1155,6 @@ setInterval(tick, 1000);
   } catch (e) {
     state.notice = e.message;
   }
-  render();
+  await followAddress(true); // the page the address names: after a Refresh, the one that was on show
   poll();
 })();

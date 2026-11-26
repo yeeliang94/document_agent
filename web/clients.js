@@ -40,11 +40,11 @@ export function clientsPage() {
 
 // --- One client -------------------------------------------------------------
 
-export async function openClient(id) {
+export async function openClient(id, { keepTab = false } = {}) {
   state.view = 'client';
   // Notes typed and not saved are kept for the visit, as a playbook's are.
   state.client = state.clientPages[id] ||= { id, tab: 'notes', data: null, draft: null, versions: [], saved: 0 };
-  state.client.tab = 'notes'; // a client opens on its notes, from the list or from a run
+  if (!keepTab) state.client.tab = 'notes'; // a client opens on its notes, from the list or a run; Back keeps its tab
   await loadClient();
 }
 
@@ -93,7 +93,7 @@ export function clientPage() {
   if (!client?.data) return page('<p class="empty">Loading</p>');
   const tabs = TABS.map(([id, label]) => `<button class="${client.tab === id ? 'on' : ''}" data-client-tab="${id}">${label}</button>`).join('');
   const body = { notes: notesTab, runs: runsTab, history: (c) => historyHtml(c, 'client-restore') }[client.tab](client);
-  return page(`<div class="page-head"><button class="icon-btn" data-view="clients" aria-label="Back to clients">${icon('back')}</button>
+  return page(`<div class="page-head"><button class="icon-btn" data-back="clients" aria-label="Back" title="Back">${icon('back')}</button>
       <h1>${esc(client.data.name)}</h1>${btn('rename-client', 'Rename', 'text')}</div>
     <div class="filter">${tabs}</div>${body}`);
 }

@@ -242,6 +242,12 @@ svg {
   display: flex;
   flex-direction: column;
 }
+/* A page being opened fades after a moment, so a slow one is seen to be loading and a quick one does not flicker */
+body.loading #main {
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 0.2s 0.15s;
+}
 .topnav {
   display: none;
 }
