@@ -1832,3 +1832,19 @@ def test_an_agent_whose_question_went_unanswered_gets_a_few_steps_to_save_first(
     with pytest.raises(engine.RunStopped) as stopped:
         asyncio.run(engine._drive(None, 'go', job, RunStore(tmp_path), print, StopAfter(stop='waiting')))
     assert stopped.value.status == 'waiting' and job.turns_used == 1 + engine.WAIT_GRACE_TURNS
+
+
+def test_the_steps_to_save_after_an_unanswered_question_count_across_a_restarted_stream(tmp_path, monkeypatch):
+    import app.engine.agent as engine
+
+    class MessageOnce(StopAfter):
+        def new_messages(self):
+            sent, self.sent = getattr(self, 'sent', False), True
+            return [] if sent else ['One more thing.']
+
+    monkeypatch.setattr(engine.Runner, 'run_streamed', lambda *a, **k: Steps(60, 10))
+    job = _drive_job(tmp_path)
+    with pytest.raises(engine.RunStopped) as stopped:
+        asyncio.run(engine._drive(None, 'go', job, RunStore(tmp_path), print, MessageOnce(stop='waiting')))
+    # The message restarts the stream after step 1; the stream's own count starts again, the run's does not.
+    assert stopped.value.status == 'waiting' and job.turns_used == 1 + engine.WAIT_GRACE_TURNS

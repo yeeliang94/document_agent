@@ -821,9 +821,12 @@ async def _drive(agent: Agent, prompt, job: Job, store: RunStore, echo, control:
                     stop = control.stop_requested()
                     if stop == 'waiting':
                         # A question went unanswered: the agent was asked to note what is open and save, so it gets a
-                        # few more steps to do that (or to finish) before the sandbox is let go.
-                        grace = result.current_turn + WAIT_GRACE_TURNS if grace is None else grace
-                        stop = stop if result.current_turn >= grace else None
+                        # few more steps to do that (or to finish) before the sandbox is let go. Counted across the
+                        # whole run: every restart (warning, message, interrupt, retry) begins a new stream whose own
+                        # count starts at zero.
+                        step = job.turns_used + result.current_turn
+                        grace = step + WAIT_GRACE_TURNS if grace is None else grace
+                        stop = stop if step >= grace else None
                     # Taken off the event loop: messages with pictures are made smaller as they are taken.
                     messages = [] if stop else await asyncio.to_thread(control.new_messages)
                 if not stop and not messages:
