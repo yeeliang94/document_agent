@@ -189,10 +189,17 @@ def create_app(settings_override: Settings | None = None):
     def playbook_delete(playbook_id):
         """Remove a playbook (Playbooks.delete). Refused while it is checking past corrections, whose hidden runs
         need its folder; its own runs are kept and still open."""
-        if replay.running(store, playbook_id):
-            raise HTTPException(409, 'This playbook is checking past corrections. Delete it when the check ends.')
-        kept = len(store.playbook_jobs(playbook_id))
-        return {**playbook_call(lambda: playbooks.delete(playbook_id)), 'runs_kept': kept}
+        # Under the checks' lock, so a check cannot start on it while it is being removed.
+        with replay.LOCK:
+            if replay.running(store, playbook_id):
+                raise HTTPException(409, 'This playbook is checking past corrections. Delete it when the check ends.')
+            kept = len(store.playbook_jobs(playbook_id))
+            gone = playbook_call(lambda: playbooks.delete(playbook_id))
+        # The hidden runs its last check of past corrections left behind go too: nothing can open them now.
+        for hidden in store.replay_jobs(playbook_id):
+            store.delete(hidden)
+            shutil.rmtree(store.path(hidden), ignore_errors=True)
+        return {**gone, 'runs_kept': kept}
 
     @api.patch('/api/playbooks/{playbook_id}')
     def playbook_rename(playbook_id, body: PlaybookInput):

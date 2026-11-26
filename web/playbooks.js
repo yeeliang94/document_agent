@@ -162,7 +162,7 @@ export function historyHtml(book, restore = 'restore') {
           ${v.version === latest ? pill('ok', 'Current') : `<button class="btn quiet small" data-${restore}="${v.version}" ${attr('disabled', state.busy || unsaved(book))}>Restore</button>`}</div></div>`,
     )
     .join('');
-  return `${spent}<div class="rows">${rows}</div>`;
+  return `<div class="rows">${rows}</div>`;
 }
 const historyTab = (book) => historyHtml(book);
 
@@ -212,7 +212,7 @@ function activityTab(book) {
         <span class="row-end">${e.level === 'WARN' ? pill('warn', 'Check') : ''}<span class="desc">${esc(stamp(e.timestamp))}</span></span></div>`,
     )
     .join('');
-  return `<div class="rows">${rows}</div>`;
+  return `${spent}<div class="rows">${rows}</div>`;
 }
 
 // The two tabs that show what the app did by itself are loaded when opened and kept fresh while on screen:

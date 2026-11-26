@@ -130,6 +130,15 @@ class Store:
             ).fetchall()
         return [dict(zip((*fields, 'playbook', 'client', 'client_id', 'title'), r, strict=True)) for r in rows]
 
+    def replay_jobs(self, playbook_id) -> list[str]:
+        """The ids of the hidden jobs that replayed a playbook's past corrections (app/replay.py)."""
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT id FROM jobs WHERE json_extract(data,'$.module')=? AND json_extract(data,'$.replay') IS NOT NULL",
+                (playbook_id,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
     def playbook_jobs(self, playbook_id):
         """The runs of one playbook the user started, whole; the hidden replay jobs are left out, as in summaries."""
         with self.connect() as c:

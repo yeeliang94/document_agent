@@ -20,12 +20,17 @@ class Playbooks(Versioned):
         # can be reviewed and replayed (app/runtime.py).
         super().__init__(store)
         with self.connect() as c:
+            # A built-in playbook the user deleted stays deleted: it is not made again at the next start.
+            c.execute('CREATE TABLE IF NOT EXISTS playbooks_deleted(id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL)')
+            deleted = {r[0] for r in c.execute('SELECT id FROM playbooks_deleted')}
             # The first playbooks, made once. A database from before playbooks kept its instructions in a
             # `profiles` table; the text edited there is carried over, and that table is left as it was.
             first = dict(DEFAULT_CONTEXT)
             if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='profiles'").fetchone():
                 first.update(c.execute('SELECT module, context FROM profiles ORDER BY rowid').fetchall())
             for module, context in first.items():
+                if module in deleted:
+                    continue
                 made = c.execute(
                     'INSERT OR IGNORE INTO playbooks VALUES (?,?,?)', (module, MODULE_LABELS.get(module, module), now())
                 ).rowcount
@@ -50,6 +55,7 @@ class Playbooks(Versioned):
                 c.execute(f'DELETE FROM {table} WHERE playbook_id=?', (playbook_id,))
             c.execute('DELETE FROM playbooks WHERE id=?', (playbook_id,))
             c.execute('DELETE FROM replay_spend WHERE playbook_id=?', (playbook_id,))
+            c.execute('INSERT OR REPLACE INTO playbooks_deleted VALUES (?,?)', (playbook_id, now()))
         self.skills.discard(playbook_id)  # its whole folder: skills, cases, checks and tuning
         return {'id': playbook_id, 'name': gone['name']}
 
