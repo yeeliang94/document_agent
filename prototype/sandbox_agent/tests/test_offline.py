@@ -93,9 +93,10 @@ def test_checks_catch_broken_output(packet, tmp_path):
     assert 'Sheet "Lists": template row 3' in '\n'.join(
         result['template_changes']
     )  # reported, for the agent to explain
+    assert 'duplicates row 5' in '\n'.join(result['duplicate_rows'])  # listed to remove or explain, not failed
     for expected in [
         'Entity Summary!B2 held the template formula', 'visibility changed', 'I2', 'must be a number',
-        "'Legal' is not in its dropdown", 'G4 is blank', 'duplicates row 5', 'no entry with "path" for 10 file',
+        "'Legal' is not in its dropdown", 'G4 is blank', 'no entry with "path" for 10 file',
         '"decision" must be one of',
     ]:  # fmt: skip
         assert expected in text, expected

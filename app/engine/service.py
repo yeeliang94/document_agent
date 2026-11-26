@@ -671,9 +671,6 @@ class SandboxEngine:
             added += '\nStill to fix: ' + ' '.join(left[:3]) + (f' ... and {len(left) - 3} more.' if len(left) > 3 else '')
         added = added.strip()
         summary = '\n'.join(part for part in (summary, added) if part)
-        if status in ('completed', 'partial'):
-            text = finish.as_text(final_report, unresolved, added)
-            (store.path(job_id) / 'outputs' / 'processing_summary.txt').write_text(text, encoding='utf-8')
         tokens = record.get('usage') or {}
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
         reviews = record.get('reviews') or []

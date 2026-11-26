@@ -97,7 +97,7 @@ def test_a_sandbox_job_runs_on_the_engine_and_settles(tmp_path, monkeypatch):
         done = wait_for_job(client, job['id'])
         assert done['status'] == 'completed' and done['request_count'] == 3
         assert {a['name']: a.get('status') for a in done['artifacts']} == {
-            'notes.md': None, 'processing_summary.txt': None, 'template_output.xlsx': 'validated'}  # fmt: skip
+            'notes.md': None, 'template_output.xlsx': 'validated'}  # fmt: skip
         call = fake.calls[0]
         assert call.options['max_scouts'] == 3 and call.options['review_on'] is True and call.resume is None
         assert 'Fill Employees A2:D2.' in call.spec.goal and '2026-10' in call.spec.goal
@@ -381,7 +381,7 @@ def test_a_limit_stop_is_partial_and_can_continue(tmp_path, monkeypatch):
         job = start_sandbox_job(client)
         done = wait_for_job(client, job['id'])
         assert done['status'] == 'partial' and 'all the AI usage it was allowed' in done['summary']
-        assert (tmp_path / 'jobs' / job['id'] / 'outputs' / 'processing_summary.txt').exists()
+        assert not (tmp_path / 'jobs' / job['id'] / 'outputs' / 'processing_summary.txt').exists()
 
 
 def test_an_answer_sent_while_the_run_winds_down_still_resumes_the_job(tmp_path, monkeypatch):

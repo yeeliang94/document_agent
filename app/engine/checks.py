@@ -2,7 +2,7 @@
 
 They know only the job (zip, templates, formats, rules), never an answer key, and they apply to any job:
 - a template deliverable keeps the template's sheets, their visibility, its formulas and its data-validation rules
-  (dropdowns, number-only cells), follows those rules and gains no duplicate rows. Template content may move down
+  (dropdowns, number-only cells) and follows those rules; duplicate rows are listed to remove or explain. Template content may move down
   when the agent inserts rows; content that moved or is no longer there as it was is listed as a template change,
   which the agent explains rather than fixes
 - a format deliverable has the specified sheets, headers, types and allowed values (rules.py)
@@ -362,7 +362,7 @@ def _duplicate_rows(title: str, alignment: Alignment) -> list[str]:
         key = tuple(sorted(alignment.after[number].items()))
         if key in seen:
             issues.append(
-                f'{title} row {number} duplicates row {seen[key]}. Remove one; if both are real records, keep both '
+                f'{title} row {number} duplicates row {seen[key]}. Remove one, or if both are real records, keep both '
                 'and say why in notes.md.'
             )
         seen.setdefault(key, number)
@@ -483,11 +483,12 @@ class TemplateCheck:
     changes: list[str]  # allowed when deliberate; the agent explains them in notes.md
     alignments: dict[str, Alignment]  # per sheet
     gaps: list[str]  # rows left empty among the agent's records: fill them or say why they stay empty
+    duplicates: list[str]  # rows the same as another: remove one, or keep both and say why
 
 
 def check_template(out, template: Path) -> TemplateCheck:
     tpl = load_workbook(template)
-    issues, changes, alignments, gaps = [], [], {}, []
+    issues, changes, alignments, gaps, duplicates = [], [], {}, [], []
     for sheet in tpl.worksheets:
         if sheet.title not in out.sheetnames:
             issues.append(f'Template sheet "{sheet.title}" is missing.')
@@ -500,9 +501,9 @@ def check_template(out, template: Path) -> TemplateCheck:
         issues += _lost_formulas(sheet.title, alignment)
         issues += _lost_rules(sheet, target, alignment)
         issues += _validation_issues(tpl, sheet, alignment)
-        issues += _duplicate_rows(sheet.title, alignment)
+        duplicates += _duplicate_rows(sheet.title, alignment)
         gaps += _gaps(sheet.title, alignment)
-    return TemplateCheck(issues, changes, alignments, gaps)
+    return TemplateCheck(issues, changes, alignments, gaps, duplicates)
 
 
 def _open(path: Path):
@@ -518,6 +519,7 @@ class DeliverableCheck:
     changes: list[str]  # template changes the agent explains
     written: dict[str, set[int]]  # per sheet, the rows the agent wrote, which need sources
     gaps: list[str] = field(default_factory=list)  # rows left empty among the agent's records
+    duplicates: list[str] = field(default_factory=list)  # rows the same as another, kept or explained
 
 
 def check_deliverable(outputs: Path, deliverable: Deliverable, job_rules) -> DeliverableCheck:
@@ -543,7 +545,11 @@ def check_deliverable(outputs: Path, deliverable: Deliverable, job_rules) -> Del
             for r in rules
         ]  # fmt: skip
         return DeliverableCheck(
-            issues + check_rules(wb, rules, deliverable.name, skip), changes, written, template.gaps
+            issues + check_rules(wb, rules, deliverable.name, skip),
+            changes,
+            written,
+            template.gaps,
+            template.duplicates,
         )
     issues = check_format(wb, deliverable.format, deliverable.name)
     written = {}
@@ -773,7 +779,7 @@ def free_form_file(path: Path) -> tuple[str | None, dict[str, set[int]]]:
 
 def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row') -> dict:
     """Every check, plus a summary per area for people: deliverable problems, files decided, rows with sources."""
-    deliverable_issues, changes, written, gaps = [], [], {}, []
+    deliverable_issues, changes, written, gaps, duplicates = [], [], {}, [], []
     # The workbooks whose totals and look are checked: (name, path, template, format)
     books = [(d.name, outputs / d.name, d.template, d.format) for d in job.deliverables]
     for deliverable in job.deliverables:
@@ -781,6 +787,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         deliverable_issues += result.issues
         changes += [f'{deliverable.name}: {line}' for line in result.changes]
         gaps += [f'{deliverable.name}: {line}' for line in result.gaps]
+        duplicates += [f'{deliverable.name}: {line}' for line in result.duplicates]
         written |= {(deliverable.name, sheet): rows for sheet, rows in result.written.items()}
     if not job.deliverables:
         # No template and no format: the form of the output is the agent's choice. What can be checked is that
@@ -836,7 +843,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         uncited_more = counts.get('used_not_cited_more', 0)
     issues = deliverable_issues + totals_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
-    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps,
+    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps, 'duplicate_rows': duplicates,
               'totals': totals_lines, 'looks': looks, 'summary': summary, 'issue_count': len(issues)}  # fmt: skip
     if used_not_cited:
         result['used_not_cited'] = used_not_cited

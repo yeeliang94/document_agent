@@ -251,12 +251,13 @@ def test_starting_over_empties_the_outputs_keeps_the_versions_and_tells_the_agen
         wait_for_runner_idle(client)
         client.app.state.store.update(job['id'], resume_from={'number': 1, 'step': 1, 'run': 'run-01', 'description': 'x'})
         run.behaviour = again
+        (tmp_path / 'jobs' / job['id'] / 'outputs' / 'out.xlsx').write_text('changed by hand', encoding='utf-8')
         assert client.post(f'/api/jobs/{job["id"]}/start-over').status_code == 200
         done = wait_for_job(client, job['id'], statuses=('completed',))
         assert seen['outputs'] == []  # nothing of the earlier work went into the new run
         card = run.calls[-1].resume
         assert card.startswith('You are starting this job over') and 'notes at v1' not in card and 'version 1' not in card
-        # The files set aside are kept as a version first, so starting over loses nothing.
+        # The files set aside (changed since version 1) are kept as a version first, so starting over loses nothing.
         kept = client.get(f'/api/jobs/{job["id"]}/versions').json()['versions']
         assert [(v['number'], v['description']) for v in kept] == [(2, 'Before starting over'), (1, 'Step 1')]
         assert 'start_over' not in done and 'resume_from' not in done

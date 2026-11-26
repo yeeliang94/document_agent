@@ -68,6 +68,21 @@ def test_a_duplicate_row_says_what_to_do():
     assert 'Remove one' in line and 'say why in notes.md' in line
 
 
+def test_a_duplicate_row_is_listed_for_the_agent_not_failed(tmp_path):
+    # Two real records can be the same (two identical allowances); the agent keeps both and explains, and the run passes.
+    template = tmp_path / 'template.xlsx'
+    _workbook(template, {'A1': 'ID', 'B1': 'Amount'})
+    (tmp_path / 'out').mkdir()
+    _workbook(
+        tmp_path / 'out' / 'template.xlsx', {'A1': 'ID', 'B1': 'Amount', 'A2': 'E1', 'B2': 50, 'A3': 'E1', 'B3': 50}
+    )
+    from openpyxl import load_workbook
+
+    found = checks.check_template(load_workbook(tmp_path / 'out' / 'template.xlsx'), template)
+    assert not any('duplicates' in i for i in found.issues)
+    assert found.duplicates and found.duplicates[0].startswith('Sheet row 3 duplicates row 2.')
+
+
 def _workbook(path, cells):
     book = Workbook()
     for where, value in cells.items():
