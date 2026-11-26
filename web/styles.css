@@ -274,6 +274,14 @@ body.loading #main {
   color: #fff;
   font-weight: 500;
 }
+.dialog-body .muted {
+  color: var(--muted);
+  margin: 0;
+}
+.btn.danger {
+  background: var(--bad-fg);
+  color: #fff;
+}
 .btn.primary:hover {
   background: #2e2e33;
 }

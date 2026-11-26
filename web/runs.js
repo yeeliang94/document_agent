@@ -41,7 +41,7 @@ export function renameRun(id) {
   const made = jobTitle({ ...job, name: null });
   dialog(
     'Rename run',
-    `<label>Name<input class="field" name="name" value="${esc(job.name || '')}" placeholder="${esc(made)}" maxlength="80" autocomplete="off"></label>`,
+    `<label>Name<input class="field" name="name" value="${esc(job.name || '')}" placeholder="${esc(made)}" autocomplete="off"></label>`,
     'rename',
     id,
     'Rename',

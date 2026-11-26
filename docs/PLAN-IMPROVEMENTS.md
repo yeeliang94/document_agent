@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `78%` (50 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
+**Overall Progress:** `83%` (53 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -373,12 +373,12 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
 
 Two steps from the older plan were never built. They move here so one plan holds all open work.
 
-- [ ] 🟨 **Step 51: Cost per run** — a money figure for each run, from its token use and a price per million tokens (input and output, Settings values), shown on the run and summed per playbook. Time and token use are already shown in the Technical log.
+- [x] 🟩 **Step 51: Cost per run** — a money figure for each run, from its token use and a price per million tokens (input and output, Settings values), shown on the run and summed per playbook. Time and token use are already shown in the Technical log.
   - **Verify:** tests for the sum on a run, a replay and a playbook total; a price of 0 shows no money figure; the run and playbook screens checked in a browser.
-  - **Result so far (2026-11-27):** backend built (`app/costs.py`; `cost` on GET /api/jobs/{id} and GET /api/playbooks/{id}, replays apart; Settings panel "Cost per million tokens"). 6 tests in `tests/test_costs.py`. Waiting: the run and playbook screens, drawn in `prototype/cost-queue-delete` for approval.
-- [ ] 🟨 **Step 52: Several runs at once** — a Settings number, default 2; runs past the limit wait in line and say so; replays share the same limit.
+  - **Result so far (2026-11-27):** backend built (`app/costs.py`; `cost` on GET /api/jobs/{id} and GET /api/playbooks/{id}, replays apart; Settings panel "Cost per million tokens"). 6 tests in `tests/test_costs.py`. Screens built after the prototype was approved: the run's finish line reads "13m 1s · $0.56"; a playbook's Activity tab starts with its runs' cost and its re-checks' cost. With no prices, nothing shows. Checked in a browser.
+- [x] 🟩 **Step 52: Several runs at once** — a Settings number, default 2; runs past the limit wait in line and say so; replays share the same limit.
   - **Verify:** tests for two runs side by side, a third that waits and then starts, pause and resume of one, and a restart with both running.
-  - **Still to do (2026-11-27):** the run's line says only "Waiting to start"; "Waiting for a free slot. 2 runs at once is the limit in Settings." is drawn in `prototype/cost-queue-delete` for approval. After review: each run holds its share of the day's AI usage while it runs, so runs at once cannot overshoot the daily limit; a raised limit starts a waiting run at once; the queue carries on after a fault.
+  - **Result (2026-11-27):** a run past the limit says "Waiting for a free slot. 2 runs at once is the limit in Settings." (checked in a browser); 7 tests in `tests/test_runs_at_once.py`. After review: each run holds its share of the day's AI usage while it runs, so runs at once cannot overshoot the daily limit; a raised limit starts a waiting run at once; the queue carries on after a fault.
   - **Result (2026-11-26):** built; "Runs at once" (1 to 6) under Limits per day, read as each run ends. A run past the limit stays queued with `waiting_for_slot` and a "Waiting for a free slot" event. tests/test_runs_at_once.py covers the Verify line, a change of the limit without a restart, and a job queued twice. The screen still says "Waiting to start" for a queued run.
 
 ### Phase 16: Full-screen file panel (prototype approved 2026-11-26)
@@ -402,8 +402,9 @@ The tester's first batch (source links, runs told apart, Settings errors in view
 - [x] 🟩 **Step 56: The page address follows the screen** — each run, playbook, client and Settings has its own address, so Refresh and Back keep your place; a run that is opening shows a loading sign, not the old page.
   - **Verify:** in a browser: Refresh and Back on each screen, an address for a run that no longer exists, and a slow run opening.
   - **Result (2026-11-26):** each run, its Technical log, each playbook and client, the lists and Settings have their own address (`web/routes.js`). Browser Back, Forward and Refresh, the back arrows and "Back to run" all return to the page before. A deleted run's address opens New run with a sentence; an opening run fades the page. Checked in a browser; not checked: Back to a client's Runs tab (the test data had no client runs).
-- [ ] 🟥 **Step 57: Delete a playbook** (prototype first) — with a confirmation that names what goes with it; its past runs stay and still open. Long names show in full on hover and are not cut mid-word. Then remove the "QA test playbook" the tester left in the scratch data.
+- [x] 🟩 **Step 57: Delete a playbook** (prototype first) — with a confirmation that names what goes with it; its past runs stay and still open. Long names show in full on hover and are not cut mid-word. Then remove the "QA test playbook" the tester left in the scratch data.
   - **Verify:** tests that a deleted playbook's runs still open and its clients are unaffected; the flow checked in a browser.
+  - **Result (2026-11-27):** Delete beside Rename on a playbook (off for the only one), a confirmation naming what goes and how many runs stay, then the list with a message; Back does not return to the deleted page. Everything under the playbook's folder (skills, past corrections, checks, proposals) goes; its runs stay and open. Refused while it is checking past corrections. Long names show in full on hover; an over-long name gets "Use a name of at most 80 characters" instead of being cut silently. 2 tests in `tests/test_delete_playbook.py`; checked in a browser at 1440 and 375 wide. The tester's "QA test playbook" was removed from both test data sets.
 - [x] 🟩 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.
   - **Verify:** in a browser at both widths.
   - **Result (2026-11-26):** already in place: the narrow-screen menu (the select at the top) lists Technical log for the open run, at 642 and 375 wide; choosing it opens the log, and Back to run returns. Checked in a browser.

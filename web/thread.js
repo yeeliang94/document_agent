@@ -2,7 +2,7 @@
 // Built from the job's events on every change, so a reloaded or resumed run reads the same as a live one.
 
 import {
-  attr, baseName, btn, isDeliverable, nameHtml, duration, esc, fmtTime, icon, inGroup, isActive, isWarning, jobStatus, jobTitle, pill, playbooks,
+  attr, baseName, btn, isDeliverable, nameHtml, duration, esc, fmtTime, icon, inGroup, isActive, isWarning, jobStatus, jobTitle, money, pill, playbooks,
   plural, state, STATUS, storedPath,
 } from './core.js'; // prettier-ignore
 import { micButton, voiceNote } from './voice.js';
@@ -202,7 +202,10 @@ function liveLine(script) {
   let text = 'Thinking';
   let since = last?.timestamp || state.job.updated_at || '';
   let file = '';
-  if (status === 'queued') text = 'Waiting to start';
+  if (status === 'queued') {
+    const most = state.settings?.values?.runs_at_once;
+    text = state.job.waiting_for_slot && most ? `Waiting for a free slot. ${plural(most, 'run')} at once is the limit in Settings.` : 'Waiting to start';
+  }
   else if (status === 'pausing') text = 'Finishing the current step';
   else if (script) {
     text = script.text || 'Working on the files';
@@ -301,11 +304,13 @@ const oldSummary = (summary) =>
     .join('\n')
     .trim();
 
-// "14 steps · 4m 10s": how far the run went and the time all its runs took.
+// "14 steps · 4m 10s · $0.42": how far the run went, the time all its runs took, and what they cost (when prices
+// are set in Settings).
 function spent(job) {
   const steps = job.progress?.steps;
   const seconds = (job.runs || []).reduce((sum, r) => sum + (r.seconds || 0), 0);
-  return [steps ? plural(steps, 'step') : '', seconds ? duration(seconds * 1000) : ''].filter(Boolean).join(' · ');
+  const cost = job.cost ? money(job.cost.usd) : '';
+  return [steps ? plural(steps, 'step') : '', seconds ? duration(seconds * 1000) : '', cost].filter(Boolean).join(' · ');
 }
 
 // The report first, then the deliverable with its Download, then what the person can do next. A partly done run reads

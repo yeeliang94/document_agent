@@ -36,6 +36,23 @@ class Playbooks(Versioned):
                     )
         self.skills = Skills(self, store.root)
 
+    def delete(self, playbook_id: str) -> dict:
+        """Remove a playbook for good: its instructions and their history, its skills, past corrections, checks and
+        proposals (all under its folder) and the tally of its replayed tests. Its runs stay and still open: each run
+        keeps its own copy of what it was given. The only playbook stays, so New run always has one. Returns what
+        was removed, for the screen's message."""
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            gone = self._latest(c, playbook_id)  # KeyError when there is no such playbook
+            if c.execute('SELECT COUNT(*) FROM playbooks').fetchone()[0] <= 1:
+                raise ValueError('The only playbook cannot be deleted.')
+            for table in ('playbook_versions', 'playbook_events'):
+                c.execute(f'DELETE FROM {table} WHERE playbook_id=?', (playbook_id,))
+            c.execute('DELETE FROM playbooks WHERE id=?', (playbook_id,))
+            c.execute('DELETE FROM replay_spend WHERE playbook_id=?', (playbook_id,))
+        self.skills.discard(playbook_id)  # its whole folder: skills, cases, checks and tuning
+        return {'id': playbook_id, 'name': gone['name']}
+
     def create(self, name: str, copy_of: str | None = None) -> dict:
         """A blank playbook, or one that starts from another's latest instructions and skills."""
         with self.connect() as c:

@@ -185,6 +185,15 @@ def create_app(settings_override: Settings | None = None):
         # cost: its kept runs and its replayed tests, priced now (app/costs.py); None when no price is set.
         return playbook_call(lambda: {**playbooks.get(playbook_id), 'cost': costs.playbook_cost(store, playbook_id)})
 
+    @api.delete('/api/playbooks/{playbook_id}')
+    def playbook_delete(playbook_id):
+        """Remove a playbook (Playbooks.delete). Refused while it is checking past corrections, whose hidden runs
+        need its folder; its own runs are kept and still open."""
+        if replay.running(store, playbook_id):
+            raise HTTPException(409, 'This playbook is checking past corrections. Delete it when the check ends.')
+        kept = len(store.playbook_jobs(playbook_id))
+        return {**playbook_call(lambda: playbooks.delete(playbook_id)), 'runs_kept': kept}
+
     @api.patch('/api/playbooks/{playbook_id}')
     def playbook_rename(playbook_id, body: PlaybookInput):
         return playbook_call(lambda: playbooks.rename(playbook_id, body.name))

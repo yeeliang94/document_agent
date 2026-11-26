@@ -2,7 +2,7 @@
 // A playbook is what the agent follows on every run of one kind of work. Every change to its instructions is a
 // version; the agent can propose a rewrite, and nothing is saved until the person accepts it.
 
-import { $, api, attr, btn, esc, icon, jobTitle, pill, plural, playbooks, state, toast } from './core.js';
+import { $, api, attr, btn, esc, icon, jobTitle, money, pill, plural, playbooks, state, toast } from './core.js';
 import { micButton, voiceNote } from './voice.js';
 
 const TABS = [
@@ -22,7 +22,7 @@ const json = (body) => ({ method: 'POST', body: JSON.stringify(body) });
 export function playbooksPage() {
   const rows = playbooks()
     .map(
-      (p) => `<button class="row link" data-book="${esc(p.id)}"><span class="name"><span>${esc(p.name)}</span>
+      (p) => `<button class="row link" data-book="${esc(p.id)}" title="${esc(p.name)}"><span class="name"><span>${esc(p.name)}</span>
         <span class="desc">${plural(p.skills, 'skill')} · version ${p.version}</span></span>${icon('chev')}</button>`,
     )
     .join('');
@@ -162,7 +162,7 @@ export function historyHtml(book, restore = 'restore') {
           ${v.version === latest ? pill('ok', 'Current') : `<button class="btn quiet small" data-${restore}="${v.version}" ${attr('disabled', state.busy || unsaved(book))}>Restore</button>`}</div></div>`,
     )
     .join('');
-  return `<div class="rows">${rows}</div>`;
+  return `${spent}<div class="rows">${rows}</div>`;
 }
 const historyTab = (book) => historyHtml(book);
 
@@ -198,7 +198,13 @@ function testsTab(book) {
 // Everything that happened to this playbook, newest first.
 function activityTab(book) {
   if (!book.activity) return '<p class="empty">Loading</p>';
-  if (!book.activity.length) return '<p class="empty">Nothing yet.</p>';
+  // What its runs and its checks of past corrections cost, priced now; nothing when no price is set in Settings.
+  const cost = book.data.cost;
+  const spent = cost
+    ? `<div class="facts"><div><span>${plural(cost.runs.count, 'run')}</span><span>${money(cost.runs.usd)}</span></div>
+        <div><span>Re-checking past corrections</span><span>${money(cost.replays.usd)}</span></div></div>`
+    : '';
+  if (!book.activity.length) return `${spent}<p class="empty">Nothing yet.</p>`;
   const stamp = (t) => new Date(t).toLocaleString('en', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   const rows = book.activity
     .map(
@@ -230,7 +236,9 @@ export function playbookPage() {
   const tabs = TABS.map(([id, label]) => `<button class="${book.tab === id ? 'on' : ''}" data-book-tab="${id}">${label}</button>`).join('');
   const body = { instructions: instructionsTab, skills: skillsTab, tests: testsTab, activity: activityTab, history: historyTab }[book.tab](book);
   return page(`<div class="page-head"><button class="icon-btn" data-back="playbooks" aria-label="Back" title="Back">${icon('back')}</button>
-      <h1>${esc(book.data.name)}</h1>${btn('rename-playbook', 'Rename', 'text')}</div>
+      <h1 title="${esc(book.data.name)}">${esc(book.data.name)}</h1><div class="controls">${btn('rename-playbook', 'Rename', 'text')}${
+        playbooks().length > 1 ? btn('delete-playbook', 'Delete', 'text') : '<button class="btn text" disabled title="The only playbook cannot be deleted">Delete</button>'
+      }</div></div>
     <div class="filter">${tabs}</div>${body}`);
 }
 
@@ -261,7 +269,7 @@ export function dialog(title, body, action, label) {
   $('#details').showModal();
 }
 
-export const nameField = (value = '') => `<label>Name<input class="field" name="name" value="${esc(value)}" maxlength="80" required autocomplete="off"></label>`;
+export const nameField = (value = '') => `<label>Name<input class="field" name="name" value="${esc(value)}" required autocomplete="off"></label>`;
 
 export const playbookDialogs = {
   'new-playbook': () =>
@@ -273,6 +281,16 @@ export const playbookDialogs = {
       'Create',
     ),
   'rename-playbook': () => dialog('Rename playbook', nameField(state.book.data.name), 'rename', 'Rename'),
+  'delete-playbook': () => {
+    // What goes and what stays, said before anything is removed: its runs keep their own copy of what they used.
+    const name = state.book.data.name;
+    const runs = (state.jobs || []).filter((j) => j.module === state.book.id).length;
+    const stays = runs ? `Its ${plural(runs, 'run')} stay, and still open.` : 'It has no runs.';
+    $('#details').innerHTML = `<div class="dialog-head"><h2>Delete ${esc(name)}?</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <form class="dialog-body" id="book-form" data-does="delete-playbook"><p class="muted">Its instructions, skills, past corrections and history go, and can't be brought back. ${stays}</p>
+        <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn danger">Delete playbook</button></div></form>`;
+    $('#details').showModal();
+  },
 };
 
 function removeDialog(name) {
@@ -374,6 +392,16 @@ export async function submitDialog(form) {
     await api(url(), { method: 'PATCH', body: JSON.stringify({ name: values.name }) });
     $('#details').close();
     await loadPlaybook();
+  } else if (does === 'delete-playbook') {
+    const gone = await api(url(), { method: 'DELETE' });
+    $('#details').close();
+    delete state.books[gone.id];
+    state.config = await api('/api/config'); // the playbook list New run offers
+    if (state.playbook === gone.id) state.playbook = playbooks()[0]?.id || '';
+    // The list takes the deleted playbook's place in history, so Back does not reach a page that is gone.
+    history.replaceState(history.state, '', '#/playbooks');
+    state.view = 'playbooks';
+    toast(`Deleted ${gone.name}. ${gone.runs_kept ? `Its ${plural(gone.runs_kept, 'run')} ${gone.runs_kept === 1 ? 'is' : 'are'} kept.` : ''}`.trim());
   } else if (does === 'remove-skill') {
     await api(url(`/skills/${encodeURIComponent(form.dataset.name)}`), { method: 'DELETE' });
     $('#details').close();

@@ -208,6 +208,8 @@ export function storedPath(path) {
 export const fmtTime = (t) =>
   t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 export const bytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil((n || 0) / 1024)} KB`);
+// A money figure from the cost API: cents, or less than a cent.
+export const money = (usd) => (usd >= 0.01 || !usd ? `$${usd.toFixed(2)}` : '<$0.01');
 export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export function duration(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
