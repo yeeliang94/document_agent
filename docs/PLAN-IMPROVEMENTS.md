@@ -1,13 +1,13 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `30%` (Phases 1-2 built, not yet on screen: the warning card and "20 more steps" button come with the Batch screens)
+**Overall Progress:** `24%` (8 of 34 steps) (Phases 1-2 built, not yet on screen: the warning card and "20 more steps" button come with the Batch screens)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches (there is no PRD)
 **Last Updated:** 2026-11-26
 
 ## Summary
 
-Three things change. The agent learns its limits, keeps its context small, and sees what its formulas add up to. The person sees how far a run has got, gets a plain message and a way back when a run stops, and gets a proper report when it finishes. Each client gets its own notes, which a run can follow on top of its playbook.
+Three things change. The agent learns its limits, keeps its context small, sees what its formulas add up to, and sees its files as the person receiving them will. The person sees how far a run has got, gets a plain message and a way back when a run stops, and gets a proper report when it finishes. Each client gets its own notes, which a run can follow on top of its playbook.
 
 As in the earlier plans, the engine and backend are built and tested first. The screens follow, one prototype batch at a time, each after that batch is approved.
 
@@ -18,6 +18,8 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 | The agent is cut off at a limit with no warning | It is told when it is close, saves, and writes down what is open |
 | The whole history is re-sent on every step | OpenAI condenses older history past a size set on the Settings page |
 | A formula's result is unknown to the agent and the checks | Every save reports the totals and any formula that fails |
+| The agent cannot see how its files look | It gets a picture of each sheet, drawn as Excel shows it, and looks before it finishes |
+| A workbook built from a format has no set look | The format can set a house style, applied by a ready-made helper, and the save warns of #### columns and numbers stored as text |
 | A stopped run keeps only the last save | Every save is a version; a run can continue from any of them |
 | A failed run shows the raw error | A plain sentence, with the raw text folded away |
 | The finish message is one paragraph | A report: what was done, decisions made, what to check |
@@ -36,6 +38,8 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 - **The app suggests a client and never attaches one silently.** Client folders follow no fixed pattern, so it looks for a known client's name anywhere in the folder and file names; if the box is left empty and the agent sees a known client in the documents, it asks once.
 - **Client notes are text only for now.** No attached reference files. *(Confirmed 2026-11-26.)*
 - **Remembering gets a scope.** PLAN-NEXT moved "what to remember" from a tick box to the agent's own judgement. That stays. What is new: a lesson is saved to the client or to the playbook, the agent proposes which, and the person can set it on a comment. This partly brings back a choice PLAN-NEXT removed, because you asked to save things to a client on purpose.
+- **The agent's pictures are drawn on this machine by the app's own code, not by Excel or LibreOffice.** Why: nothing extra to install on Windows or Mac, and the agent sees what the file preview shows you. The cost: close to Excel, not identical; what it cannot draw is named, not guessed. *(Proposed 2026-11-26.)*
+- **The look is checked by warnings, not by a second reviewer.** Clear faults (####, numbers stored as text) are caught by code; taste is left to the agent's own look. *(Proposed 2026-11-26.)*
 - **No setting or limit without a control.** A test fails when a Settings option has no control on the Settings page, and the project instructions say so.
 
 ## Pre-Implementation Checklist
@@ -95,104 +99,132 @@ As in the earlier plans, the engine and backend are built and tested first. The 
   - [ ] 🟥 Add "Totals add up" to the check summary
   - **Verify:** a test saves a workbook whose total misses the last row; the reply names the cell and the run does not pass.
 
-### Phase 4: Runs that stop can be picked up (backend)
+### Phase 4: The agent sees and shapes its output (engine)
 
-- [ ] 🟥 **Step 10: A version at every save** — a copy of the outputs, with the step number, time and a one-line description.
+Today the agent can only draw a rough chart of cell values, and in the live runs it never did. It cannot see fonts, fills, borders, widths or number formats, and a workbook built from a written format has no look at all. These steps give it a real view of its files and a ready-made way to format them.
+
+- [ ] 🟥 **Step 10: Draw a sheet as Excel shows it** — on this machine, from the saved file, using the code the file preview already uses (cell formats and formula results), drawn into a picture with Pillow (already installed).
+  - [ ] 🟥 Fonts, fills, borders, column widths, row heights, merged cells, number formats, formula results, hidden rows and columns left out
+  - [ ] 🟥 A sheet too big for one picture is drawn as tiles with row and column labels; anything it cannot draw (charts, pictures in cells, conditional colours) is named under the picture, not guessed
+  - **Verify:** tests draw a sample template and check a merged title, a bold shaded header, a date shown as 31/10/2026 and a total shown with its formula result.
+
+- [ ] 🟥 **Step 11: A tool to look at the output** — `look_at_output(file, sheet, cells)` returns the picture to the agent, with the whole sheet as the default.
+  - [ ] 🟥 Pictures kept small enough to send (the existing size limits), at most a few per call
+  - [ ] 🟥 One briefing line replaces the matplotlib advice: look at each finished sheet before you finish, as the person receiving it would
+  - **Verify:** a test calls the tool and gets a picture back; a scripted run sees a missing border it was asked to fix.
+
+- [ ] 🟥 **Step 12: A look before finishing** — the first save that passes every check also returns a picture of the top of each deliverable and of the rows around its totals.
+  - [ ] 🟥 Switched on or off on the Settings page ("Show the agent its files before it finishes"), on by default
+  - [ ] 🟥 The cost is noted in the Technical log (each picture is roughly 1,000–2,000 tokens)
+  - **Verify:** a test's passing save carries the pictures; with the setting off it does not.
+
+- [ ] 🟥 **Step 13: A house style for workbooks built from a format** — a written format can say how it looks: header style, number and date formats per column type, column widths, a frozen header row. A format with no style gets a plain, tidy default.
+  - [ ] 🟥 A small helper placed in the sandbox (`from house_style import apply`) applies the style, so the agent does not hand-code it each run
+  - [ ] 🟥 New save warnings that need no model: a value too wide for its column (Excel shows ####), numbers or dates stored as text, a number column with no number format, data rows hidden. Shown as "Looks right" in the check summary
+  - [ ] 🟥 A filled template keeps its own look; the warnings name only cells the agent wrote
+  - **Verify:** a test builds a workbook from a format, applies the helper and passes; a workbook with a ##### column and a date stored as text gets both warnings.
+
+### Phase 5: Runs that stop can be picked up (backend)
+
+- [ ] 🟥 **Step 14: A version at every save** — a copy of the outputs, with the step number, time and a one-line description.
   - [ ] 🟥 A cap on versions kept per run, on the Settings page
   - [ ] 🟥 API: list a run's versions
   - **Verify:** run the demo; the API lists one version per save, newest first.
 
-- [ ] 🟥 **Step 11: Continue from a version** — restores that copy as the outputs and resumes from it.
+- [ ] 🟥 **Step 15: Continue from a version** — restores that copy as the outputs and resumes from it.
   - [ ] 🟥 The resume note tells the agent which version it starts from
   - **Verify:** a test stops a run after two saves, continues from the first, and the outputs match the first.
 
-- [ ] 🟥 **Step 12: Plain errors** — one place turns a failure into a plain sentence and a next step; the raw text is kept for the Technical log.
+- [ ] 🟥 **Step 16: Plain errors** — one place turns a failure into a plain sentence and a next step; the raw text is kept for the Technical log.
   - [ ] 🟥 Used for run failures, tool failures and the connection test
   - [ ] 🟥 Form errors return a sentence, not "Request failed (422)"
   - [ ] 🟥 "See the run record" replaced by the issues themselves
   - **Verify:** tests feed in the known failures (no key, lost workspace, refused, over the day's limit) and read back plain sentences.
 
-- [ ] 🟥 **Step 13: Progress the screen can show** — the run carries steps used, minutes used, both limits and its stage.
+- [ ] 🟥 **Step 17: Progress the screen can show** — the run carries steps used, minutes used, both limits and its stage.
   - **Verify:** the run's API answer shows "14 of 60" style numbers changing during a demo run.
 
-### Phase 5: A proper finish report (engine)
+### Phase 6: A proper finish report (engine)
 
-- [ ] 🟥 **Step 14: The agent ends with a report** — a headline, what it did, decisions it made, what to check before sending.
+- [ ] 🟥 **Step 18: The agent ends with a report** — a headline, what it did, decisions it made, what to check before sending.
   - [ ] 🟥 Stored with the run; the downloadable summary file uses the same text
   - **Verify:** a test run ends with all four parts filled; an older run still opens and shows its one paragraph.
 
-### Phase 6: Clients (backend and engine)
+### Phase 7: Clients (backend and engine)
 
-- [ ] 🟥 **Step 15: Client storage and API** — create, rename, list, edit notes; versions and Undo as playbooks have.
+- [ ] 🟥 **Step 19: Client storage and API** — create, rename, list, edit notes; versions and Undo as playbooks have.
   - **Verify:** tests create a client, save twice, restore the first version.
 
-- [ ] 🟥 **Step 16: A run follows its client's notes** — the run copies the notes when it is created, so later edits do not change it.
+- [ ] 🟥 **Step 20: A run follows its client's notes** — the run copies the notes when it is created, so later edits do not change it.
   - [ ] 🟥 Shown to the agent beside the house rules, with one rule: where they disagree, the client wins and the notes say so
   - **Verify:** a test run's briefing contains the client's notes; a run with no client is unchanged.
 
-- [ ] 🟥 **Step 17: Remembering has a scope** — a lesson goes to the client or the playbook.
+- [ ] 🟥 **Step 21: Remembering has a scope** — a lesson goes to the client or the playbook.
   - [ ] 🟥 The agent's remember tool takes the scope; a comment can set it
   - [ ] 🟥 Undo works for both
   - **Verify:** tests save one lesson to each, and each lands in the right notes and can be undone.
 
-- [ ] 🟥 **Step 18: Earlier runs of the same client first** — as examples of layout.
+- [ ] 🟥 **Step 22: Earlier runs of the same client first** — as examples of layout.
   - **Verify:** a test with runs for two clients offers only the same client's.
 
-- [ ] 🟥 **Step 19: Suggest the client** — from folder and file names when files are chosen; if left empty, the agent asks once when it sees a known client in the documents.
+- [ ] 🟥 **Step 23: Suggest the client** — from folder and file names when files are chosen; if left empty, the agent asks once when it sees a known client in the documents.
   - **Verify:** tests match "Acme/October 2026", "Payroll/acme_oct.xlsx" and "October/ACME Sdn Bhd" to Acme, and suggest nothing for an unrelated folder.
 
-### Phase 7: Does it work with the real model?
+### Phase 8: Does it work with the real model?
 
-- [ ] 🟥 **Step 20: Live runs** — the sample payroll packet and one long packet, before and after.
+- [ ] 🟥 **Step 24: Live runs** — the sample payroll packet and one long packet, before and after.
   - [ ] 🟥 Compare accuracy, steps, time and tokens
   - [ ] 🟥 One run stopped on purpose and continued from a version
   - [ ] 🟥 One run with a client and one without
+  - [ ] 🟥 One run built from a format, with the look before finishing on and off: did the agent fix what it saw?
   - **Verify:** I give you the before and after numbers and the output files.
 
-### Phase 8: Screens (each batch after its prototype is approved)
+### Phase 9: Screens (each batch after its prototype is approved)
 
-- [ ] 🟥 **Step 21: Waiting** (batch 1) — step and time counter, three named stages, plain step wording, the near-limit card with "Give it 20 more steps", "Clock paused" on a question.
+- [ ] 🟥 **Step 25: Waiting** (batch 1) — step and time counter, three named stages, plain step wording, the near-limit card with "Give it 20 more steps", "Clock paused" on a question.
   - **Verify:** start a run and watch each state appear; I check every state in a browser.
 
-- [ ] 🟥 **Step 22: When a run stops** (batch 2) — plain message, Continue from the last version, the list of versions, Start over, raw error folded away.
+- [ ] 🟥 **Step 26: When a run stops** (batch 2) — plain message, Continue from the last version, the list of versions, Start over, raw error folded away.
   - **Verify:** stop a run midway and continue from an earlier version on screen.
 
-- [ ] 🟥 **Step 23: Finished** (batch 3) — the report, the deliverable first with one Download, "Still to fix" shown once, "Totals add up" in the checks, the message box stays open as "Ask for a change".
+- [ ] 🟥 **Step 27: Finished** (batch 3) — the report, the deliverable first with one Download, "Still to fix" shown once, "Totals add up" in the checks, the message box stays open as "Ask for a change".
   - **Verify:** finish a run; type a change request after it ends and the agent acts on it.
 
-- [ ] 🟥 **Step 24: Reviewing** (batch 4) — which value came from which file, notes shown formatted, Send to agent only when there are comments, the remember scope on a comment.
+- [ ] 🟥 **Step 28: Reviewing** (batch 4) — which value came from which file, notes shown formatted, Send to agent only when there are comments, the remember scope on a comment.
   - **Verify:** click a row and read its sources; add a comment and choose where it is remembered.
 
-- [ ] 🟥 **Step 25: Panels that resize** — both dividers drag, double-click hides the run list, widths are remembered.
+- [ ] 🟥 **Step 29: Panels that resize** — both dividers drag, double-click hides the run list, widths are remembered.
   - **Verify:** drag both, reload, and the widths hold; a small laptop width still shows everything.
 
-- [ ] 🟥 **Step 26: Run list** (batch 5) — each run's own name and status, rename and delete.
+- [ ] 🟥 **Step 30: Run list** (batch 5) — each run's own name and status, rename and delete.
   - **Verify:** rename a run and delete one; a running run cannot be deleted.
 
-- [ ] 🟥 **Step 27: Settings** (batch 5) — plain labels with units, the error beside the field, Save lit only after a change, plus the new values from Steps 5, 7 and 10 and the questions-per-run limit.
+- [ ] 🟥 **Step 31: Settings** (batch 5) — plain labels with units, the error beside the field, Save lit only after a change, plus the new values from Steps 5, 7, 12 and 14 and the questions-per-run limit.
   - **Verify:** type a wrong value and read the message beside it; every setting in the app has a control.
 
-- [ ] 🟥 **Step 28: Clients** (batch 6) — the Clients page, one client's notes and history, the client box on New run with its suggestion, "Following the notes for Acme" on the run.
+- [ ] 🟥 **Step 32: Clients** (batch 6) — the Clients page, one client's notes and history, the client box on New run with its suggestion, "Following the notes for Acme" on the run.
   - **Verify:** create a client, start a run with it suggested, and see a remembered comment appear in its notes with Undo.
 
-### Phase 9: Keep it from drifting
+### Phase 10: Keep it from drifting
 
-- [ ] 🟥 **Step 29: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
+- [ ] 🟥 **Step 33: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
   - **Verify:** I add a dummy setting, show the test failing, and remove it.
 
-- [ ] 🟥 **Step 30: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
+- [ ] 🟥 **Step 34: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
   - **Verify:** I report the test and build results, the review verdict, and the git state.
 
 ## Risks
 
 - **Compaction may not trigger** with our settings or through the gateway (one user has reported this). Step 6 finds out first.
-- **Compaction can lose detail.** Step 8 and the notes file are the guard; Step 20 measures accuracy before and after.
+- **Compaction can lose detail.** Step 8 and the notes file are the guard; Step 24 measures accuracy before and after.
 - **A wrong client suggestion** would apply one client's rules to another. The choice is always visible before Start and never applied silently.
-- **Versions use disk space.** The cap in Step 10 limits it.
+- **Pictures cost tokens.** A few per run, kept small, and switched off on the Settings page if needed. Step 24 measures the cost.
+- **A picture that differs from Excel** could send the agent to fix something that is fine. Step 10's tests compare against known features, and the picture names what it leaves out.
+- **Versions use disk space.** The cap in Step 14 limits it.
 
 ## Rollback Plan
 
-- Every phase is its own set of commits on a feature branch; any phase can be reverted without the others, except that Phase 8 needs the phase behind each screen.
+- Every phase is its own set of commits on a feature branch; any phase can be reverted without the others, except that Phase 9 needs the phase behind each screen.
 - Compaction, versions and more-steps are Settings values, so each can be switched off without a code change.
 - New data (clients, versions) is added beside existing data. Existing runs and playbooks are not altered, so reverting leaves them as they were. Check that older runs still open after each phase.
 
@@ -209,3 +241,4 @@ Found in the audit but not agreed. Say if you want any added:
 - Trimming old pictures and printouts from the history (the fallback if compaction disappoints)
 - Reference files attached to a client
 - Phone-size layout
+- Deliverables other than Excel (Word, PDF, CSV). The sandbox could make them, but the app, its checks and its pictures handle .xlsx only
