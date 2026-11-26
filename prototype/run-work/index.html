@@ -1,0 +1,492 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY (plan Phase 18, Steps 62, 63 and 64). Made-up data. The dark bar at the bottom jumps between states.
+     - Today: how a run shows its work now, for comparison. One flat list, each line cut short, nothing opens.
+     - Step 62, stages: the work folds under Reading files, Filling in and Checking. Each stage line has a one-line
+       summary and the time it took. The current stage is open; finished ones fold. Click any action to read it in
+       full: what it was for, the files it touched, what came back and how long it took. The code stays folded.
+     - Step 63, thinking: a short heading in the agent's own words sits above the actions it led to. Click it for the
+       summary OpenAI sends. Settings has "Show the agent's thinking": Off, Short or Detailed. Off drops the headings.
+     - Step 64, the plan: the agent's checklist sits at the top of the run, ticked as it goes. When the agent changes
+       it, the new step is marked New, a reworded step shows what it used to say, and the run says why at that point.
+       The plan is kept with the run, so it is still there after history is condensed or a stopped run is picked up.
+       On a phone the plan starts folded to one line: the count and the step going on now.
+     Everything is clickable: stages, thinking headings, actions, the plan, and the Settings choice (which then
+     changes the run). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a run shows its work (prototype)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#fff; --panel:#f5f5f6; --sheet:#fff; --text:#18181b; --muted:#6e6e76; --faint:#a3a3ab; --line:#e7e7ea; --accent:#2f6fdb; --accent-bg:#e8f0fd; --ok-bg:#e6f3e6; --ok-fg:#24592a; --warn-bg:#fbf0dc; --warn-fg:#6b4206; --grey-bg:#ececee; --grey-fg:#55555c; --mono: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; text-align: left; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  h1, h2, h3, p, ul, ol, dl, dd { margin: 0; }
+  ul, ol { padding: 0; list-style: none; }
+  h1 { font-size: 22px; font-weight: 500; }
+  h2 { font-size: 15px; font-weight: 500; }
+  svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .pill.work { background: var(--accent-bg); color: var(--accent); }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+  .btn.primary { background: var(--text); color: #fff; }
+  .btn.text { color: var(--muted); }
+  .btn.text:hover { color: var(--text); }
+
+  /* App frame */
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr) 300px; min-height: 100%; }
+  .app.settings { grid-template-columns: 232px minmax(0, 1fr); }
+  .app.settings .files { display: none; }
+  .side { padding: 24px 12px; display: flex; flex-direction: column; gap: 24px; border-right: 1px solid var(--line); }
+  .brand { font-weight: 500; font-size: 15px; padding: 0 12px; }
+  .side h3 { font-size: 13px; font-weight: 400; color: var(--muted); padding: 0 12px 8px; }
+  .item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; width: 100%; }
+  .item small { display: block; color: var(--faint); font-size: 12px; }
+  .item.on { background: var(--panel); }
+  .side .foot { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
+  .side .foot .item { color: var(--muted); }
+  .side .foot .item.on { color: var(--text); }
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .chat-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 24px 32px 12px; }
+  .chat-head h1 { flex: 1 1 200px; min-width: 0; }
+  .controls { display: flex; align-items: center; gap: 4px; }
+  .controls .pill { margin-right: 8px; }
+  .stages { display: flex; gap: 8px; padding: 0 32px 12px; color: var(--faint); font-size: 13px; flex-wrap: wrap; }
+  .stages .now { color: var(--text); }
+  .stages .done { color: var(--muted); }
+  .stages .budget { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .scroll { flex: 1; padding: 12px 32px 160px; }
+  .thread { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  .me { align-self: flex-end; max-width: 80%; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .say { max-width: 62ch; }
+  .note { color: var(--muted); font-size: 13px; }
+  .composer { position: fixed; bottom: 64px; left: calc(232px + (100vw - 232px - 300px) / 2); transform: translateX(-50%); width: min(720px, calc(100vw - 232px - 300px - 64px)); background: var(--panel); border-radius: 12px; padding: 12px 16px; color: var(--faint); }
+  .files { background: var(--panel); margin: 12px 12px 12px 0; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px; font-size: 13px; align-self: start; position: sticky; top: 12px; }
+  .files h2 { font-size: 15px; }
+  .files h3 { font-size: 13px; font-weight: 400; color: var(--muted); margin-bottom: 4px; }
+  .files li { display: flex; gap: 8px; padding: 4px 0; }
+  .files li span:first-child { color: var(--faint); font-size: 11px; width: 32px; flex: none; padding-top: 1px; }
+
+  /* Step 64: the plan */
+  .plan-wrap { padding: 0 32px 12px; }
+  .plan { max-width: 720px; width: 100%; margin: 0 auto; background: var(--panel); border-radius: 12px; }
+  .plan-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 16px; }
+  .plan-head h2 { font-size: 14px; }
+  .plan-head .count { color: var(--muted); font-size: 13px; }
+  .plan-head .now-line { color: var(--muted); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plan-head svg { margin-left: auto; color: var(--faint); transition: transform .2s; }
+  .plan.open .plan-head svg { transform: rotate(90deg); }
+  .plan ol { display: none; padding: 0 16px 12px; flex-direction: column; gap: 4px; }
+  .plan.open ol { display: flex; }
+  .plan.open .now-line { visibility: hidden; }
+  .plan li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: start; font-size: 13px; }
+  .plan li .mark { width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; border: 1.5px solid #cfcfd4; display: grid; place-items: center; }
+  .plan li.done .mark { background: var(--ok-fg); border-color: var(--ok-fg); color: #fff; }
+  .plan li.done .mark svg { width: 10px; height: 10px; stroke-width: 2.2; }
+  .plan li.done > span:nth-child(2) { color: var(--muted); }
+  .plan li.now .mark { border-color: var(--accent); }
+  .plan li.now .mark::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+  .plan li.later > span:nth-child(2) { color: var(--muted); }
+  .plan li s { display: block; color: var(--faint); }
+  .plan li .pill { font-size: 11px; line-height: 18px; padding: 0 8px; }
+  .plan li .pill.new { background: var(--accent-bg); color: var(--accent); }
+
+  /* Step 62: stages */
+  .stage { display: flex; flex-direction: column; }
+  .stage-head { display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: baseline; gap: 8px; width: 100%; padding: 4px 0; }
+  .stage-head svg { align-self: center; color: var(--muted); transition: transform .2s; }
+  .stage.open > .stage-head svg { transform: rotate(90deg); }
+  .stage-head .name { font-weight: 500; }
+  .stage-head .sum { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stage.open > .stage-head .sum { visibility: hidden; }
+  .stage-head time { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .stage-head:hover .sum { color: var(--text); }
+  .stage-body { display: none; margin: 4px 0 4px 6px; padding-left: 16px; border-left: 1px solid var(--line); flex-direction: column; gap: 4px; }
+  .stage.open > .stage-body { display: flex; }
+
+  /* Step 63: thinking */
+  .thought { margin-top: 8px; }
+  .thought:first-child { margin-top: 0; }
+  .th-head { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; padding: 2px 0; }
+  .th-head svg { width: 12px; height: 12px; color: var(--faint); transition: transform .2s; }
+  .thought.open .th-head svg { transform: rotate(90deg); }
+  .th-head:hover svg { color: var(--text); }
+  .th-text { display: none; color: var(--muted); font-size: 13px; padding: 4px 0 4px 18px; max-width: 62ch; }
+  .th-text p + p { margin-top: 8px; }
+  .thought.open .th-text { display: block; }
+  .acts { display: flex; flex-direction: column; gap: 2px; padding-left: 18px; }
+  .nothink .acts { padding-left: 0; }
+
+  /* An action, and the action opened */
+  .act { display: flex; gap: 8px; align-items: baseline; width: calc(100% + 16px); color: var(--muted); font-size: 13px; padding: 2px 8px; margin: 0 -8px; border-radius: 8px; min-width: 0; }
+  .act:hover { background: var(--panel); color: var(--text); }
+  .act > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act .file { color: var(--text); flex: 0 100 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act .more { color: var(--faint); white-space: nowrap; }
+  .act time { margin-left: auto; padding-left: 8px; color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+  .act.flag, .act.flag .more { color: var(--warn-fg); }
+  .act.on { background: var(--panel); color: var(--text); border-radius: 8px 8px 0 0; }
+  .detail { background: var(--panel); border-radius: 0 0 12px 12px; margin: 0 -8px 8px; padding: 4px 16px 16px; display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px 16px; font-size: 13px; }
+  .detail dt { color: var(--muted); }
+  .detail dd { min-width: 0; }
+  .detail .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .detail .chip { background: var(--sheet); border-radius: 999px; padding: 2px 10px; font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail .chip:hover { color: var(--accent); }
+  .detail pre { margin: 0; background: var(--sheet); border-radius: 12px; padding: 12px; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+  .detail .code { color: var(--muted); font-size: 13px; }
+  .detail .code:hover { color: var(--text); }
+
+  .live { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 24px; min-width: 0; }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pulse 1.4s ease-in-out infinite; }
+  .live b { font-weight: 400; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 40%, var(--text) 50%, var(--muted) 60%, var(--muted) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: sweep 1.8s linear infinite; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .live .file { color: var(--muted); min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live time { color: var(--faint); font-variant-numeric: tabular-nums; flex: none; margin-left: auto; }
+  .change { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); padding: 8px 0 4px; }
+  .change b { font-weight: 400; color: var(--text); }
+
+  /* Today, for comparison */
+  .grp-head { display: flex; align-items: center; gap: 8px; color: var(--muted); padding: 4px 0; }
+  .grp-head svg { transform: rotate(90deg); }
+  .grp-head time { color: var(--faint); }
+  .flat { margin: 4px 0 4px 6px; padding-left: 16px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .flat div { display: flex; gap: 8px; color: var(--muted); font-size: 13px; min-width: 0; }
+  .flat div span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .flat div .file { color: var(--text); flex: 0 100 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .flat time { margin-left: auto; color: var(--faint); flex: none; }
+
+  .report { display: flex; flex-direction: column; gap: 12px; }
+  .filerow { display: flex; align-items: center; gap: 12px; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .filerow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filerow small { color: var(--faint); font-size: 11px; }
+  .spent { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; padding: 0 16px; }
+
+  /* Settings */
+  .settings-col { max-width: 640px; width: 100%; margin: 0 auto; padding: 24px 32px 120px; display: flex; flex-direction: column; gap: 24px; }
+  .rows { background: var(--panel); border-radius: 12px; padding: 4px 16px; }
+  .rows > h2 { padding: 12px 0 4px; }
+  .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 12px 0; min-height: 56px; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row > span:first-child { color: var(--muted); }
+  .row.new { margin: 0 -16px; padding-left: 16px; padding-right: 16px; background: var(--accent-bg); }
+  .row.new > span:first-child { color: var(--text); display: flex; gap: 8px; align-items: center; }
+  .row.new .pill { background: var(--sheet); color: var(--accent); }
+  .seg { display: inline-flex; background: var(--sheet); border-radius: 999px; padding: 4px; }
+  .seg button { padding: 4px 12px; border-radius: 999px; color: var(--muted); }
+  .seg button.on { background: var(--text); color: #fff; }
+  .switch { width: 36px; height: 20px; border-radius: 999px; background: var(--accent); position: relative; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 18px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+  .stepper { display: inline-flex; align-items: center; gap: 4px; background: var(--sheet); border-radius: 999px; padding: 2px; }
+  .stepper button { width: 28px; height: 28px; border-radius: 50%; text-align: center; }
+  .stepper b { font-weight: 400; min-width: 24px; text-align: center; }
+
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
+  .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
+  .switcher button.on { background: #fff; color: #18181b; }
+
+  .fresh { animation: rise .25s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @keyframes sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+  @media (max-width: 1180px) { .app { grid-template-columns: 232px minmax(0, 1fr); } .files { display: none; } .composer { left: calc(232px + (100vw - 232px) / 2); width: min(720px, calc(100vw - 232px - 64px)); } }
+  @media (max-width: 760px) {
+    .app, .app.settings { grid-template-columns: 1fr; } .side { display: none; }
+    .chat-head { padding: 16px 16px 8px; } .stages { padding: 0 16px 8px; } .scroll { padding: 8px 16px 260px; } .plan-wrap { padding: 0 16px 8px; }
+    .composer { left: 50%; width: calc(100% - 32px); bottom: 120px; }
+    .stage-head { grid-template-columns: 14px auto minmax(0, 1fr) auto; }
+    .detail { grid-template-columns: 1fr; gap: 4px; } .detail dd + dt { margin-top: 8px; }
+    .settings-col { padding: 16px 16px 160px; }
+    .hide-narrow { display: none; }
+    .act .file, .act .more { display: none; }
+    .me { max-width: 92%; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <nav class="side">
+    <div class="brand">Document Intelligence</div>
+    <div><h3>Recent</h3>
+      <button class="item on" data-go="run"><span>October 2026 payroll<small>Nov 27, 10:16</small></span><span class="pill work" id="side-pill">Working</span></button>
+      <button class="item"><span>October 2026 payroll<small>Nov 26, 09:47</small></span><span class="pill ok">Finished</span></button>
+    </div>
+    <div class="foot"><button class="item">Clients</button><button class="item">Playbooks</button><button class="item" data-go="settings" id="side-settings">Settings</button></div>
+  </nav>
+  <main class="main" id="main"></main>
+  <aside class="files" aria-label="Files">
+    <h2>Files</h2>
+    <div><h3>Outputs</h3><ul><li><span>XLSX</span><span>output_template_output.xlsx</span></li></ul></div>
+    <div><h3>Agent's notes</h3><ul><li><span>MD</span><span>notes.md</span></li></ul></div>
+    <div><h3>Sources</h3><ul>
+      <li><span>TXT</span><span>October close instructions.txt</span></li><li><span>XLSX</span><span>MY Payroll October.xlsx</span></li>
+      <li><span>XLSX</span><span>uk_payroll_oct26.xlsx</span></li><li><span>XLSX</span><span>SG01_Payroll_Oct2026_FINAL.xlsx</span></li>
+      <li><span>XLSX</span><span>SG01_Payroll_Oct2026_v1_DRAFT_superseded.xlsx</span></li><li><span>CSV</span><span>us01_payroll_register_2026-10.csv</span></li>
+      <li><span>XLSX</span><span>Gehalt_Oktober_2026.xlsx</span></li><li><span>CSV</span><span>bank_details_oct2026.csv</span></li>
+      <li><span>XLSX</span><span>GL_detail_Oct2026.xlsx</span></li></ul></div>
+  </aside>
+</div>
+<div class="switcher" id="switcher" role="toolbar" aria-label="Prototype states"></div>
+<script>
+const CHEV = '<svg viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5"/></svg>';
+const TICK = '<svg viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></svg>';
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const fmt = (s) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+const ASK = 'Consolidate the October 2026 group payroll. Fill the template from the packet: one Employees row per active employee across every entity, and the File Map with every file and its role. Follow the close instructions inside the packet.';
+const PACKET = ['October close instructions.txt', 'uk_payroll_oct26.xlsx', 'MY Payroll October.xlsx', 'SG01_Payroll_Oct2026_FINAL.xlsx', 'SG01_Payroll_Oct2026_v1_DRAFT_superseded.xlsx', 'us01_payroll_register_2026-10.csv', 'Gehalt_Oktober_2026.xlsx', 'fx_rates_2026.xlsx', 'GL_detail_Oct2026.xlsx'];
+
+// The agent's plan. "at" is the plan step that is going on in the live run.
+const PLAN = [
+  { t: 'Read the close rules and list every file' },
+  { t: 'Pick the final Singapore payroll file' },
+  { t: 'Build one employee list across the five entities' },
+  { t: 'Match each employee to the bank file' },
+  { t: 'Fill the template and the file map' },
+  { t: 'Check totals against the general ledger' },
+];
+const PLAN_CHANGED = [
+  PLAN[0], PLAN[1], PLAN[2],
+  { t: 'Convert Malaysian pay to US dollars at the October rate', isNew: true },
+  PLAN[3], PLAN[4],
+  { t: 'Check totals against the general ledger, entity by entity', was: 'Check totals against the general ledger' },
+];
+
+// Each action: what the line says, its files, seconds, and the full detail behind it.
+const A = {
+  list: { text: 'Listed every file in the packet', files: [], secs: 3,
+    why: 'List the supplied files and read the job instructions before looking inside the payroll packet.',
+    back: '11 files in 4 folders\n  7 workbooks, 3 CSV files, 1 text file\n  Region_APAC/Singapore/2026/10_October holds 2 Singapore payroll files' },
+  rules: { text: 'Read the close rules', files: ['October close instructions.txt'], secs: 5,
+    why: 'Read the October close instructions in full, so every later step follows the client\'s own rules.',
+    back: '1. UK leavers after 25 October are paid in November.\n2. Use the Singapore file marked FINAL.\n3. Report every entity in US dollars at the month-end rate.\n4. New joiners are paid from their start date.' },
+  profile: { text: 'Looked at every workbook and CSV, hidden sheets included', files: PACKET.slice(1), secs: 9,
+    why: 'Open every workbook and CSV in the packet, including hidden sheets, and note the columns and row counts of each.',
+    back: 'uk_payroll_oct26.xlsx        Payroll (61 rows)\nMY Payroll October.xlsx      Gaji (44 rows), Notes (hidden)\nSG01_..._FINAL.xlsx           Payroll (38 rows)\nSG01_..._DRAFT_superseded    Payroll (39 rows)\nus01_payroll_register.csv     52 rows\nGehalt_Oktober_2026.xlsx     Lohn (20 rows)' },
+  compare: { text: 'Compared the final and draft Singapore files', files: ['SG01_Payroll_Oct2026_FINAL.xlsx', 'SG01_Payroll_Oct2026_v1_DRAFT_superseded.xlsx'], secs: 6,
+    why: 'Compare the FINAL and DRAFT Singapore files row by row, to confirm which one the close rules mean and whether the draft holds anyone the final leaves out.',
+    back: 'FINAL: 38 employees, gross SGD 412,880.00\nDRAFT: 39 employees, gross SGD 418,130.00\nOnly in the draft: Lim Jia Hui, left 30 September\nThe final file is the one to use.' },
+  note: { text: 'Wrote down which files to use', files: ['notes.md'], secs: 2,
+    why: 'Record which file is the source for each entity, and why, in the run notes.',
+    back: 'Added 6 lines to notes.md' },
+  combine: { text: 'Combined the five payroll files into one employee list', files: PACKET.slice(1, 7), secs: 13,
+    why: 'Read each entity\'s payroll into the same columns (employee ID, name, entity, gross pay, start and leave dates) and join them into one list.',
+    back: '215 employees\n  UK 61 · Malaysia 44 · Singapore 38 · US 52 · Germany 20\nNo employee ID appears twice.' },
+  convert: { text: 'Converted Malaysian pay to US dollars', files: ['MY Payroll October.xlsx', 'fx_rates_2026.xlsx'], secs: 4,
+    why: 'Convert the Malaysian gross pay from ringgit to US dollars at the 31 October rate in the rates file.',
+    back: 'Rate used: 1 MYR = 0.2287 USD (31 Oct 2026)\nMalaysia gross: MYR 611,420.00 = USD 139,831.75' },
+  bank: { text: 'Matched each employee to the bank file', files: ['bank_details_oct2026.csv'], secs: 11,
+    why: 'Match every employee in the combined list to a row in the bank file by employee ID, and list anyone with no match or a different account.',
+    back: '213 of 215 matched\nNo bank row: Raj Kumar (MY-2231), started 17 October\nAccount differs: Anna Weber (DE-0108)' },
+  fill: { text: 'Filled the Employees sheet and the file map', files: ['output_template_output.xlsx'], secs: 17,
+    why: 'Write the 215 employees into the template\'s Employees sheet and list every packet file with its role on the File Map.',
+    back: 'Employees: 215 rows written\nFile Map: 11 files, 9 used, 2 for reference' },
+  save1: { text: 'Saved the workbook: 3 problems to fix', files: [], secs: 3, flag: true,
+    why: 'Save the outputs and run the app\'s checks on them.',
+    back: 'File Map row 6: the general ledger is listed as a payroll source\nFile Map row 9: the draft is listed as used\nEmployees row 141: start date is after the pay date' },
+  fix: { text: 'Fixed the file map and one start date', files: ['output_template_output.xlsx'], secs: 4,
+    why: 'Mark the general ledger and the superseded draft as reference files, and correct Raj Kumar\'s start date from the joiner form.',
+    back: 'Updated 3 cells' },
+  save2: { text: 'Saved again: all checks passed', files: [], secs: 3,
+    why: 'Save the outputs and run the app\'s checks on them again.', back: 'All 14 checks passed' },
+  totals: { text: 'Checked totals against the general ledger, entity by entity', files: ['GL_detail_Oct2026.xlsx', 'output_template_output.xlsx'], secs: 7,
+    why: 'Add up gross pay for each entity in the workbook and compare it with the payroll lines in the general ledger.',
+    back: 'UK       matches\nMalaysia matches\nSingapore matches\nUS       matches\nGermany  differs by USD 0.02 (rounding)' },
+};
+
+// What OpenAI sends as the summary of the agent's thinking: a heading, then a short or a detailed version.
+const T = {
+  t1: { title: 'Working out which files matter',
+    short: 'There are 11 files and a close-instructions document. I\'ll read the rules first, then look inside every file before deciding which to use.',
+    detailed: ['There are 11 files and a close-instructions document. The rules decide which files count, so I\'ll read them first.', 'Then I\'ll open every workbook, hidden sheets included, because last month a Malaysian note sat on a hidden sheet. I want row counts for each entity so I can check the final list adds up.'] },
+  t2: { title: 'Deciding which Singapore file is final',
+    short: 'There are two Singapore files. The rules say to use the one marked final, but I\'ll compare them in case the draft has someone the final leaves out.',
+    detailed: ['There are two Singapore files, one marked FINAL and one marked DRAFT and superseded. The close rules say to use the final one.', 'The draft has one more row. Before I drop it I want to know who that is. If it\'s a leaver from September, the final file is right to leave them out.'] },
+  t3: { title: 'Putting the five entities into one list',
+    short: 'Each country uses different column names and currencies. I\'ll map them to the same columns before joining them.',
+    detailed: ['Each country names its columns differently: the German file says Brutto, the Malaysian one Gaji Kasar. I\'ll map them to the same columns first.', 'The close rules ask for US dollars, so I\'ll need the month-end rates too.'] },
+  t4: { title: 'Matching people to their bank details',
+    short: 'The bank file is keyed by employee ID. I\'ll match on that and list anyone missing or different.',
+    detailed: ['The bank file is keyed by employee ID, which every payroll file has. I\'ll match on that rather than on names, since names are spelled differently across countries.', 'Anyone with no match, or a different account number, goes on the list for the person to look at.'] },
+  t5: { title: 'Filling in the template',
+    short: 'I\'ll write the employees into the template, then save so the checks run.',
+    detailed: ['The template\'s Employees sheet has lookups on the entity column, so I\'ll use the exact entity names from its list.', 'Then I\'ll save, which runs the checks, and fix whatever they find.'] },
+  t6: { title: 'Checking the totals',
+    short: 'The checks pass. I\'ll compare each entity\'s total with the general ledger before I finish.',
+    detailed: ['The app\'s checks pass, but they don\'t compare against the ledger. I\'ll add up gross pay per entity and compare it with the ledger\'s payroll lines.', 'A difference of a few cents is rounding. Anything bigger I\'ll report.'] },
+};
+
+// The run, stage by stage. A stage holds thoughts; each thought holds the actions it led to.
+function stages(phase, changed) {
+  const done = phase === 'done';
+  const s2 = done || changed
+    ? [{ th: 't3', acts: ['combine', 'convert'] }, { th: 't4', acts: done ? ['bank'] : [], live: !done }]
+    : [{ th: 't3', acts: ['combine'] }, { th: 't4', acts: [], live: true }];
+  if (done) s2.push({ th: 't5', acts: ['fill'] });
+  const out = [
+    { id: 's1', name: 'Reading files', sum: 'Read the rules and 11 files. Picked the final Singapore file.', secs: 72,
+      parts: [{ th: 't1', acts: ['list', 'rules', 'profile'] }, { th: 't2', acts: ['compare', 'note'] }] },
+    { id: 's2', name: 'Filling in', sum: done ? 'Built one list of 215 employees and filled the template.' : 'Building one employee list.', secs: done ? 96 : 41, live: !done, parts: s2,
+      change: changed ? 1 : null },
+  ];
+  if (done) out.push({ id: 's3', name: 'Checking', sum: 'Fixed 3 problems the checks found. Totals match the ledger.', secs: 47,
+    parts: [{ th: 't5', acts: ['save1', 'fix', 'save2'] }, { th: 't6', acts: ['totals'] }] });
+  return out;
+}
+
+let state = {};
+let clock = 0;
+const RESET = { view: 'run', phase: 'live', changed: false, thinking: 'short', planOpen: innerWidth > 760, open: new Set(['s2']), act: null, code: false };
+
+function planHtml() {
+  const list = state.changed || state.phase === 'done' ? PLAN_CHANGED.map((p) => ({ ...p, isNew: state.changed && p.isNew, was: state.changed && p.was })) : PLAN;
+  const at = state.phase === 'done' ? list.length : state.changed ? 4 : 3;
+  const now = list[at];
+  const count = state.phase === 'done' ? `All ${list.length} done` : `${at} of ${list.length} done`;
+  const rows = list.map((p, i) => {
+    const cls = i < at ? 'done' : i === at ? 'now' : 'later';
+    const tag = p.isNew ? '<span class="pill new">New</span>' : p.was ? '<span class="pill new">Changed</span>' : '<span></span>';
+    return `<li class="${cls}"><span class="mark">${i < at ? TICK : ''}</span><span>${esc(p.t)}${p.was ? `<s>${esc(p.was)}</s>` : ''}</span>${tag}</li>`;
+  }).join('');
+  return `<section class="plan ${state.planOpen ? 'open' : ''}" aria-label="The agent's plan"><button class="plan-head" data-plan aria-expanded="${state.planOpen}">
+    <h2>Plan</h2><span class="count">${count}</span><span class="now-line">${now ? '· ' + esc(now.t) : ''}</span>${CHEV}</button><ol>${rows}</ol></section>`;
+}
+
+function actHtml(key, fresh) {
+  const a = A[key];
+  const files = a.files.slice(0, 1).map((f) => `<span class="file">${esc(f)}</span>`).join('');
+  const more = a.files.length > 1 ? `<span class="more">and ${a.files.length - 1} more</span>` : '';
+  const on = state.act === key;
+  const line = `<button class="act ${a.flag ? 'flag' : ''} ${on ? 'on' : ''} ${fresh ? 'fresh' : ''}" data-act="${key}" aria-expanded="${on}"><span>${esc(a.text)}</span>${files}${more}<time>${fmt(a.secs)}</time></button>`;
+  if (!on) return line;
+  const chips = a.files.length ? `<div class="chips">${a.files.map((f) => `<button class="chip" title="Open ${esc(f)}">${esc(f)}</button>`).join('')}</div>` : '<span style="color:var(--faint)">None</span>';
+  const code = state.code
+    ? `<pre># ${esc(a.why)}\nimport pandas as pd\nframes = [read_payroll(p) for p in PACKET_FILES]\n...</pre>`
+    : '<button class="code" data-code>Show the code</button>';
+  return line + `<dl class="detail"><dt>What it was for</dt><dd>${esc(a.why)}</dd><dt>Files</dt><dd>${chips}</dd>
+    <dt>What came back</dt><dd><pre>${esc(a.back)}</pre></dd><dt>Took</dt><dd>${fmt(a.secs)}</dd><dt></dt><dd>${code}</dd></dl>`;
+}
+
+function liveHtml() {
+  const text = state.changed ? 'Matching each employee to the bank file' : 'Matching each employee to the bank file';
+  return `<div class="live"><i></i><b>${text}</b><span class="file">bank_details_oct2026.csv</span><time data-tick>${fmt(8 + clock)}</time></div>`;
+}
+
+function stageHtml(s) {
+  const open = state.open.has(s.id);
+  const think = state.thinking !== 'off';
+  const parts = s.parts.map((p, i) => {
+    const acts = p.acts.map((k) => actHtml(k)).join('') + (p.live ? liveHtml() : '');
+    const change = s.change && i === s.change
+      ? `<div class="change fresh"><b>Changed its plan: added “Convert Malaysian pay to US dollars at the October rate”.</b><span>The Malaysia file is in ringgit, and the close rules ask for US dollars.</span></div>` : '';
+    if (!think) return change + `<div class="acts">${acts}</div>`;
+    const t = T[p.th];
+    const tOpen = state.open.has(p.th);
+    const text = state.thinking === 'detailed' ? t.detailed.map((x) => `<p>${esc(x)}</p>`).join('') : `<p>${esc(t.short)}</p>`;
+    return change + `<div class="thought ${tOpen ? 'open' : ''}"><button class="th-head" data-open="${p.th}" aria-expanded="${tOpen}">${CHEV}<span>${esc(t.title)}</span></button>
+      <div class="th-text">${text}</div></div><div class="acts">${acts}</div>`;
+  }).join('');
+  const time = s.live ? `<time data-tick-stage>${fmt(s.secs + clock)}</time>` : `<time>${fmt(s.secs)}</time>`;
+  return `<div class="stage ${open ? 'open' : ''} ${think ? '' : 'nothink'}"><button class="stage-head" data-open="${s.id}" aria-expanded="${open}">${CHEV}
+    <span class="name">${s.name}</span><span class="sum">${esc(s.sum)}</span>${time}</button><div class="stage-body">${parts}</div></div>`;
+}
+
+function todayHtml() {
+  const lines = [
+    ['Started on 11 files', '', ''], ['Sandbox ready; inputs uploaded', '', ''],
+    ['List the supplied files and read the job instructions before inspecting the payroll packet.', '', '3s'],
+    ['Read the close rules and profile every packet workbook and CSV, including hidden sheets, with compact data samples.', 'October close instructions.txt', '5s'],
+    ['Record the initial source hierarchy and key rules in working notes, then inspect all relevant payroll rows and movement records.', 'us01_payroll_register_2026-10.csv', '7s'],
+    ['Verify source payroll populations, duplicate IDs, allowances, and nonstandard adjustment fields before creating the workbook.', 'MY Payroll October.xlsx', '6s'],
+    ['Build the payroll workbook, file inventory, source map, and written audit notes from the verified packet records.', 'GL_detail_Oct2026.xlsx', '13s'],
+    ['Using save outputs', '', ''], ['Saved outputs; 3 problem(s) to fix', '', ''],
+    ['Read the required spreadsheet workflow guidance privately, then compare saved data rows, template controls, and source populations.', '', '3s'],
+    ['Locate the spreadsheet workflow guide in the available skills directory.', '', '3s'],
+    ['Check the mounted skill directories for the required spreadsheet instructions.', '', '3s'],
+    ['Inspect the spreadsheet skill folder to find its guide file.', '', '3s'],
+  ];
+  return `<div><div class="grp-head">${CHEV}<span>Worked through 11 files</span><time>4m 4s</time></div><div class="flat">${lines.map(([t, f, s]) =>
+    `<div><span>${esc(t)}</span>${f ? `<span class="file">${esc(f)}</span>` : ''}${s ? `<time>${s}</time>` : ''}</div>`).join('')}</div></div>`;
+}
+
+function runHtml() {
+  const done = state.phase === 'done' || state.phase === 'today';
+  const head = `<header class="chat-head"><h1>October 2026 payroll</h1><div class="controls">${done ? '<span class="pill ok">Finished</span>' : '<span class="pill work">Working</span>'}
+    <button class="btn text hide-narrow">Payroll</button><button class="btn text hide-narrow">Technical log</button>${done ? '' : '<button class="btn text">Pause</button>'}</div></header>`;
+  const at = done ? 3 : 1;
+  const strip = `<div class="stages">${['Reading files', 'Filling in', 'Checking'].map((n, i) => `<span class="${i < at ? 'done' : i === at ? 'now' : ''}">${n}</span>`).join('<span>›</span>')}
+    ${done ? '' : `<span class="budget">Step 14 of 60 · 2 of 30 min</span>`}</div>`;
+  let body = `<div class="me">${esc(ASK)}</div>`;
+  if (state.phase === 'today') body += todayHtml();
+  else body += stages(state.phase, state.changed).map(stageHtml).join('');
+  if (done) body += `<div class="report"><p class="say">The workbook is ready: 215 employees across five entities, in US dollars. Two people need a look: Raj Kumar has no bank details, and Anna Weber's account differs from the bank file.</p>
+    <div class="filerow"><small>XLSX</small><span class="name">output_template_output.xlsx</span><span class="pill ok">Checked</span><button class="btn primary">Download</button></div>
+    <div class="spent"><span>Notes</span><span>4m 35s · $0.53</span></div></div>`;
+  const plan = state.phase === 'today' ? '' : `<div class="plan-wrap">${planHtml()}</div>`;
+  return head + strip + plan + `<div class="scroll"><div class="thread">${body}</div></div><div class="composer">${done ? 'Ask for a change' : 'Message the agent'}</div>`;
+}
+
+function settingsHtml() {
+  const seg = (name, val, labels) => `<div class="seg" role="group" aria-label="${name}">${labels.map(([v, l]) => `<button class="${val === v ? 'on' : ''}" data-seg="${name}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  const stepper = (n) => `<span class="stepper"><button aria-label="Fewer">−</button><b>${n}</b><button aria-label="More">+</button></span>`;
+  return `<div class="settings-col"><h1>Settings</h1><section class="rows"><h2>Agent</h2>
+    <div class="row"><span>Helper agents for large folders</span>${stepper(0)}</div>
+    <div class="row"><span>Second agent reviews the result</span><span class="switch" role="switch" aria-checked="true"></span></div>
+    <div class="row"><span>Record a source for every row</span><span class="switch" role="switch" aria-checked="true"></span></div>
+    <div class="row"><span>Thinking depth</span>${seg('effort', 'medium', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']])}</div>
+    <div class="row new"><span>Show the agent's thinking <span class="pill">New</span></span>${seg('thinking', state.thinking, [['off', 'Off'], ['short', 'Short'], ['detailed', 'Detailed']])}</div>
+    <div class="row"><span>Questions it may ask per job</span>${stepper(3)}</div>
+    <div class="row"><span>Runs at once</span>${stepper(2)}</div></section></div>`;
+}
+
+function draw() {
+  document.getElementById('app').classList.toggle('settings', state.view === 'settings');
+  document.getElementById('main').innerHTML = state.view === 'settings' ? settingsHtml() : runHtml();
+  document.querySelector('[data-go="run"]').classList.toggle('on', state.view === 'run');
+  document.getElementById('side-settings').classList.toggle('on', state.view === 'settings');
+  const pill = document.getElementById('side-pill');
+  const done = state.phase !== 'live';
+  pill.className = done ? 'pill ok' : 'pill work'; pill.textContent = done ? 'Finished' : 'Working';
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-open],[data-act],[data-plan],[data-code],[data-seg],[data-go]');
+  if (!t) return;
+  if (t.dataset.open) { const id = t.dataset.open; state.open.has(id) ? state.open.delete(id) : state.open.add(id); }
+  else if (t.dataset.act) { state.act = state.act === t.dataset.act ? null : t.dataset.act; state.code = false; }
+  else if (t.hasAttribute('data-plan')) state.planOpen = !state.planOpen;
+  else if (t.hasAttribute('data-code')) state.code = true;
+  else if (t.dataset.seg === 'thinking') state.thinking = t.dataset.v;
+  else if (t.dataset.go) state.view = t.dataset.go;
+  else return;
+  draw();
+});
+
+setInterval(() => { clock += 1; document.querySelectorAll('[data-tick]').forEach((x) => { x.textContent = fmt(8 + clock); });
+  document.querySelectorAll('[data-tick-stage]').forEach((x) => { x.textContent = fmt((state.changed ? 41 : 41) + clock); }); }, 1000);
+
+const STATES = [
+  ['Today', { phase: 'today' }],
+  ['Run in progress', {}],
+  ['Action opened', { act: 'combine' }],
+  ['Thinking opened', { open: new Set(['s2', 't3']) }],
+  ['Plan changed mid-run', { changed: true }],
+  ['Finished run', { phase: 'done', open: new Set(), planOpen: false }],
+  ['Thinking off', { thinking: 'off' }],
+  ['Settings row', { view: 'settings' }],
+];
+const bar = document.getElementById('switcher');
+STATES.forEach(([name, s], n) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { state = { ...RESET, open: new Set(RESET.open), ...s }; clock = 0; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); window.scrollTo(0, 0); };
+  bar.appendChild(b);
+  if (n === 1) b.click();
+});
+</script>
+</body>
+</html>

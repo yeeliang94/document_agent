@@ -1,0 +1,396 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY (plan Step 61). Made-up data. The dark bar at the bottom jumps between the polish items; each shows
+     Today beside New (stacked on a narrow screen). "Today" copies what the app does now (web/thread.js, files.js,
+     pages.js, playbooks.js, styles.css).
+     1. File names: cut in the middle so the end (and the file type) stays, never down to one letter; full name on hover.
+        Chat file card, step file chips, the file title on a phone.
+     2. Long step text wraps and reads in full.
+     3. Blank rename: the message shows inside the dialog, under the name, and goes on Cancel.
+     4. Workbook view: one number format per column (6,940.80 under 3,933.12).
+     5. The run's time and cost sit under its headline, not on the Notes row.
+     6. "run" everywhere instead of "job".
+     7. Plainer Settings labels; on a phone the control stays beside its label.
+     8. New run: the Playbook dropdown is the same size as Client.
+     9. One accent colour: switches go black like the option buttons and Start; blue stays for links and focus.
+    10. Start run greyed out says why.
+    11. Empty playbook instructions show a placeholder. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polish (prototype)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#fff; --panel:#f5f5f6; --sheet:#fff; --text:#18181b; --muted:#6e6e76; --faint:#a3a3ab; --line:#e7e7ea; --accent:#2f6fdb; --accent-bg:#e8f0fd; --ok-bg:#e6f3e6; --ok-fg:#24592a; --warn-bg:#fbf0dc; --warn-fg:#6b4206; --bad-bg:#fbe9e9; --bad-fg:#7a2020; --grey-bg:#ececee; --grey-fg:#55555c; }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { border: 0; background: none; cursor: pointer; padding: 0; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; }
+  h2 { font-size: 15px; font-weight: 500; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
+  .btn.small { padding: 4px 12px; font-size: 13px; }
+  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); }
+  .btn.text { padding: 8px 12px; color: var(--muted); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+  .ref { color: var(--accent); text-decoration: underline; text-decoration-color: rgba(47,111,219,.3); text-underline-offset: 3px; }
+
+  .wrap { max-width: 1104px; margin: 0 auto; padding: 48px 32px 160px; display: flex; flex-direction: column; gap: 24px; }
+  .intro { color: var(--muted); max-width: 70ch; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  .side-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .side-col > h3 { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .stage { border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); padding: 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; position: relative; overflow: hidden; }
+  .cap { font-size: 12px; color: var(--faint); }
+
+  /* Run fragments */
+  .filerow { display: flex; align-items: center; gap: 12px; background: var(--panel); border-radius: 12px; padding: 12px 16px; font-size: 13px; min-width: 0; }
+  .tag { color: var(--faint); font-size: 11px; flex: none; }
+  .filerow .name { flex: 1; min-width: 0; display: flex; overflow: hidden; white-space: nowrap; text-align: left; }
+  /* Today: the start may shrink to nothing and the last 16 characters overflow. */
+  .old-cut .s { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .old-cut .e { flex: none; }
+  /* New: the start always keeps a few letters; the end keeps the last 12 characters. */
+  .cut { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .cut .s { overflow: hidden; text-overflow: ellipsis; min-width: 5ch; }
+  .cut .e { flex: none; }
+  .cut .s, .cut .e { white-space: pre; }
+  /* New card: the name gets its own line when the panel is narrow. */
+  .filerow.fresh { flex-wrap: wrap; row-gap: 8px; }
+  .filerow.fresh .name { flex: 1 1 calc(100% - 48px); }
+  .filerow.fresh .pill { margin-left: auto; }
+  .tip { position: absolute; background: var(--text); color: #fff; font-size: 12px; border-radius: 8px; padding: 4px 8px; white-space: nowrap; z-index: 2; }
+  .narrowchat { width: 300px; max-width: 100%; }
+
+  .grp-body { margin: 4px 0 4px 6px; padding-left: 16px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .step { display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 13px; min-width: 0; }
+  .step .file { color: var(--text); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step .more { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step time { margin-left: auto; padding-left: 8px; color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+  .step.old > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step.old .file { flex: 0 100 auto; min-width: 48px; }
+  /* New: the words wrap; the file chips sit on their own line under them, each cut in the middle. */
+  .step.new { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+  .step.new .words { color: var(--muted); }
+  .step.new .chips { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px 12px; min-width: 0; }
+  .step.new .chips .cut { color: var(--text); max-width: 150px; }
+  .step.new .chips .more { flex: none; }
+  .step.new time { grid-column: 2; grid-row: 1; }
+
+  .phone { width: 343px; max-width: 100%; background: var(--panel); border-radius: 12px; padding: 12px; }
+  .files-head { display: flex; align-items: center; gap: 4px; }
+  .files-head h2 { flex: 1 1 0; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .files-head h2.cut { display: flex; }
+  .icon-btn.lit { background: var(--accent); color: #fff; }
+
+  /* Dialog */
+  .scrim { position: absolute; inset: 0; background: rgba(24,24,27,.3); display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 16px; }
+  .dialog { background: var(--bg); border-radius: 12px; padding: 24px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 0 0 1px var(--line), 0 12px 32px rgba(24,24,27,.16); }
+  .dialog-head { display: flex; justify-content: space-between; align-items: center; }
+  .dialog label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+  .field { border: 0; background: var(--panel); border-radius: 12px; padding: 8px 12px; min-width: 0; width: 100%; color: var(--text); }
+  .field.bad { box-shadow: inset 0 0 0 1px var(--bad-fg); }
+  .problem { color: var(--bad-fg); font-size: 13px; }
+  .end { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--text); color: #fff; border-radius: 12px; padding: 10px 16px; font-size: 13px; white-space: nowrap; }
+  .toast.under { z-index: 0; }
+  .behind { position: relative; min-height: 300px; }
+  .behind .page-bits { display: flex; flex-direction: column; gap: 12px; }
+  .ghost { height: 14px; border-radius: 6px; background: var(--panel); }
+
+  /* Workbook */
+  .sheet { overflow: auto; background: var(--sheet); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); }
+  table { border-collapse: separate; border-spacing: 0; font-size: 13px; white-space: nowrap; width: 100%; }
+  th { color: var(--faint); font-weight: 400; text-align: left; padding: 8px 12px; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  td.n { color: var(--faint); text-align: right; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.hd td { background: var(--accent-bg); }
+
+  /* Report */
+  .report { display: flex; flex-direction: column; gap: 12px; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: -4px; }
+  .choices { display: flex; align-items: center; gap: 8px; }
+  .choices .spent { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .card { background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+
+  /* Word lists */
+  .words-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: normal; }
+  .words-table th { text-align: left; color: var(--muted); font-weight: 400; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }
+  .words-table td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .words-table td:first-child { color: var(--muted); width: 22%; }
+  .words-table .same { color: var(--faint); }
+  .words-table s { color: var(--muted); }
+
+  /* Settings */
+  .rows { background: var(--panel); border-radius: 12px; padding: 4px 16px; }
+  .rows > h2 { padding: 12px 0 4px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; min-height: 56px; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row > span:first-child { color: var(--muted); }
+  .row.wrapdrop { flex-wrap: wrap; }
+  .row.keep { flex-wrap: wrap; row-gap: 8px; }
+  .row.keep > span:first-child { flex: 1 1 160px; min-width: 0; }
+  .row.keep > :last-child { flex: none; margin-left: auto; }
+  .val { display: flex; align-items: center; gap: 8px; min-width: 0; justify-content: flex-end; flex-wrap: wrap; }
+  .seg { display: inline-flex; background: var(--sheet); border-radius: 999px; padding: 4px; font-size: 13px; }
+  .seg button { padding: 4px 12px; border-radius: 999px; color: var(--muted); }
+  .seg button.on { background: var(--text); color: #fff; }
+  .switch { width: 36px; height: 20px; border-radius: 999px; background: #cfcfd4; position: relative; flex: none; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+  .switch.on::after { transform: translateX(16px); }
+  .switch.on.blue { background: var(--accent); }
+  .switch.on.black { background: var(--text); }
+  .stepper { display: inline-flex; align-items: center; gap: 4px; background: var(--sheet); border-radius: 999px; padding: 2px; }
+  .stepper button { width: 28px; height: 28px; border-radius: 50%; }
+  .stepper b { font-weight: 400; min-width: 20px; text-align: center; }
+  .unit { display: inline-flex; align-items: center; gap: 6px; background: var(--sheet); border-radius: 12px; padding: 6px 12px; font-size: 13px; color: var(--muted); }
+  .unit b { font-weight: 400; color: var(--text); }
+  .settings-pair .row > span:first-child { font-size: 13px; }
+
+  /* New run */
+  .box { background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .box textarea { width: 100%; border: 0; background: none; resize: none; min-height: 72px; padding: 0; }
+  .box textarea::placeholder { color: var(--faint); }
+  .row select.field { background: var(--sheet); appearance: none; -webkit-appearance: none; padding-right: 32px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%236e6e76' stroke-width='1.6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; background-size: 14px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+  .row select.field { width: auto; }
+  .row select.wide-old { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+  .row select.same { width: 220px; max-width: 55vw; flex: none; }
+  .hint { color: var(--muted); font-size: 13px; flex-basis: 100%; text-align: right; order: 9; }
+
+  .book textarea { min-height: 180px; }
+
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
+  .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
+  .switcher button.on { background: #fff; color: #18181b; }
+
+  @media (max-width: 760px) {
+    .wrap { padding: 16px 16px 260px; gap: 16px; }
+    .pair { grid-template-columns: 1fr; gap: 16px; }
+    .stage { padding: 16px; }
+    .words-table td:first-child { width: 30%; }
+  }
+</style>
+</head>
+<body>
+<main class="wrap" id="main"></main>
+<div class="switcher" id="switcher"></div>
+<script>
+const I = {
+  back: '<svg viewBox="0 0 16 16"><path d="M10 4 6 8l4 4"/></svg>',
+  comment: '<svg viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg>',
+  more: '<svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg>',
+  x: '<svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+  down: '<svg viewBox="0 0 16 16"><path d="M8 3v8M4 7l4 4 4-4M3 13h10"/></svg>',
+  clip: '<svg viewBox="0 0 16 16"><path d="m11 5-5 5a1.4 1.4 0 0 0 2 2l5.5-5.5a2.8 2.8 0 0 0-4-4L4 8a4.2 4.2 0 0 0 6 6l4-4"/></svg>',
+};
+// Today's cut keeps the last 16 characters and lets the start shrink to nothing (web/core.js nameHtml).
+const oldCut = (n) => `<span class="old-cut" style="display:flex;min-width:0;overflow:hidden" title="${n}"><span class="s">${n.slice(0, n.length - 16)}</span><span class="e">${n.slice(-16)}</span></span>`;
+// New: the end keeps the last 12 characters (enough for "_output.xlsx" or "ober.xlsx"), the start keeps at least 5.
+const cut = (n, cls = '') => n.length <= 18 ? `<span class="${cls}" title="${n}">${n}</span>` : `<span class="cut ${cls}" title="${n}"><span class="s">${n.slice(0, -12)}</span><span class="e">${n.slice(-12)}</span></span>`;
+const pair = (today, now, capToday = '', capNew = '') => `<div class="pair">
+  <div class="side-col"><h3>Today</h3><div class="stage">${today}</div>${capToday ? `<p class="cap">${capToday}</p>` : ''}</div>
+  <div class="side-col"><h3>New</h3><div class="stage">${now}</div>${capNew ? `<p class="cap">${capNew}</p>` : ''}</div></div>`;
+
+const ITEMS = {};
+
+ITEMS.names = () => {
+  const out = 'output_template_output.xlsx';
+  const card = (name, fresh = '') => `<div class="filerow narrowchat ${fresh}"><span class="tag">XLSX</span><button class="name">${name}</button><span class="pill ok">Checked</span><button class="btn primary small">${I.down}Download</button></div>`;
+  const step = (a, b) => `<div class="grp-body"><div class="step old"><span>Compare every saved employee row to the source records.</span><button class="file">${a}</button><button class="file">${b}</button><span class="more">and 2 more</span><time>9s</time></div></div>`;
+  const phone = (title) => `<div class="phone"><div class="files-head"><button class="icon-btn">${I.back}</button>${title}<button class="icon-btn lit">${I.comment}</button><button class="icon-btn">${I.more}</button><button class="icon-btn">${I.x}</button></div></div>`;
+  const today = `<h2>Chat file card, chat panel narrowed</h2>${card(oldCut(out))}
+    <h2>Step file chips</h2><div style="max-width:340px">${step('MY Payroll October.xlsx', 'SG01_Payroll_Oct2026_FINAL.xlsx')}</div>
+    <h2>File title on a phone</h2>${phone(`<h2>${out}</h2>`)}`;
+  const now = `<h2>Chat file card, chat panel narrowed</h2><div style="position:relative;padding-bottom:32px">${card(cut(out), 'fresh')}<span class="tip" style="left:40px;bottom:0">${out}</span></div>
+    <h2>Step file chips</h2><div style="max-width:340px"><div class="grp-body"><div class="step new"><span class="words">Compare every saved employee row to the source records.</span><time>9s</time>
+      <span class="chips">${cut('MY Payroll October.xlsx')}${cut('SG01_Payroll_Oct2026_FINAL.xlsx')}<span class="more">and 2 more</span></span></div></div></div>
+    <h2>File title on a phone</h2>${phone(cut(out, 'h2like').replace('class="cut h2like"', 'class="cut" style="flex:1 1 0;font-size:15px;font-weight:500"'))}`;
+  return { title: 'File names cut in the middle', intro: 'Names are cut in the middle, so the end and the file type stay in view. The full name shows on hover.', body: pair(today, now, 'The card keeps only “late_output.xlsx”; chips end in “MY Pa…” and “and 1…”.', 'The dark label is the hover. “and 2 more” is never cut.') };
+};
+
+ITEMS.steps = () => {
+  const text = 'Compare every saved employee row to the reconstructed source records and inspect payroll fields for movement or one-time-payment signals.';
+  const text2 = 'Recalculate and render the saved template copy for a visual inspection without altering the delivered workbook.';
+  const today = `<div class="grp-body" style="max-width:340px"><div class="step old"><span>${text}</span><time>9s</time></div><div class="step old"><span>${text2}</span><time>2s</time></div><div class="step old"><span>Check whether a spreadsheet renderer is available.</span><time>3s</time></div></div>`;
+  const now = `<div class="grp-body" style="max-width:340px"><div class="step new"><span class="words">${text}</span><time>9s</time></div><div class="step new"><span class="words">${text2}</span><time>2s</time></div><div class="step new"><span class="words">Check whether a spreadsheet renderer is available.</span><time>3s</time></div></div>`;
+  return { title: 'Long step text reads in full', intro: 'A long step wraps onto more lines instead of being cut.', body: pair(today, now) };
+};
+
+ITEMS.rename = () => {
+  const dlg = (field, msg) => `<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="rn-${msg ? 'n' : 'o'}"><div class="dialog-head"><h2 id="rn-${msg ? 'n' : 'o'}">Rename playbook</h2><button class="icon-btn" data-act="rn-cancel" aria-label="Close">${I.x}</button></div>
+    <label>Name<input class="field ${msg ? 'bad' : ''}" value="${field}" ${msg ? 'aria-invalid="true" aria-describedby="rn-err"' : ''} data-rn></label>${msg ? `<p class="problem" id="rn-err">${msg}</p>` : ''}
+    <div class="end"><button class="btn text" data-act="rn-cancel">Cancel</button><button class="btn primary" data-act="rn-go">Rename</button></div></div>`;
+  const bits = '<div class="page-bits"><h2>Payroll</h2><div class="ghost" style="width:60%"></div><div class="ghost" style="width:80%"></div><div class="ghost" style="width:40%"></div></div>';
+  const today = `<div class="behind">${bits}<div class="toast" style="z-index:0">Enter a name</div><div class="scrim">${dlg('&nbsp;&nbsp;', '')}</div></div>`;
+  const now = state.rnOpen
+    ? `<div class="behind">${bits}<div class="scrim">${dlg(state.rnErr ? '' : 'Payroll', state.rnErr ? 'Enter a name.' : '')}</div></div>`
+    : `<div class="behind">${bits}<div class="end" style="justify-content:flex-start"><button class="btn quiet small" data-act="rn-open">Rename</button><span class="cap">Cancel closed the dialog; nothing is left behind.</span></div></div>`;
+  return { title: 'Blank name when renaming', intro: 'The message shows inside the dialog, under the name. Cancel closes it and the message goes.', body: pair(today, now, '“Enter a name” sits behind the dimmed screen, and stays after Cancel.', 'Try it: clear the name and press Rename, then Cancel.') };
+};
+
+ITEMS.numbers = () => {
+  const rows = [['3,933.12', '3,933.12'], ['5,668.32', '5,668.32'], ['6,940.8', '6,940.80'], ['5,591.2', '5,591.20'], ['4,781.44', '4,781.44'], ['8,521.76', '8,521.76'], ['9,000', '9,000.00']];
+  const names = ['Jordan Hollis', 'Quinn Brook', 'Sage Pemberton', 'Vale Larkin', 'Devon Brook', 'Umber Norland', 'Ivy Marsh'];
+  const t = (k) => `<div class="sheet"><table><tr><th></th><th>C</th><th class="num">I</th></tr><tr class="hd"><td class="n">1</td><td>Employee Name</td><td class="num">Base Salary (USD)</td></tr>
+    ${rows.map((r, i) => `<tr><td class="n">${i + 2}</td><td>${names[i]}</td><td class="num">${r[k]}</td></tr>`).join('')}</table></div>`;
+  return { title: 'One number format per column', intro: 'Every number in a column shows the same decimal places: the file’s own format, or else the most any cell in that column uses.', body: pair(t(0), t(1)) };
+};
+
+ITEMS.time = () => {
+  const head = '<h2>The workbook is ready: 215 employees across five entities.</h2>';
+  const card = `<div class="card filerow" style="padding:12px 16px"><span class="tag">XLSX</span><span class="name" style="flex:1">october_2026_payroll.xlsx</span><span class="pill ok">Checked</span><button class="btn primary small">${I.down}Download</button></div>`;
+  const today = `<div class="report">${head}${card}<div class="choices"><button class="btn text">Notes</button><span class="spent">4m 35s · $0.53</span></div></div>`;
+  const now = `<div class="report">${head}<p class="meta">Took 4m 35s · cost $0.53</p>${card}<div class="choices"><button class="btn text">Notes</button></div></div>`;
+  return { title: 'Time and cost moved off the Notes row', intro: 'The run’s total time and cost sit under its headline, with words, so they no longer read as the notes’ length.', body: pair(today, now) };
+};
+
+ITEMS.run = () => {
+  const list = [
+    ['Settings', 'Questions it may ask per job', 'Questions per run'],
+    ['Start over dialog', 'The agent does the job again from the beginning.', 'The agent does the run again from the start.'],
+    ['Technical log', 'Runs: 3 (the rounds of one run)', 'Rounds: 3'],
+    ['Technical log', 'Team: Lead + 2 scouts + reviewer', 'Agents: main + 2 helpers + reviewer'],
+    ['Log message', 'Interrupted job retained. Resume when ready.', 'The app restarted during this run. Continue when ready.'],
+    ['Error', 'This job has no playbook to keep a lesson in.', 'This run has no playbook to keep a lesson in.'],
+    ['Error', 'Path is outside job workspace', 'That file is outside this run’s folder.'],
+    ['Error', 'Invalid job ID', 'That run no longer exists.'],
+  ];
+  const table = `<table class="words-table"><tr><th>Where</th><th>Today</th><th>New</th></tr>${list.map(([w, a, b]) => `<tr><td>${w}</td><td><s>${a}</s></td><td>${b}</td></tr>`).join('')}</table>`;
+  return { title: '“Run” everywhere, never “job”', intro: 'Every place the person can see the word “job”, and what it becomes.', body: `<div class="stage">${table}</div>` };
+};
+
+const LABELS = [
+  ['Agent', 'Helper agents for large folders', null, 'steps'],
+  ['Agent', 'Second agent reviews the result', null, 'off'],
+  ['Agent', 'Record a source for every row', 'Show where each row came from', 'on'],
+  ['Agent', 'Show the agent its files before it finishes', 'Agent checks its files before finishing', 'on'],
+  ['Agent', 'Thinking depth', null, 'depth'],
+  ['Agent', 'Questions it may ask per job', 'Questions per run', 'steps3'],
+  ['Agent', 'Runs at once', null, 'steps2'],
+  ['Agent', 'Re-check past corrections', 'Test playbook changes on past corrections', 'recheck'],
+  ['Limits per run', 'Steps', null, 'u:60:steps'],
+  ['Limits per run', '"More steps" adds', 'Steps added by More steps', 'u:20:steps'],
+  ['Limits per run', 'Time', null, 'u:30:minutes'],
+  ['Limits per run', 'AI usage', null, 'u:3:million tokens'],
+  ['Limits per run', 'Wait for your answer', null, 'u:10:minutes'],
+  ['Limits per run', 'Condense history at (0 for never)', 'Summarise the agent’s earlier work at (0 for never)', 'u:200:thousand tokens'],
+  ['Limits per run', 'Versions kept', 'Output versions kept', 'u:20:versions'],
+  ['Limits per run', 'Workspace memory', 'Agent’s computer memory', 'mem'],
+  ['Limits per day', 'AI usage (0 for no limit)', null, 'u:30:million tokens'],
+  ['Cost per million tokens (0 for no cost)', 'Input tokens', null, 'u:3:$ per million tokens'],
+  ['Cost per million tokens (0 for no cost)', 'Cached input tokens (0 for the input price)', 'Cached input tokens (0: same as input)', 'u:0:$ per million tokens'],
+  ['Cost per million tokens (0 for no cost)', 'Output tokens', null, 'u:15:$ per million tokens'],
+  ['Voice', 'Live transcription', 'Show words while you speak', 'on'],
+  ['Voice', 'Live model', 'Live voice model', 'txt:gpt-live-transcribe'],
+  ['Voice', 'Recording model', 'Voice model for recordings', 'txt:gpt-transcribe'],
+  ['Connection', 'LiteLLM provider header', 'Provider name for the gateway', 'txt:None'],
+  ['Connection', 'Name the model when creating a workspace', 'Send the model name when a workspace starts', 'off'],
+  ['Connection', 'Connection', 'Check the connection', 'test'],
+];
+const SECTION_NEW = { 'Cost per million tokens (0 for no cost)': 'Price per million tokens (0 hides costs)' };
+
+function control(kind, blue) {
+  const sw = (on) => `<button class="switch ${on ? 'on' : ''} ${blue ? 'blue' : 'black'}" role="switch" aria-checked="${on}"></button>`;
+  if (kind === 'on') return sw(true);
+  if (kind === 'off') return sw(false);
+  if (kind === 'steps') return '<span class="stepper"><button>−</button><b>0</b><button>+</button></span>';
+  if (kind === 'steps3') return '<span class="stepper"><button>−</button><b>3</b><button>+</button></span>';
+  if (kind === 'steps2') return '<span class="stepper"><button>−</button><b>2</b><button>+</button></span>';
+  if (kind === 'depth') return '<div class="seg"><button>Low</button><button class="on">Medium</button><button>High</button></div>';
+  if (kind === 'recheck') return '<div class="seg"><button>Never</button><button class="on">Big changes</button><button>Every change</button></div>';
+  if (kind === 'mem') return '<div class="seg"><button>1 GB</button><button class="on">4 GB</button><button>16 GB</button></div>';
+  if (kind === 'test') return '<button class="btn quiet small">Test</button>';
+  if (kind.startsWith('u:')) { const [, n, u] = kind.split(':'); return `<span class="unit"><b>${n}</b>${u}</span>`; }
+  if (kind.startsWith('txt:')) return `<span class="unit"><b>${kind.slice(4)}</b></span>`;
+  return '';
+}
+function settingsHtml(fresh, only) {
+  const rows = only ? LABELS.filter((l) => only.includes(l[1])) : LABELS;
+  const groups = [];
+  for (const l of rows) { if (!groups.length || groups[groups.length - 1][0] !== l[0]) groups.push([l[0], []]); groups[groups.length - 1][1].push(l); }
+  return groups.map(([title, ls]) => `<section class="rows"><h2>${fresh ? SECTION_NEW[title] || title : title}</h2>${ls.map(([, old, nu, kind]) => {
+    const label = fresh && nu ? nu : old;
+    return `<div class="row ${fresh ? 'keep' : 'wrapdrop'}"><span>${label}</span>${control(kind, !fresh || only === 'blue')}</div>`;
+  }).join('')}</section>`).join('');
+}
+
+ITEMS.labels = () => {
+  const changed = LABELS.filter((l) => l[2]);
+  const table = `<table class="words-table"><tr><th>Section</th><th>Today</th><th>New</th></tr>${changed.map(([s, a, b]) => `<tr><td>${s === 'Cost per million tokens (0 for no cost)' ? 'Cost' : s}</td><td><s>${a}</s></td><td>${b}</td></tr>`).join('')}
+    <tr><td>Cost</td><td><s>Cost per million tokens (0 for no cost)</s></td><td>Price per million tokens (0 hides costs)</td></tr></table>`;
+  return { title: 'Plainer Settings labels', intro: 'Each label says what the setting does, in everyday words. On a phone the control stays beside its label instead of dropping to its own line.', body: `<div class="stage">${table}</div><div class="pair settings-pair"><div class="side-col"><h3>Today</h3>${settingsHtml(false)}</div><div class="side-col"><h3>New</h3>${settingsHtml(true)}</div></div>` };
+};
+
+ITEMS.dropdown = () => {
+  const long = 'Month-end payroll for the Asia Pacific entities, with leavers, joiners and FX checks';
+  const rows = (cls) => `<div class="rows"><div class="row"><span>Playbook</span><select class="field ${cls}" title="${long}"><option>${long}</option></select></div>
+    <div class="row"><span>Client</span><select class="field ${cls === 'same' ? 'same' : ''}"><option>No client</option></select></div></div>`;
+  return { title: 'Playbook dropdown the same size as Client', intro: 'Both dropdowns are one width. A long playbook name is cut at the end and shows in full on hover and when the list opens.', body: pair(rows('wide-old'), rows('same')) };
+};
+
+ITEMS.accent = () => {
+  const rows = ['Second agent reviews the result', 'Record a source for every row', 'Show the agent its files before it finishes', 'Thinking depth', 'Re-check past corrections'];
+  const block = (blue) => `<section class="rows"><h2>Agent</h2>${LABELS.filter((l) => rows.includes(l[1])).map(([, old, , kind]) => `<div class="row keep"><span>${old}</span>${control(kind, blue)}</div>`).join('')}</section>
+    <div class="end"><button class="btn primary">Save</button></div>`;
+  return { title: 'One accent colour', intro: 'A switch that is on turns black, like a chosen option and the main button. Blue stays for links, the focus ring, a selected cell and a run that is working.', body: pair(block(true), block(false), 'Blue switches beside black option buttons.') };
+};
+
+ITEMS.start = () => {
+  const page = (hint, files) => `<div class="box"><textarea placeholder="What should the agent produce?" aria-label="What should the agent produce?">${files ? 'Build the October payroll from the folder.' : ''}</textarea></div>
+    <div class="rows"><div class="row"><span>Source files</span><div class="val">${files ? '<em style="font-style:normal;color:var(--muted);font-size:13px">42 files · 18 MB</em>' : ''}<button class="btn quiet small">${I.clip}${files ? 'Change folder' : 'Choose folder'}</button><button class="btn text">Choose files or ZIP</button></div></div>
+      <div class="row"><span>Playbook</span><select class="field same"><option>Payroll</option></select></div></div>
+    <div class="end">${hint ? `<span class="hint" id="why-${files}">${hint}</span>` : ''}<button class="btn text">More options</button><button class="btn text">Open playbook</button><button class="btn primary" disabled ${hint ? `aria-describedby="why-${files}"` : ''}>Start run</button></div>`;
+  const now = `${page('Choose source files to start.', 0)}<hr style="border:0;border-top:1px solid var(--line);width:100%;margin:8px 0">${page('', 1).replace('Build the October payroll from the folder.', '').replace('<div class="end">', '<div class="end"><span class="hint" id="why-2">Say what to produce, or choose a template.</span>').replace('aria-describedby="why-1"', '').replace('disabled ', 'disabled aria-describedby="why-2" ')}`;
+  return { title: 'Why Start run is greyed out', intro: 'A short line under the greyed button says what is missing. It goes once Start run can be pressed.', body: pair(page('', 0), now, '', 'Top: no files yet. Bottom: files chosen, but nothing to produce.') };
+};
+
+ITEMS.placeholder = () => {
+  const box = (ph) => `<div class="box book"><textarea aria-label="Instructions the agent follows on every Payroll run" ${ph ? `placeholder="${ph}"` : ''}></textarea></div><div class="end"><button class="btn primary" disabled>Save</button></div>`;
+  return { title: 'Placeholder for empty playbook instructions', intro: 'An empty instructions box asks what the agent should do, in the same voice as New run.', body: pair(box(''), box('What should the agent do on every Payroll run?')) };
+};
+
+const ORDER = [
+  ['names', 'File names'], ['steps', 'Long step text'], ['rename', 'Blank rename'], ['numbers', 'Number format'], ['time', 'Time and cost'],
+  ['run', '“Run” not “job”'], ['labels', 'Settings labels'], ['dropdown', 'Playbook dropdown'], ['accent', 'One accent colour'], ['start', 'Start greyed out'], ['placeholder', 'Empty instructions'],
+];
+let state = { item: 'names', rnOpen: false, rnErr: false };
+
+function draw() {
+  const it = ITEMS[state.item]();
+  document.getElementById('main').innerHTML = `<h1>${it.title}</h1><p class="intro">${it.intro}</p>${it.body}`;
+}
+document.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'rn-open') Object.assign(state, { rnOpen: true, rnErr: false });
+  else if (act === 'rn-cancel') Object.assign(state, { rnOpen: false, rnErr: false });
+  else if (act === 'rn-go') {
+    const box = e.target.closest('.dialog').querySelector('[data-rn]');
+    if (!box.value.trim()) state.rnErr = true; else Object.assign(state, { rnOpen: false, rnErr: false });
+  } else return;
+  draw();
+  if (state.rnErr) document.querySelector('.side-col:last-child [data-rn]')?.focus();
+});
+document.addEventListener('input', (e) => { if (e.target.matches('[data-rn]') && state.rnErr && e.target.value.trim()) { state.rnErr = false; const v = e.target.value; draw(); const f = document.querySelector('.side-col:last-child [data-rn]'); f.value = v; f.focus(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.rnOpen) { Object.assign(state, { rnOpen: false, rnErr: false }); draw(); } });
+
+const bar = document.getElementById('switcher');
+ORDER.forEach(([id, name], n) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { state = { item: id, rnOpen: id === 'rename', rnErr: id === 'rename' }; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); window.scrollTo(0, 0); };
+  bar.appendChild(b);
+  if (n === 0) b.click();
+});
+</script>
+</body>
+</html>

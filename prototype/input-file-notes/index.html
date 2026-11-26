@@ -1,0 +1,295 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY (plan Step 59). Made-up data. The dark bar at the bottom jumps between states.
+     - Today: a source file the person uploaded takes the same "What should change?" box as an output, and the box
+       opens down and to the right of the click, so near the bottom of the view it lands on the cell itself.
+     - New, output file: unchanged wording ("What should change?"), but the box opens just under the cell, or just
+       over it when there is no room, so the cell and its row stay in view. The cell is ringed.
+     - New, source file: the box asks for a note or a question ("Add a note or ask a question"). The agent never
+       edits a source; it reads the note on its next step, or answers the question in the chat.
+     - New, ready to send: pins on both files, and the list says which ones are notes.
+     - Option B: the person picks Note or Question before typing.
+     - Narrow screens (below 560 wide): the box is a sheet along the bottom, and the sheet scrolls so the cell sits
+       above it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes on source files (prototype)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#fff; --panel:#f5f5f6; --sheet:#fff; --text:#18181b; --muted:#6e6e76; --faint:#a3a3ab; --line:#e7e7ea; --accent:#2f6fdb; --accent-bg:#e8f0fd; --ok-bg:#e6f3e6; --ok-fg:#24592a; --warn-bg:#fbf0dc; --warn-fg:#6b4206; --grey-bg:#ececee; --grey-fg:#55555c; --bar: 64px; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  button, textarea { font: inherit; color: inherit; }
+  button { border: 0; background: none; cursor: pointer; padding: 0; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; }
+  h2 { font-size: 15px; font-weight: 500; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
+  .btn.small { padding: 4px 12px; font-size: 13px; }
+  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); }
+  .btn.text { padding: 8px 12px; color: var(--muted); }
+  .btn.text:hover { color: var(--text); background: var(--panel); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+  .icon-btn.lit { background: var(--accent); color: #fff; }
+
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr) minmax(0, 1.15fr); height: 100vh; }
+  .side { padding: 24px 12px; display: flex; flex-direction: column; gap: 16px; border-right: 1px solid var(--line); }
+  .brand { font-weight: 500; padding: 0 12px; }
+  .new { border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); padding: 8px; text-align: center; }
+  .item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 12px; color: var(--muted); font-size: 13px; }
+  .item.on { background: var(--panel); color: var(--text); }
+  .item span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .item { gap: 8px; }
+  .thread { padding: 24px 24px calc(var(--bar) + 24px); overflow: auto; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .thread .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .me { align-self: flex-end; background: var(--panel); border-radius: 12px; padding: 12px 16px; max-width: 85%; }
+  .say { color: var(--text); }
+  .filerow { display: flex; align-items: center; gap: 12px; background: var(--panel); border-radius: 12px; padding: 12px 16px; font-size: 13px; }
+  .filerow .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { color: var(--faint); font-size: 11px; }
+
+  .files { margin: 16px 16px calc(var(--bar) + 8px) 0; background: var(--panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+  .files-head { display: flex; align-items: center; gap: 4px; }
+  .files-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 13px; }
+  .tabs button { padding: 4px 12px; border-radius: 999px; color: var(--muted); }
+  .tabs button.on { background: var(--sheet); color: var(--text); }
+  .tabs .pill { margin-left: auto; }
+  .about { color: var(--muted); font-size: 13px; }
+  .sheet { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--sheet); border-radius: 12px; }
+  table { border-collapse: separate; border-spacing: 0; font-size: 13px; white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--sheet); color: var(--faint); font-weight: 400; text-align: left; padding: 8px 12px; z-index: 1; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); cursor: cell; }
+  td.n { color: var(--faint); text-align: right; border-right: 0; cursor: default; position: sticky; left: 0; background: var(--sheet); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.hd td:not(.n) { background: var(--accent-bg); }
+  td.sel { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-bg); }
+  td .pin { position: relative; }
+  .pin { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #c98a00; color: #fff; font-size: 11px; margin-right: 6px; vertical-align: 1px; }
+  td.held { box-shadow: inset 0 0 0 2px #c98a00; }
+
+  .pop { position: absolute; z-index: 3; width: 320px; background: var(--bg); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 0 1px var(--line), 0 12px 32px rgba(24,24,27,.16); }
+  .pop.sheetpop { position: fixed; left: 8px; right: 8px; width: auto; bottom: calc(var(--bar) + 8px); }
+  .mic-box { position: relative; }
+  .mic-box textarea { width: 100%; min-height: 72px; resize: none; border: 0; border-radius: 12px; background: var(--panel); padding: 8px 36px 8px 12px; }
+  .mic-box textarea::placeholder { color: var(--faint); }
+  .mic-box .mic { position: absolute; right: 8px; top: 8px; color: var(--muted); }
+  .line { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+  .switch { width: 36px; height: 20px; border-radius: 999px; background: #cfcfd4; position: relative; flex: none; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { transform: translateX(16px); }
+  .seg { display: inline-flex; background: var(--panel); border-radius: 999px; padding: 4px; font-size: 13px; }
+  .seg button { padding: 2px 12px; border-radius: 999px; color: var(--muted); }
+  .seg button.on { background: var(--text); color: #fff; }
+  .end { display: flex; justify-content: flex-end; gap: 8px; }
+
+  .sendbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .tosend { display: flex; flex-direction: column; gap: 4px; }
+  .tosend h3 { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .frow { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+  .frow .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frow .kind { color: var(--faint); }
+
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
+  .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
+  .switcher button.on { background: #fff; color: #18181b; }
+
+  @media (max-width: 1100px) { .app { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); } .side { display: none; } }
+  @media (max-width: 760px) { .app { grid-template-columns: 1fr; } .thread { display: none; } .files { margin: 8px 8px calc(var(--bar) + 8px); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side"><div class="brand">Document Intelligence</div><button class="new">+ New run</button>
+    <div><div class="item on"><span>October 2026 payroll</span><span class="pill ok">Finished</span></div><div class="item"><span>September 2026 payroll</span><span class="pill ok">Finished</span></div></div></nav>
+  <section class="thread">
+    <div class="head"><h1>October 2026 payroll</h1><span class="pill ok">Finished</span></div>
+    <div class="me">Fill the payroll template from the October packet: one row per active employee, across every entity.</div>
+    <p class="say">The workbook is ready: 215 employees across five entities. Every row has a source.</p>
+    <div class="filerow"><span class="tag">XLSX</span><span class="name">output_template_output.xlsx</span><span class="pill ok">Checked</span></div>
+  </section>
+  <section class="files" id="files"></section>
+</div>
+<div class="switcher" id="switcher"></div>
+<script>
+const I = {
+  back: '<svg viewBox="0 0 16 16"><path d="M10 4 6 8l4 4"/></svg>',
+  comment: '<svg viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg>',
+  more: '<svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg>',
+  x: '<svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+  mic: '<svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4"/></svg>',
+};
+const SOURCE = {
+  name: 'MY Payroll October.xlsx', pill: '<span class="pill">Used</span>', tabs: ['Employees', 'Deductions', 'Summary'],
+  about: 'Contains the October Malaysia employee roster, base salary, fixed allowance and department.',
+  cols: ['A', 'B', 'C', 'D', 'E'], num: [2, 3, 4], head: 4,
+  rows: [['MY01 Example Sdn Bhd', '', '', '', ''], ['', '', '', '', ''], ['Identity', '', 'Pay', '', ''], ['Full Name', 'Emp No', 'Basic (MYR)', 'Fixed Allowance (MYR)', 'Overtime (MYR)'],
+    ['Parker Whitlow', 'MY-0001', '14,900', '200', '0'], ['Gray Pemberton', 'MY-0002', '14,700', '250', '120'], ['Sage Garrow', 'MY-0003', '7,100', '575', '0'], ['Noel Merrow', 'MY-0004', '8,250', '225', '0'],
+    ['Zion Yardley', 'MY-0005', '14,850', '225', '340'], ['Vale Orchard', 'MY-0006', '8,850', '550', '0'], ['Gray Ashford', 'MY-0007', '10,100', '175', '0'], ['Kai Fairley', 'MY-0008', '8,200', '275', '60'],
+    ['Blake Ingram', 'MY-0009', '4,900', '50', '0'], ['Avery Quarry', 'MY-0010', '12,650', '375', '0'], ['Oakley Pemberton', 'MY-0011', '7,850', '200', '0'], ['Morgan Ingram', 'MY-0012', '7,200', '475', '0'],
+    ['Gray Norland', 'MY-0013', '4,600', '525', '0'], ['Finley Yardley', 'MY-0014', '7,150', '500', '0'], ['Rowan Quill', 'MY-0015', '9,400', '300', '0'], ['Tatum Hale', 'MY-0016', '6,300', '150', '0']],
+};
+const OUTPUT = {
+  name: 'output_template_output.xlsx', pill: '<span class="pill ok">Checked</span>', tabs: ['Employees', 'Entity Summary', 'File Map', 'Lists'],
+  about: '', cols: ['A', 'B', 'C', 'D', 'E', 'F', 'G'], num: [4, 5, 6], head: 1,
+  rows: [['Entity', 'Employee ID', 'Employee Name', 'Department', 'Base Salary (Local)', 'Allowances (Local)', 'Base Salary (USD)'],
+    ['SG01', 'SG0001', 'Jordan Hollis', 'Engineering', '5,100', '50', '3,933.12'], ['SG01', 'SG0002', 'Quinn Brook', 'Operations', '7,350', '1,090', '5,668.32'], ['SG01', 'SG0003', 'Parker Hollis', 'Operations', '5,550', '1,120', '4,280.16'],
+    ['SG01', 'SG0004', 'Zion Stroud', 'People', '4,600', '0', '3,547.52'], ['SG01', 'SG0005', 'Indigo Hollis', 'Sales', '7,100', '180', '5,475.52'], ['SG01', 'SG0006', 'Sage Pemberton', 'Operations', '9,000', '1,120', '6,940.80'],
+    ['SG01', 'SG0007', 'Vale Larkin', 'People', '7,250', '1,540', '5,591.20'], ['SG01', 'SG0008', 'Devon Brook', 'Engineering', '6,200', '1,630', '4,781.44'], ['SG01', 'SG0009', 'Umber Norland', 'Engineering', '11,050', '0', '8,521.76'],
+    ['SG01', 'SG0010', 'Kai Orchard', 'Finance', '9,150', '1,390', '7,056.48'], ['SG01', 'SG0011', 'Rowan Quill', 'Sales', '6,600', '240', '5,089.92'], ['SG01', 'SG0012', 'Tatum Hale', 'Finance', '8,050', '0', '6,208.16'],
+    ['SG01', 'SG0013', 'Blake Ingram', 'People', '5,900', '320', '4,550.08'], ['SG01', 'SG0014', 'Morgan Fairley', 'Sales', '7,700', '90', '5,938.24'], ['SG01', 'SG0015', 'Avery Quarry', 'Operations', '6,450', '410', '4,974.24']],
+};
+
+let state = {};
+const RESET = { file: 'source', cell: null, mode: 'new', text: '', kind: 'note', remember: false, pins: [], sending: false };
+
+function gridHtml(f) {
+  const head = `<tr><th></th>${f.cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
+  const body = f.rows.map((r, i) => {
+    const n = i + 1;
+    return `<tr class="${n === f.head ? 'hd' : ''}"><td class="n">${n}</td>${r.map((v, j) => {
+      const ref = f.cols[j] + n;
+      const pin = state.pins.find((p) => p.file === state.file && p.ref === ref);
+      const cls = [f.num.includes(j) && n > f.head ? 'num' : '', state.cell === ref ? 'sel' : '', pin ? 'held' : ''].join(' ');
+      return `<td class="${cls}" data-ref="${ref}">${pin ? `<span class="pin">${pin.n}</span>` : ''}${v}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
+  return `<table>${head}${body}</table>`;
+}
+
+function popHtml(f) {
+  if (!state.cell) return '';
+  const where = `Employees, cell ${state.cell}`;
+  const source = state.file === 'source';
+  let ask, button, remember = true;
+  if (state.mode === 'today' || !source) { ask = 'What should change?'; button = 'Add comment'; }
+  else if (state.mode === 'choose') {
+    ask = state.kind === 'note' ? 'What should the agent know?' : 'What do you want to ask?';
+    button = state.kind === 'note' ? 'Add note' : 'Add question';
+    remember = state.kind === 'note';
+  } else { ask = 'Add a note or ask a question'; button = 'Add'; }
+  const choose = source && state.mode === 'choose'
+    ? `<div class="seg" role="group" aria-label="Kind"><button class="${state.kind === 'note' ? 'on' : ''}" data-kind="note" aria-pressed="${state.kind === 'note'}">Note</button><button class="${state.kind === 'question' ? 'on' : ''}" data-kind="question" aria-pressed="${state.kind === 'question'}">Question</button></div>`
+    : '';
+  return `<form class="pop" id="pop" role="dialog" aria-label="Comment" onsubmit="return false">
+    <h2>${where}</h2>${choose}
+    <div class="mic-box"><textarea id="note" aria-label="${ask}" placeholder="${ask}">${state.text}</textarea><button type="button" class="icon-btn mic" aria-label="Speak">${I.mic}</button></div>
+    ${remember ? `<div class="line"><span>Remember for next time</span><button type="button" class="switch ${state.remember ? 'on' : ''}" role="switch" aria-checked="${state.remember}" aria-label="Remember for next time" data-act="remember"></button></div>` : ''}
+    <div class="end"><button type="button" class="btn text" data-act="cancel">Cancel</button><button class="btn quiet" data-act="add">${button}</button></div></form>`;
+}
+
+function sendHtml() {
+  if (!state.pins.length || state.cell) return '';
+  const rows = state.pins.map((p) => `<div class="frow"><span class="pin">${p.n}</span><span class="what">${p.fileName} · cell ${p.ref}</span>${p.file === 'source' ? '<span class="kind">Note</span>' : ''}</div>`).join('');
+  const notes = state.pins.filter((p) => p.file === 'source').length;
+  const changes = state.pins.length - notes;
+  const said = [changes ? `${changes} change${changes > 1 ? 's' : ''}` : '', notes ? `${notes} note${notes > 1 ? 's' : ''}` : ''].filter(Boolean).join(', ');
+  return `<div class="tosend"><h3>Comments to send</h3>${rows}</div><div class="sendbar"><span class="about">${said}</span><button class="btn primary small">Send to agent</button></div>`;
+}
+
+function draw() {
+  const f = state.file === 'source' ? SOURCE : OUTPUT;
+  document.getElementById('files').innerHTML = `
+    <div class="files-head"><button class="icon-btn" aria-label="Back">${I.back}</button><h2 title="${f.name}">${f.name}</h2>
+      <button class="icon-btn lit" aria-label="Comment on this file" aria-pressed="true">${I.comment}</button><button class="icon-btn" aria-label="More">${I.more}</button><button class="icon-btn" aria-label="Close">${I.x}</button></div>
+    <div class="tabs">${f.tabs.map((t, i) => `<button class="${i ? '' : 'on'}">${t}</button>`).join('')}${f.pill}</div>
+    ${f.about ? `<p class="about">${f.about}</p>` : ''}
+    <div class="sheet" id="sheet">${gridHtml(f)}${popHtml(f)}</div>${sendHtml()}`;
+  place();
+}
+
+// Where the box goes. Today: down and right of the click, pulled up to stay in the window, so near the bottom it lands
+// on the cell. New: just under the cell's row, or just over it when there is no room; on a narrow screen, a sheet
+// along the bottom with the cell scrolled into view above it.
+function place() {
+  const pop = document.getElementById('pop');
+  const sheet = document.getElementById('sheet');
+  const cell = sheet.querySelector('td.sel');
+  if (!pop || !cell) {
+    const held = sheet.querySelector('td.held');
+    if (held) held.scrollIntoView({ block: 'center', inline: 'center' });
+    return;
+  }
+  const narrow = window.innerWidth < 560;
+  const s = sheet.getBoundingClientRect();
+  const c = cell.getBoundingClientRect();
+  const cellTop = c.top - s.top + sheet.scrollTop;
+  const cellLeft = c.left - s.left + sheet.scrollLeft;
+  if (narrow) {
+    pop.classList.add('sheetpop');
+    if (state.mode !== 'today') {
+      // Room under the cell for the sheet: the grid scrolls so the cell sits near its top.
+      sheet.scrollTop = Math.max(0, cellTop - 48);
+      sheet.scrollLeft = Math.max(0, cellLeft - 48);
+    }
+    return;
+  }
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  const viewBottom = sheet.scrollTop + sheet.clientHeight;
+  const viewRight = sheet.scrollLeft + sheet.clientWidth;
+  let left, top;
+  if (state.mode === 'today') {
+    left = Math.max(8, Math.min(cellLeft + c.width / 2 + 12, viewRight - w - 8));
+    top = Math.max(8, Math.min(cellTop + c.height / 2 + 12, viewBottom - h - 8));
+  } else {
+    left = Math.max(sheet.scrollLeft + 8, Math.min(cellLeft, viewRight - w - 8));
+    const below = cellTop + c.height + 8;
+    top = below + h <= viewBottom - 8 ? below : Math.max(sheet.scrollTop + 8, cellTop - h - 8);
+  }
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+
+document.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  const kind = e.target.closest('[data-kind]')?.dataset.kind;
+  const td = e.target.closest('td[data-ref]');
+  if (act === 'remember') state.remember = !state.remember;
+  else if (act === 'cancel') Object.assign(state, { cell: null, text: '' });
+  else if (act === 'add') {
+    const text = document.getElementById('note').value.trim();
+    if (!text) return document.getElementById('note').focus();
+    const f = state.file === 'source' ? SOURCE : OUTPUT;
+    state.pins = [...state.pins, { n: state.pins.length + 1, file: state.file, fileName: f.name, ref: state.cell }];
+    Object.assign(state, { cell: null, text: '' });
+  } else if (kind) { state.text = document.getElementById('note').value; state.kind = kind; }
+  else if (td && !td.classList.contains('n')) { Object.assign(state, { cell: td.dataset.ref, text: '' }); }
+  else return;
+  draw();
+  document.getElementById('note')?.focus({ preventScroll: true });
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.cell) { state.cell = null; draw(); } });
+window.addEventListener('resize', place);
+
+const STATES = [
+  ['Today: source file', { mode: 'today', cell: 'C14' }],
+  ['New: output file', { file: 'output', cell: 'G7' }],
+  ['New: source file', { cell: 'C9' }],
+  ['New: source, cell near the bottom', { cell: 'C17' }],
+  ['New: a question typed', { cell: 'C14', text: 'Is 12,650 the October salary, or does it include back pay?' }],
+  ['New: ready to send', { pins: [{ n: 1, file: 'output', fileName: 'output_template_output.xlsx', ref: 'G7' }, { n: 2, file: 'source', fileName: 'MY Payroll October.xlsx', ref: 'C14' }] }],
+  ['Option B: Note or Question', { mode: 'choose', cell: 'C9' }],
+];
+const bar = document.getElementById('switcher');
+STATES.forEach(([name, s], n) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { state = { ...RESET, ...s }; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); };
+  bar.appendChild(b);
+});
+const fit = () => document.documentElement.style.setProperty('--bar', bar.offsetHeight + 24 + 'px');
+fit(); window.addEventListener('resize', fit);
+bar.querySelector('button').click();
+</script>
+</body>
+</html>

@@ -1,0 +1,242 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY (plan Step 60). Made-up data. The dark bar at the bottom jumps between states.
+     - Today: the History tab lists each version with a Restore button, and a row cannot be opened.
+     - New, History: each row opens its version. Restore moves into the version, so nobody restores blind.
+     - New, a past version: read-only. Its instructions in full, or "What Restore changes" against today's text
+       (green comes back, red goes). It says how the version came to be (created, edited by you, remembered from a
+       run, learned by the agent, tuned with the agent, tidied by the agent, restored), and links the run it came
+       from. Older and Newer step through versions without going back to the list. Restore and Back.
+     - The current version opens too, without Restore.
+     - With unsaved edits on the Instructions tab, Restore is off and says why.
+     - After Restore: back on History, the restored text is the new current version. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Past playbook versions (prototype)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#fff; --panel:#f5f5f6; --sheet:#fff; --text:#18181b; --muted:#6e6e76; --faint:#a3a3ab; --line:#e7e7ea; --accent:#2f6fdb; --accent-bg:#e8f0fd; --ok-bg:#e6f3e6; --ok-fg:#24592a; --bad-bg:#fbe9e9; --bad-fg:#7a2020; --grey-bg:#ececee; --grey-fg:#55555c; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 14px/1.55 Geist, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; text-align: left; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 22px; font-weight: 500; }
+  h2 { font-size: 15px; font-weight: 500; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .pill { display: inline-block; font-size: 12px; line-height: 20px; padding: 0 10px; border-radius: 999px; background: var(--grey-bg); color: var(--grey-fg); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; white-space: nowrap; }
+  .btn.small { padding: 4px 12px; font-size: 13px; }
+  .btn.primary { background: var(--text); color: #fff; font-weight: 500; }
+  .btn.quiet { box-shadow: inset 0 0 0 1px var(--line); }
+  .btn.text { padding: 8px 12px; color: var(--muted); }
+  .btn.text:hover:not(:disabled) { color: var(--text); background: var(--panel); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+  .icon-btn:hover:not(:disabled) { background: var(--panel); color: var(--text); }
+  .icon-btn:disabled { opacity: .35; cursor: default; }
+  .ref { color: var(--accent); text-decoration: underline; text-decoration-color: rgba(47,111,219,.3); text-underline-offset: 3px; }
+
+  .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100%; }
+  .side { padding: 24px 12px; display: flex; flex-direction: column; gap: 16px; border-right: 1px solid var(--line); }
+  .brand { font-weight: 500; padding: 0 12px; }
+  .new { border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); padding: 8px; text-align: center; }
+  .item { display: block; padding: 8px 12px; border-radius: 12px; color: var(--muted); width: 100%; }
+  .item.on { background: var(--panel); color: var(--text); }
+  .side .foot { margin-top: auto; }
+  .narrow { max-width: 704px; margin: 0 auto; padding: 48px 32px 140px; display: flex; flex-direction: column; gap: 24px; }
+  .page-head { display: flex; align-items: center; gap: 12px; min-height: 40px; }
+  .page-head h1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter { display: flex; gap: 4px; flex-wrap: wrap; }
+  .filter button { padding: 4px 12px; border-radius: 999px; color: var(--muted); font-size: 13px; }
+  .filter button.on { background: var(--panel); color: var(--text); }
+
+  .rows { background: var(--panel); border-radius: 12px; padding: 4px 16px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; min-height: 56px; width: 100%; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .name { display: flex; flex-direction: column; min-width: 0; }
+  .row .desc { color: var(--muted); font-size: 13px; }
+  .row .val { display: flex; align-items: center; gap: 8px; flex: none; color: var(--muted); }
+  .row .when { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  button.row:hover .name > span:first-child { color: var(--accent); }
+  button.row .chev { color: var(--faint); }
+
+  .sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .sub .title { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; }
+  .sub .title p { color: var(--muted); font-size: 13px; }
+  .sub .acts { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+  .why { color: var(--muted); }
+  .seg { display: inline-flex; background: var(--panel); border-radius: 999px; padding: 4px; font-size: 13px; align-self: flex-start; }
+  .seg button { padding: 4px 12px; border-radius: 999px; color: var(--muted); }
+  .seg button.on { background: var(--text); color: #fff; }
+  .viewbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .legend { font-size: 13px; color: var(--muted); display: flex; gap: 12px; }
+  .legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .legend .back::before { background: var(--ok-bg); box-shadow: inset 0 0 0 1px var(--ok-fg); }
+  .legend .gone::before { background: var(--bad-bg); box-shadow: inset 0 0 0 1px var(--bad-fg); }
+  .box { background: var(--panel); border-radius: 12px; padding: 16px; }
+  .text { display: flex; flex-direction: column; gap: 12px; }
+  .text p { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .add, .del { border-radius: 4px; padding: 2px 4px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .add { background: var(--ok-bg); color: var(--ok-fg); }
+  .del { background: var(--bad-bg); color: var(--bad-fg); text-decoration: line-through; }
+  .same-note { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 13px; text-align: right; }
+  .end { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .toast { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); background: var(--text); color: #fff; border-radius: 12px; padding: 10px 16px; font-size: 13px; display: flex; gap: 12px; align-items: center; max-width: calc(100% - 32px); }
+  .toast button { color: #c9c9cf; text-decoration: underline; }
+  .switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: #18181b; color: #fff; border-radius: 20px; padding: 4px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; font-size: 12px; z-index: 9; width: max-content; max-width: calc(100% - 32px); }
+  .switcher button { padding: 4px 12px; border-radius: 999px; color: #c9c9cf; white-space: nowrap; }
+  .switcher button.on { background: #fff; color: #18181b; }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; } .side { display: none; } .narrow { padding: 16px 16px 200px; gap: 16px; }
+    .row .desc { display: none; } .toast { bottom: 150px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side"><div class="brand">Document Intelligence</div><button class="new">+ New run</button>
+    <div><button class="item">October 2026 payroll</button><button class="item">September 2026 payroll</button></div>
+    <div class="foot"><button class="item">Clients</button><button class="item on">Playbooks</button><button class="item">Settings</button></div></nav>
+  <main id="main"></main>
+</div>
+<div class="switcher" id="switcher"></div>
+<script>
+const I = {
+  back: '<svg viewBox="0 0 16 16"><path d="M10 4 6 8l4 4"/></svg>',
+  chev: '<svg viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg>',
+  up: '<svg viewBox="0 0 16 16"><path d="M8 13V3M4 7l4-4 4 4"/></svg>',
+};
+// Sentences of each paragraph. Today's text is version 7.
+const P1 = ['Prepare the monthly payroll workbook from the supplied files.', 'Match employee IDs across every entity.'];
+const P2a = ['Reconcile joiners, changes, allowances, one-time payments and leavers.'];
+const P2b = ['Leavers after the cutoff stay on this month’s payroll.'];
+const P2 = ['Reconcile joiners, changes, allowances, one-time payments and leavers, keeping leavers after the cutoff on this month’s payroll.'];
+const P3 = ['Singapore joiners who start after the 25th are paid next month.'];
+const P4 = ['Check every FX rate against the month-end rates file.'];
+const P5 = ['Stipends count as allowances.'];
+const P6old = ['Preserve formulas.'];
+const P6 = ['Preserve formulas.', 'Ask when a material fact is missing.'];
+const VERSIONS = [
+  { v: 7, how: 'Tidied by the agent', when: 'Nov 26', why: 'Joined the two rules about leavers into one sentence.', text: [P1, P2, P3, P4, P5, P6] },
+  { v: 6, how: 'Learned by the agent from', run: 'October 2026 payroll', when: 'Nov 21', why: 'Singapore joiners after the 25th are paid next month.', text: [P1, P2a, P2b, P3, P4, P5, P6] },
+  { v: 5, how: 'Edited by you', when: 'Nov 18', why: '', text: [P1, P2a, P2b, P4, P5, P6] },
+  { v: 4, how: 'Tuned with the agent', when: 'Nov 12', why: 'Added a check of FX rates against the month-end file.', ask: 'Make it check the FX rates', text: [P1, P2a, P2b, P4, P5, P6old] },
+  { v: 3, how: 'Remembered from', run: 'September 2026 payroll', when: 'Oct 28', why: 'Stipends count as allowances.', text: [P1, P2a, P2b, P5, P6old] },
+  { v: 2, how: 'Edited by you', when: 'Oct 20', why: '', text: [P1, P2a, P2b, P6old] },
+  { v: 1, how: 'Created', when: 'Oct 14', why: '', text: [P1, P2a, P6old] },
+];
+const label = (x) => (x.run ? `${x.how} ${x.run}` : x.how);
+
+let state = {};
+const RESET = { today: false, open: null, look: 'full', unsaved: false, restored: false };
+const list = () => (state.restored ? [{ v: 8, how: 'Restored version 4', when: 'Nov 27', why: '', text: VERSIONS[3].text }, ...VERSIONS] : VERSIONS);
+const current = () => list()[0];
+
+// Sentence-level comparison of today's text with a past version: what Restore would bring back, and what would go.
+function compare(now, then) {
+  const a = now.flatMap((p, i) => p.map((s, j) => ({ s, start: j === 0 })));
+  const b = then.flatMap((p, i) => p.map((s, j) => ({ s, start: j === 0 })));
+  const L = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) L[i][j] = a[i].s === b[j].s ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i].s === b[j].s) { out.push({ k: '', ...b[j] }); i++; j++; }
+    else if (j < b.length && (i >= a.length || L[i][j + 1] >= L[i + 1][j])) { out.push({ k: 'add', ...b[j] }); j++; }
+    else { out.push({ k: 'del', ...a[i] }); i++; }
+  }
+  const paras = [];
+  for (const t of out) { if (t.start || !paras.length) paras.push([]); paras[paras.length - 1].push(t.k ? `<span class="${t.k}">${t.s}</span>` : t.s); }
+  return { html: paras.map((p) => `<p>${p.join(' ')}</p>`).join(''), same: out.every((t) => !t.k) };
+}
+
+function historyHtml() {
+  const latest = current().v;
+  const rows = list().map((x) => {
+    const name = `<span class="name"><span>Version ${x.v} · ${label(x)}</span>${x.why ? `<span class="desc">${x.why}</span>` : ''}</span>`;
+    if (state.today) {
+      return `<div class="row">${name}<div class="val"><span class="when">${x.when}</span>${x.v === latest ? '<span class="pill ok">Current</span>' : '<button class="btn quiet small">Restore</button>'}</div></div>`;
+    }
+    return `<button class="row" data-open="${x.v}" aria-label="Open version ${x.v}">${name}<span class="val"><span class="when">${x.when}</span>${x.v === latest ? '<span class="pill ok">Current</span>' : ''}<span class="chev">${I.chev}</span></span></button>`;
+  }).join('');
+  return `<div class="rows">${rows}</div>`;
+}
+
+function versionHtml() {
+  const all = list();
+  const at = all.findIndex((x) => x.v === state.open);
+  const x = all[at];
+  const isCurrent = at === 0;
+  const how = x.run ? `${x.how} <a class="ref" href="#" onclick="return false">${x.run}</a>` : x.how;
+  const older = all[at + 1], newer = all[at - 1];
+  const look = isCurrent ? 'full' : state.look;
+  const shown = look === 'full' ? { html: x.text.map((p) => `<p>${p.join(' ')}</p>`).join('') } : compare(current().text, x.text);
+  const seg = isCurrent ? '' : `<div class="viewbar"><div class="seg" role="group" aria-label="Show"><button class="${look === 'full' ? 'on' : ''}" data-look="full" aria-pressed="${look === 'full'}">Full text</button><button class="${look === 'diff' ? 'on' : ''}" data-look="diff" aria-pressed="${look === 'diff'}">What Restore changes</button></div>
+      ${look === 'diff' ? '<div class="legend"><span class="back">Comes back</span><span class="gone">Goes</span></div>' : ''}</div>`;
+  const restore = isCurrent ? '<span class="pill ok">Current</span>'
+    : `<button class="btn primary" data-act="restore" ${state.unsaved ? 'disabled' : ''}>Restore</button>`;
+  return `<div class="sub">
+      <button class="icon-btn" data-act="back" aria-label="Back to history" title="Back to history">${I.back}</button>
+      <div class="title"><h2>Version ${x.v}</h2><p>${how} · ${x.when}</p></div>
+      <div class="acts"><button class="btn text small" data-open="${older?.v || ''}" ${older ? '' : 'disabled'}>Older</button><button class="btn text small" data-open="${newer?.v || ''}" ${newer ? '' : 'disabled'}>Newer</button></div>
+    </div>
+    ${x.why ? `<p class="why">${x.why}</p>` : ''}
+    ${x.ask ? `<p class="why">You asked: “${x.ask}”</p>` : ''}
+    ${seg}
+    <div class="box text" aria-label="Instructions in version ${x.v}">${shown.same ? '<p class="same-note">Same as now.</p>' : shown.html}</div>
+    <div class="end">${state.unsaved ? '<span class="hint">Save or discard your edits on Instructions first.</span>' : ''}<button class="btn text" data-act="back">Back</button>${restore}</div>`;
+}
+
+function draw() {
+  const tabs = [['instructions', 'Instructions'], ['skills', 'Skills'], ['tests', 'Past corrections'], ['activity', 'Activity'], ['history', 'History']]
+    .map(([id, l]) => `<button class="${id === 'history' ? 'on' : ''}">${l}</button>`).join('');
+  const body = state.open ? versionHtml() : historyHtml();
+  const toast = state.restored && !state.open ? '<div class="toast" role="status">Restored version 4 as version 8.<button data-act="undo">Undo</button></div>' : '';
+  document.getElementById('main').innerHTML = `<div class="narrow"><div class="page-head"><button class="icon-btn" aria-label="Back to playbooks">${I.back}</button><h1>Payroll</h1>
+      <button class="btn text">Rename</button><button class="btn text">Delete</button></div>
+    <div class="filter">${tabs}</div>${body}</div>${toast}`;
+}
+
+document.addEventListener('click', (e) => {
+  const open = e.target.closest('[data-open]');
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  const look = e.target.closest('[data-look]')?.dataset.look;
+  if (open && !open.disabled && open.dataset.open) state.open = Number(open.dataset.open);
+  else if (act === 'back') state.open = null;
+  else if (act === 'restore') Object.assign(state, { restored: true, open: null });
+  else if (act === 'undo') state.restored = false;
+  else if (look) state.look = look;
+  else return;
+  draw();
+  window.scrollTo(0, 0);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open) { state.open = null; draw(); } });
+
+const STATES = [
+  ['Today: History', { today: true }],
+  ['New: History', {}],
+  ['Version 4: full text', { open: 4 }],
+  ['Version 4: what Restore changes', { open: 4, look: 'diff' }],
+  ['Version 6: learned from a run', { open: 6, look: 'diff' }],
+  ['Current version', { open: 7 }],
+  ['Unsaved edits', { open: 3, unsaved: true }],
+  ['After Restore', { restored: true }],
+];
+const bar = document.getElementById('switcher');
+STATES.forEach(([name, s], n) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { state = { ...RESET, ...s }; bar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); draw(); };
+  bar.appendChild(b);
+  if (n === 0) b.click();
+});
+</script>
+</body>
+</html>
