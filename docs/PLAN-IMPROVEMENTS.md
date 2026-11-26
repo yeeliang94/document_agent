@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `75%` (48 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
+**Overall Progress:** `80%` (51 of 64 steps) (Phases 1-11 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 14 half built; Phase 16 done; Phases 15, 17 and 18 to build)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -337,7 +337,7 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
   - **Verify:** in a browser, with the tab in the background, a question, a finish and a stop each raise one notification. With the switch off, none is raised. A blocked permission shows a plain sentence on the Settings page.
   - **Result (2026-11-26):** built (`web/alerts.js`; Settings: Notifications). Only while the person is away from the tab; a run they paused or stopped raises nothing, a run paused by the day's limit does. Checked in a browser: a finish raised one notification with its words, the tab word and dot, and a click opened the run; switch off and a paused run raised none; the blocked sentence and the Allow button show. Then, through the running app with a test run switched from running to a question and later to a stop at its time limit: each raised one notification with the question or the reason, and the tab showed "Question ·" / "Stopped ·" with its dot; the mark cleared as soon as the page had focus again. (The browser's own notification was stood in for, as this test browser blocks them.)
 
-- [ ] 🟨 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
+- [x] 🟩 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
   - When a tool fails, say which tool failed and with what input, not only the error (agent.py `_tool_error`).
   - When a file is missing, point to `/mnt/data/outputs/`, where outputs belong, not `/mnt/data/` (sandbox.py `download`).
   - When the checks themselves crash, say the fault is in the checks, not in the agent's work. Tell it to save again once, then carry on and note it (agent.py, near the `check.crashed` event).
@@ -349,7 +349,7 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
   - The reviewer is asked to name a file and cell for each doubt. The agent is told how many low-severity doubts were left out.
   - The agent is told, in one line, when its history has been condensed, and to re-read notes.md.
   - **Verify:** a test for each message above. One replay of a lesson test passes with the same score. Every changed message is shown here, before and after.
-  - **Result (2026-11-26):** built; 17 tests in `tests/test_feedback_messages.py`. Not yet done: the replay of a lesson test (a paid run). Before and after:
+  - **Result (2026-11-26):** built; 17 tests in `tests/test_feedback_messages.py`. Replayed live (2026-11-27): the Payroll lesson test (names as SURNAME, First name) passed 1 of 1, as before, using 78k tokens. Before and after:
     - A tool fails: "The tool failed with {error}…" → "{tool} failed on the input {input, cut at 300 characters}: {error}. Fix the cause if it is yours (the input, or a file it names); otherwise try once more or carry on without it."
     - A file is missing: "…Save it under /mnt/data/ first." → "…Outputs belong under /mnt/data/outputs/: save the file there first, or check its name."
     - The checks crash: "The checks could not run…" → "The checks themselves crashed (…). This is a fault in the checks, not in your work. Call save_outputs once more; if they crash again, carry on without them and say in notes.md that the checks could not run." A crash no longer takes the run's one fix pass.
@@ -361,9 +361,9 @@ These come from `reports/Small wins - agent tools and user experience.md`. These
     - The reviewer names the file and cell or row for each doubt; the agent is told how many low-severity doubts were left out.
     - New: one line when the history is condensed: "…Re-read notes.md for the details you wrote down, then carry on."
 
-- [ ] 🟨 **Step 49: Working notes from the start.** The briefing asks the agent to write what it finds into notes.md as it goes (which file wins, where each column comes from, open doubts), not only at the end. It re-reads the file after history is condensed. This is one briefing change, with no new tool.
+- [x] 🟩 **Step 49: Working notes from the start.** The briefing asks the agent to write what it finds into notes.md as it goes (which file wins, where each column comes from, open doubts), not only at the end. It re-reads the file after history is condensed. This is one briefing change, with no new tool.
   - **Verify:** on a live run of the sample packet, notes.md holds findings before the first save, and the final score is unchanged.
-  - **Result (2026-11-26):** the briefing asks for notes.md from the start, before the first save (which file wins, where each column comes from, what was left out, open doubts), and for a re-read when told the history was condensed. Not yet done: the live run (paid).
+  - **Result (2026-11-26):** the briefing asks for notes.md from the start, before the first save (which file wins, where each column comes from, what was left out, open doubts), and for a re-read when told the history was condensed. Live run (2026-11-27) of the sample packet: 10 of 10, the same as every earlier sample run; notes.md held 5 findings at the first save and 7 one-line points at the end; 133k tokens against about 233k before, 3.5 minutes. The duplicate-rows, crashed-checks and condensed-history messages did not come up in it.
 
 - [x] 🟩 **Step 50: Offer to keep what a client's first run learned** (prototype first; changed 2026-11-26): when a run finishes for a client with no notes yet, the agent lists the few things from this run worth following next time (which file wins, cut-off dates, rates, what was left out). A slim strip at the top of the run offers them: "First run for Northwind Trading: 4 things worth keeping for next time", folded until opened. One button saves them all to the client's notes as a new version, with Undo; "Not now" hides it for this run. A client with no notes shows a plain notes box, with no explanation around it.
   - **Verify:** tests that the offer appears only for a client without notes, that saving adds exactly the listed items as a version, and that Undo removes them; in a browser: folded, open, saved, Not now, and the empty notes box, at 642 and 1440 wide.
