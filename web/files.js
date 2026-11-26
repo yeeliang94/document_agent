@@ -280,10 +280,14 @@ export function proofHtml() {
   if (!cited.length) return `${head}<div class="empty">No source file is recorded for this row.</div>`;
   const stored = [...new Set(cited.map(storedPath).filter(Boolean))];
   const { groups, left } = rowProof(data, state.row, stored);
-  const file = (path) => `<button class="file" data-open="${esc(path)}" title="${esc(path)}">${esc(baseName(path))}</button>`;
+  // A source opens where the value was found (its sheet and cell, line or page), with the row's values outlined.
+  const file = (path, spot = null) => {
+    const at = spot ? ` data-spot="${esc(JSON.stringify(spot))}"` : '';
+    return `<button class="file" data-open="${esc(path)}"${at} title="${esc(path)}">${esc(baseName(path))}</button>`;
+  };
   const line = (label, value, from) => `<tr><td>${esc(label)}</td><td class="num">${esc(value)}</td><td>${from}</td></tr>`;
   const rows = groups.map((g) =>
-    line(g.label, g.shown, g.from ? `${file(g.from.path)} <span class="where">${esc(g.from.where)}</span>` : `<span class="where">${esc(g.status)}</span>`),
+    line(g.label, g.shown, g.from ? `${file(g.from.path, g.from.spot)} <span class="where">${esc(g.from.where)}</span>` : `<span class="where">${esc(g.status)}</span>`),
   );
   // Sources no value was found in (a picture, a scan), and cited files that are not among the uploads.
   for (const path of left) rows.push(line('Other source', '', `${file(path)} ${placeHtml(path)}`));

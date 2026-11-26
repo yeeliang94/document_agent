@@ -534,9 +534,12 @@ export function rowProof(data, row, files) {
     let from = null;
     if (!field.formula) {
       for (const [path, place] of places) {
-        const key = field.keys.find((k) => place?.values?.[k]);
+        // Sources are tried in the agent's order; a later one is not named while an earlier one is still searched,
+        // so the panel never shows a source it then takes back.
+        if (!place || place.loading) break;
+        const key = field.keys.find((k) => place.values?.[k]);
         if (key) {
-          from = { path, where: place.values[key] };
+          from = { path, where: place.values[key], spot: place.spots?.[key] || null };
           break;
         }
       }
@@ -548,7 +551,7 @@ export function rowProof(data, row, files) {
         ? ""
         : looking
           ? "Looking"
-          : "Not found in its sources";
+          : "Not in its sources as written"; // a figure the agent worked out without a formula reads the same
     const last = groups[groups.length - 1];
     // Cells next to each other from the same place read as one line; a number keeps a line of its own.
     const same =

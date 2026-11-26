@@ -144,6 +144,24 @@ export function jobTitle(job) {
   return `${when} ${label.toLowerCase()}`.trim() || 'Run';
 }
 
+// Runs that would read the same in a list get the time they were started beside the name, so each can be told
+// apart without opening it. Maps a run's id to that time, or '' when its name is already unique.
+const STARTED = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+const STARTED_EXACTLY = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); // prettier-ignore
+
+export function telling(jobs) {
+  const titles = jobs.map((j) => jobTitle(j));
+  const times = jobs.map((j) => STARTED.format(new Date(j.created_at)));
+  const count = (list, i) => list.filter((x, k) => x === list[i] && titles[k] === titles[i]).length;
+  return Object.fromEntries(
+    jobs.map((j, i) => {
+      if (titles.filter((t) => t === titles[i]).length < 2) return [j.id, ''];
+      // Two started in the same minute are told apart by the second.
+      return [j.id, count(times, i) > 1 ? STARTED_EXACTLY.format(new Date(j.created_at)) : times[i]];
+    }),
+  );
+}
+
 export const baseName = (path) => String(path || '').split('/').pop();
 export const extension = (path) => (baseName(path).includes('.') ? baseName(path).split('.').pop() : '');
 export const sources = () => (state.job?.files || []).filter((f) => f.role !== 'template');

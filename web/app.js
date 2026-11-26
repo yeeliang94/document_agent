@@ -2,7 +2,7 @@
 // files.js and pages.js.
 
 import {
-  $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, isActive, jobStatus, jobTitle,
+  $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, isActive, jobStatus, jobTitle, telling,
   jobUrl, state, toast,
 } from './core.js'; // prettier-ignore
 import {
@@ -72,8 +72,9 @@ function topnavHtml() {
   const view = listView();
   const here = view === 'run' ? (state.job ? 'job:' + state.job.id : 'new') : view;
   const option = (value, label) => `<option value="${esc(value)}" ${attr('selected', value === here)}>${esc(label)}</option>`;
+  const when = telling(state.jobs);
   const runs = state.jobs.map((j) =>
-    option('job:' + j.id, `${jobTitle(j)}, ${new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}`),
+    option('job:' + j.id, `${jobTitle(j)}, ${when[j.id] || new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}`),
   );
   return `<div class="brand">Document Intelligence</div>
     <select aria-label="Go to" data-nav>${option('new', 'New run')}${runs.join('')}${state.job ? option('log', 'Technical log') : ''}${option('clients', 'Clients')}${option('playbooks', 'Playbooks')}${option('settings', 'Settings')}</select>`;
@@ -178,6 +179,18 @@ function detail(event) {
 }
 
 // --- Actions ---------------------------------------------------------------
+
+// Save sits at the top of a long page, so a refused value is brought into view and its field focused, once the
+// page has been drawn with the message beside it.
+function showSettingError() {
+  setTimeout(() => {
+    const name = Object.keys(state.settingsErrors || {})[0];
+    const field = name && ($(`#setting-${name}`) || $(`#setting-${name}-error`));
+    if (!field) return;
+    field.scrollIntoView({ block: 'center' });
+    field.focus?.({ preventScroll: true });
+  });
+}
 
 async function refreshSettings() {
   try {
@@ -288,13 +301,13 @@ const serverActions = {
       if (problem) errors[name] = problem;
     }
     state.settingsErrors = errors;
-    if (Object.keys(errors).length) return;
+    if (Object.keys(errors).length) return showSettingError();
     try {
       state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ values: settingsValues() }) });
     } catch (error) {
       if (!error.field) throw error;
       state.settingsErrors = { [error.field]: error.message };
-      return;
+      return showSettingError();
     }
     state.settingsDraft = { ...state.settings.values };
     await refreshConfig(); // the run screen names the More steps amount from it
@@ -580,9 +593,13 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('[data-open]'))) {
       const from = target('.proof') && state.preview;
       const back = from ? { path: from.path, sheet: from.data?.sheet, row: state.row } : null;
-      // A source opened from a row opens where the row's values are, with them outlined.
-      const found = from ? foundFor(el.dataset.open) : null;
-      await openFile(el.dataset.open, render, { back, found, page: found?.page || 1 });
+      // A source opened from a row opens where the row's values are, with them outlined, at the spot of the value
+      // the link stands for when it is known.
+      const path = el.dataset.open;
+      const found = from ? foundFor(path) : null;
+      const spot = el.dataset.spot ? JSON.parse(el.dataset.spot) : {};
+      const ring = spot.cell || spot.line ? { path, ...spot } : null;
+      await openFile(path, render, { back, found, ring, sheet: spot.sheet || null, page: spot.page || found?.page || 1 });
     } else if ((el = target('[data-sheet]'))) await openFile(state.open, render, { sheet: el.dataset.sheet, back: state.preview?.back, version: state.preview?.version });
     else if ((el = target('[data-page]'))) await turnPage(Number(el.dataset.page), render);
     else if ((el = target('tr[data-row]'))) markRow(el);

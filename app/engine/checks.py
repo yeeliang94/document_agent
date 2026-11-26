@@ -681,7 +681,7 @@ def check_provenance(
         assert isinstance(records, list)
     except Exception:  # noqa: BLE001
         return [f'{PROVENANCE} must be a JSON list of {{"file", "sheet", "rows", "sources"}} objects.'], counts
-    issues, covered_rows = [], {}
+    issues, covered_rows, cited = [], {}, set()
     paths = {f['path'] for f in files}
     last = max((max(rows) for rows in written.values()), default=0)  # rows past the last written one prove nothing
     for number, record in enumerate(records):
@@ -692,7 +692,7 @@ def check_provenance(
         except Exception:  # noqa: BLE001
             issues.append(f'{PROVENANCE} item {number} needs "file", "sheet", "rows" (e.g. "2-40") and "sources".')
             continue
-        valid = bool(sources)
+        valid, matched = bool(sources), []
         if not sources:
             issues.append(f'{PROVENANCE} item {number} ({key[0]} {key[1]} rows {record["rows"]}) names no sources.')
         for source in sources:
@@ -701,6 +701,7 @@ def check_provenance(
                 valid = False
                 issues.append(f'{PROVENANCE} item {number} cites {source!r}, which is not a file in the packet.')
                 continue
+            matched.append(match)
             entry = entry_for(entries or {}, match)
             if entry is not None and normal_decision(entry.get('decision')) not in ('used', 'reference'):
                 valid = False
@@ -710,11 +711,20 @@ def check_provenance(
                 )
         if valid:
             covered_rows.setdefault(key, set()).update(rows)
+            if rows & written.get(key, set()):  # a record for rows that were written counts as a citation
+                cited.update(matched)
     for (name, sheet), rows in written.items():
         left = rows - covered_rows.get((name, sheet), set())
         counts['sourced'] += len(rows) - len(left)
         if left:
             issues.append(f'{PROVENANCE} gives no sources for {name} "{sheet}" rows {_ranges(left)}.')
+    # "used" means the deliverable takes data from the file, and people reading the map trust that word. A used file no
+    # written row cites is listed for the agent to look at, not refused: it may feed only a memo or another output
+    # without rows.
+    counts['used_not_cited'] = sorted(
+        f['path'] for f in files
+        if f['path'] not in cited and normal_decision((entry_for(entries or {}, f['path']) or {}).get('decision')) == 'used'
+    )[:10]  # fmt: skip
     return issues, counts
 
 
@@ -807,14 +817,17 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         'totals_problems': len(totals_issues),
         'looks_right': not looks,
     }
-    provenance_issues = []
+    provenance_issues, used_not_cited = [], []
     if proof == 'row':
         provenance_issues, counts = check_provenance(outputs, written, files, entries)
         summary |= {'rows_sourced': counts['sourced'], 'rows_written': counts['written']}
+        used_not_cited = counts.get('used_not_cited', [])
     issues = deliverable_issues + totals_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
     result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps,
               'totals': totals_lines, 'looks': looks, 'summary': summary}  # fmt: skip
+    if used_not_cited:
+        result['used_not_cited'] = used_not_cited
     if unsupported:
         result['totals_not_worked_out'] = (
             f'{unsupported} formula(s) use something this machine cannot work out; check those in the sandbox.'
