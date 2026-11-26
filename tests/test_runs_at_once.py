@@ -153,3 +153,16 @@ def test_a_restart_with_two_runs_going_keeps_both_for_resuming(tmp_path, monkeyp
         until(lambda: behaviour.going == {a, b})
         behaviour.released.update({a, b})
         assert wait_for_job(client, a)['status'] == wait_for_job(client, b)['status'] == 'completed'
+
+
+def test_runs_going_at_once_share_what_is_left_of_the_day(tmp_path):
+    # Spend is written when a run ends, so a run going now holds its share; the next run sees only the rest.
+    from app.store import Store
+
+    store = Store(tmp_path)
+    store.save_settings({'daily_token_limit_thousands': 1000})
+    assert store.tokens_left_today() == 1_000_000
+    store.hold('a', 600_000)
+    assert store.tokens_left_today() == 400_000
+    store.release('a')
+    assert store.tokens_left_today() == 1_000_000

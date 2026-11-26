@@ -392,6 +392,13 @@ CARD_ISSUES = 20  # check issues on the resume card
 MORE = re.compile(r'\.\.\. and (\d+) more\.')
 
 
+def without_offer(report: dict | None, offer: dict | None) -> dict | None:
+    """The report, less its lines to keep for the client once the person saved or put away this run's offer."""
+    if report and offer and (offer.get('saved') or offer.get('dismissed')):
+        return {k: v for k, v in report.items() if k != 'for_next_time'}
+    return report
+
+
 def why_stopped(last: dict) -> str:
     """Why an earlier run ended, for the resume card: a limit, the AI service, the user, or a fault."""
     cut, status, error = last.get('cut_short'), last.get('status'), last.get('error')
@@ -506,6 +513,8 @@ class SandboxEngine:
         options = store.settings()
         allowance = options['token_limit_thousands'] * 1000
         day_bound = left is not None and left < allowance
+        if left is not None:  # set aside now, before any wait, so a run starting alongside sees the rest only
+            store.hold(job_id, min(left, allowance))
         team = {'max_scouts': options['max_scouts'], 'reviewer': options['reviewer']}
         job = store.update(job_id, engine_team=team)
         root = store.path(job_id)
@@ -710,7 +719,9 @@ class SandboxEngine:
             'cut_short': record.get('cut_short'),  # turns, tokens, day, time or service: the agent did not finish
             'artifacts': self.artifacts(job_id, status == 'completed'),
             'summary': summary,
-            'report': final_report,  # None for a run that ended without one; older runs have only the summary
+            # None for a run that ended without one; older runs have only the summary. Lines to keep for a client are
+            # offered once per run: a run continued after they were saved or put away does not offer them again.
+            'report': without_offer(final_report, store.get(job_id).get('offer')),
             'unresolved': unresolved,
             'request_count': spent['requests'],
             'usage': {k: spent[k] for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')},  # this run's

@@ -378,7 +378,9 @@ def create_app(settings_override: Settings | None = None):
     @api.put('/api/settings')
     def app_settings_put(body: SettingsInput):
         try:
-            return settings_page(store.save_settings(body.values))
+            saved = settings_page(store.save_settings(body.values))
+            runner.limit_changed()  # a raised 'Runs at once' starts a waiting run now
+            return saved
         except app_settings.SettingError as error:
             # field says which setting the sentence is about, so the page shows it beside that field.
             return JSONResponse({'detail': str(error), 'field': error.field}, 400)
@@ -492,11 +494,13 @@ def create_app(settings_override: Settings | None = None):
                 load_workbook(definition, read_only=True).close()
         return manifest
 
-    @api.get('/api/jobs/{job_id}')
-    async def job(job_id):
-        found = get(job_id)
+    def job_view(found):
         # Every engine run of the job, priced now (app/costs.py); None when no price is set.
         return {**found, 'cost': costs.job_cost(found, store.settings())}
+
+    @api.get('/api/jobs/{job_id}')
+    async def job(job_id):
+        return job_view(get(job_id))
 
     class JobInput(BaseModel):
         name: str = Field(max_length=MAX_NAME * 2)
@@ -518,26 +522,42 @@ def create_app(settings_override: Settings | None = None):
         """What a client's first run found worth keeping (report.for_next_time), offered on the run: save adds it to
         the client's notes as a new version, undo brings back the version before, dismiss puts the offer away."""
         job = get(job_id)
-        client_id = (job.get('client') or {}).get('id')
+        client = job.get('client') or {}
         keep = (job.get('report') or {}).get('for_next_time') or []
-        if not client_id or not keep:
+        if not client.get('id') or not keep:
             raise HTTPException(400, 'This run has nothing to keep for a client.')
-        offer = job.get('offer') or {}
+        shown = lambda: job_view(get(job_id))  # noqa: E731 - the run as GET /api/jobs/{id} gives it, cost included
         if body.action == 'dismiss':
-            return store.update(job_id, offer={'dismissed': True})
+            store.mutate(job_id, lambda j: (j.get('offer') or {}).get('saved') or j.update(offer={'dismissed': True}))
+            return shown()
         if body.action == 'save':
-            if offer.get('saved'):
-                return job  # a second click
-            text = '\n'.join(f'- {line}' for line in keep)
-            client = client_call(
-                lambda: clients.save(client_id, text, 'learned', f'From the run {job_id[:8]}', append=True, run=job_id)
-            )
-            return store.update(job_id, offer={'saved': client['version']})
-        saved = offer.get('saved')
+            # Claimed in one write, so a second click or a retry cannot add the lines twice.
+            claimed = []
+
+            def claim(j):
+                offer = j.get('offer') or {}
+                if not offer.get('saved') and not offer.get('saving'):
+                    j['offer'] = {'saving': True}
+                    claimed.append(True)
+
+            store.mutate(job_id, claim)
+            if not claimed:
+                return shown()
+            try:
+                # Only onto the notes the run was made with: notes written since (another run, a person) win, and
+                # the lines are left for the person to add by hand.
+                text = '\n'.join(f'- {line}' for line in keep)
+                saved = client_call(lambda: clients.save(client['id'], text, 'learned', 'Kept from its first run',
+                                                         based_on=client.get('version'), job_id=job_id))  # fmt: skip
+            except BaseException:
+                store.update(job_id, offer={})
+                raise
+            return job_view(store.update(job_id, offer={'saved': saved['version']}))
+        saved = (job.get('offer') or {}).get('saved')
         if not saved:
             raise HTTPException(400, 'Nothing was saved from this run to undo.')
-        client_call(lambda: clients.restore(client_id, saved - 1, based_on=saved))
-        return store.update(job_id, offer={})
+        client_call(lambda: clients.restore(client['id'], saved - 1, based_on=saved))
+        return job_view(store.update(job_id, offer={}))
 
     @api.delete('/api/jobs/{job_id}', status_code=204)
     def job_delete(job_id):

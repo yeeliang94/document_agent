@@ -164,6 +164,7 @@ export function settingsPage() {
           onOff('look_before_finish', 'Show the agent its files before it finishes') +
           choice('effort', 'Thinking depth', { low: 'Low', medium: 'Medium', high: 'High' }) +
           steps('max_questions', 'Questions it may ask per job') +
+          steps('runs_at_once', 'Runs at once') +
           choice('replay_tests', 'Re-check past corrections', { never: 'Never', large: 'Big changes', every: 'Every change' }),
       ) +
       panel(
@@ -180,14 +181,13 @@ export function settingsPage() {
       panel(
         'Limits per day',
         number('daily_token_limit_thousands', 'AI usage (0 for no limit)') +
-          steps('runs_at_once', 'Runs at once') +
           field('', 'Used today', `<span class="value">${daily ? `${today} of ${millions(daily)} million` : `${today} million`}</span>`),
       ) +
       panel(
-        'Cost',
+        'Cost per million tokens (0 for no cost)',
         number('price_input_per_million', 'Input tokens') +
           number('price_cached_per_million', 'Cached input tokens (0 for the input price)') +
-          number('price_output_per_million', 'Output tokens', '<p class="row-note">With both input and output at 0, runs show no cost.</p>'),
+          number('price_output_per_million', 'Output tokens'),
       ) +
       panel(
         'Notifications',

@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import date
@@ -18,6 +19,7 @@ DAY_FLOOR = 50_000  # tokens; less than this cannot finish even a small run
 class Store:
     def __init__(self, root: Path):
         self.root = root
+        self._held, self._lock = {}, threading.Lock()  # tokens held for runs going now (hold)
         root.mkdir(parents=True, exist_ok=True)
         self.db = root / 'jobs.db'
         with self.connect() as c:
@@ -209,9 +211,22 @@ class Store:
         return row[0] if row else 0
 
     def tokens_left_today(self) -> int | None:
-        """What is left of the day's token limit from the Settings page; None when there is no limit."""
+        """What is left of the day's token limit from the Settings page, less what runs going now hold; None when
+        there is no limit."""
         limit = self.settings()['daily_token_limit_thousands'] * 1000
-        return limit - self.spent_today() if limit else None
+        with self._lock:
+            held = sum(self._held.values())
+        return limit - self.spent_today() - held if limit else None
+
+    def hold(self, job_id: str, tokens: int) -> None:
+        """Set aside part of the day for a run going now. Its spend is written only when it ends, so without this
+        several runs at once would each be given all that is left of the day."""
+        with self._lock:
+            self._held[job_id] = tokens
+
+    def release(self, job_id: str) -> None:
+        with self._lock:
+            self._held.pop(job_id, None)
 
     def day_used_up(self) -> bool:
         """Is too little left of the day to start a run? A run that could only read its files and stop is not

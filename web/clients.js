@@ -240,34 +240,42 @@ export const runClient = (job = state.job) => clients().find((c) => c.id === job
 // one slim line at the top of the run; opened, it lists them, and one click saves them all as the client's notes.
 
 const hidden = new Set(); // runs whose "Saved" line was closed
-let open = false;
+const opened = new Set(); // runs whose offer is open
 
 export function offerHtml() {
   const job = state.job;
   const keep = job?.report?.for_next_time || [];
   const offer = job?.offer || {};
   if (!keep.length || !job.client?.id || offer.dismissed || !inGroup('finished', job.status) || hidden.has(job.id)) return '';
+  // Offered only onto the notes the run was made with: once they changed (another run, a person), the person adds
+  // what they want by hand.
+  const now = clients().find((c) => c.id === job.client.id);
+  if (!offer.saved && now && job.client.version && now.version !== job.client.version) return '';
   const name = esc(job.client.name) + (/s$/i.test(job.client.name) ? "'" : "'s"); // Bluefin Foods', Acme's
   if (offer.saved) {
     return `<div class="offer"><div class="offer-line"><span class="what">Saved to ${name} notes.</span>
-      ${btn('offer-undo', 'Undo', 'text small', state.busy)}<button class="btn text small" data-client="${esc(job.client.id)}">View notes</button>
+      <button class="btn text small" id="offer-undo" data-action="offer-undo" ${attr('disabled', state.busy)}>Undo</button><button class="btn text small" data-client="${esc(job.client.id)}">View notes</button>
       <button class="icon-btn" data-action="offer-hide" aria-label="Close">${icon('x')}</button></div></div>`;
   }
+  const open = opened.has(job.id);
   const body = open
     ? `<div class="offer-body"><ul>${keep.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
         <div class="end">${btn('offer-save', 'Save to notes', 'primary small', state.busy)}${btn('offer-dismiss', 'Not now', 'text small', state.busy)}</div></div>`
     : '';
   return `<div class="offer"><div class="offer-line">
-      <button class="open" data-action="offer-toggle" aria-expanded="${open}">${icon('chev')}<span>Keep ${plural(keep.length, 'thing')} for ${name} next run?</span></button>
+      <button class="open" id="offer-toggle" data-action="offer-toggle" aria-expanded="${open}">${icon('chev')}<span>Keep ${plural(keep.length, 'thing')} for ${name} next run?</span></button>
       <button class="icon-btn" data-action="offer-dismiss" aria-label="Not now" title="Not now">${icon('x')}</button></div>${body}</div>`;
 }
 
 const keepFor = async (action) => {
-  state.job = await api(jobUrl('/keep-for-client'), { method: 'POST', body: JSON.stringify({ action }) });
-  await refreshClients(); // the client's notes and version changed
+  try {
+    state.job = await api(jobUrl('/keep-for-client'), { method: 'POST', body: JSON.stringify({ action }) });
+  } finally {
+    await refreshClients(); // the client's notes and version changed, or changed under it (a refused save)
+  }
 };
 export const offerLocal = {
-  'offer-toggle': () => (open = !open),
+  'offer-toggle': () => (opened.has(state.job.id) ? opened.delete(state.job.id) : opened.add(state.job.id)),
   'offer-hide': () => hidden.add(state.job.id),
 };
 export const offerServer = {

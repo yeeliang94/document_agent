@@ -59,3 +59,22 @@ def test_not_now_puts_the_offer_away_and_a_run_without_a_client_has_nothing_to_k
         loose = store.create('payroll', '2026-10', 'Run', '', {'id': 'payroll', 'name': 'Payroll', 'version': 1})
         assert keep(client, loose['id'], 'save').status_code == 400
         assert keep(client, job_id, 'undo').status_code == 400  # nothing saved to undo
+
+
+def test_lines_are_kept_only_onto_the_notes_the_run_was_made_with(tmp_path):
+    with client_for(tmp_path) as client:
+        store = client.app.state.store
+        job_id, acme = first_run(client, store)
+        store.clients.save(acme, 'Amounts in MYR.', 'edited')  # a person wrote notes after the run began
+        refused = keep(client, job_id, 'save')
+        assert refused.status_code == 409 and store.clients.get(acme)['text'] == 'Amounts in MYR.'
+        assert store.get(job_id)['offer'] == {}  # nothing is left claimed by the refused save
+
+
+def test_a_run_continued_after_saving_does_not_offer_the_lines_again():
+    from app.engine.service import without_offer
+
+    report = {'headline': 'Done.', 'for_next_time': KEEP}
+    assert without_offer(report, {'saved': 2}) == {'headline': 'Done.'}
+    assert without_offer(report, {'dismissed': True}) == {'headline': 'Done.'}
+    assert without_offer(report, {}) == report

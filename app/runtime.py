@@ -5,11 +5,14 @@ It also looks after a playbook's kept tests when its instructions change: the li
 and, depending on the Settings page, replayed (app/replay.py). Replays are ordinary jobs in the same queue."""
 
 import asyncio
+import logging
 
 from . import cases, curator, feedback, jobstatus, plain_errors, replay, tidy
 from .config import Settings
 from .engine.service import SandboxEngine
 from .store import Store, clean
+
+log = logging.getLogger(__name__)
 
 
 class JobTimeout(Exception):
@@ -181,21 +184,39 @@ class Runner:
         await self.queue.put(job_id)
 
     async def work(self):
-        """Take jobs from the line, in order, while a slot is free."""
+        """Take jobs from the line, in order, while a slot is free. A fault here is logged and the line goes on:
+        a worker that stopped would leave every later run queued for good."""
         while True:
-            while len(self.running) >= self.limit():
-                self.freed.clear()
-                await self.freed.wait()
-            job_id = await self.queue.get()
-            self.queue.task_done()
             try:
-                self.store.get(job_id)
-            except (KeyError, ValueError):  # deleted while it waited in the queue: nothing to run or clean up
-                continue
-            if job_id in self.running:  # a second place in line for a job that is going: it waits for that run
-                self.again.add(job_id)
-                continue
-            self.running[job_id] = asyncio.create_task(self.run_one(job_id))
+                await self.next_job()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - see above
+                log.exception('The run queue hit a fault; it carries on with the next job')
+                await asyncio.sleep(1)
+
+    async def wait_for_slot(self):
+        while len(self.running) >= self.limit():
+            self.freed.clear()
+            await self.freed.wait()
+
+    async def next_job(self):
+        await self.wait_for_slot()
+        job_id = await self.queue.get()
+        self.queue.task_done()
+        await self.wait_for_slot()  # the limit may have been lowered while the line was empty
+        try:
+            self.store.get(job_id)
+        except (KeyError, ValueError):  # deleted while it waited in the queue: nothing to run or clean up
+            return
+        if job_id in self.running:  # a second place in line for a job that is going: it waits for that run
+            self.again.add(job_id)
+            return
+        self.running[job_id] = asyncio.create_task(self.run_one(job_id))
+
+    def limit_changed(self):
+        """Settings were saved: a raised limit lets a waiting run start now, not when the next one ends."""
+        self.freed.set()
 
     async def run_one(self, job_id):
         try:
@@ -216,11 +237,12 @@ class Runner:
             # Do not include HTTP headers or credential-bearing exceptions in events.
             self.fail(job_id, clean(str(error) or type(error).__name__), type(error).__name__)
         finally:
+            self.store.release(job_id)  # its share of the day is now in the spend, or was never used
             self.running.pop(job_id, None)
             self.freed.set()
             if job_id in self.again:  # skipped at once if nothing queued it again meanwhile
                 self.again.discard(job_id)
-                await self.queue.put(job_id)
+                await self.put(job_id)
             await self.resume_if_answered(job_id)
             try:
                 await self.replay_ended(job_id)
