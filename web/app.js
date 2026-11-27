@@ -144,9 +144,16 @@ function render() {
     const box = $('#scroll');
     const first = box.__job !== state.job.id;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-    if (paint('#thread', threadHtml()) && (first || nearBottom)) box.scrollTop = box.scrollHeight;
+    const drewThread = paint('#thread', threadHtml());
+    if (drewThread && (first || nearBottom)) box.scrollTop = box.scrollHeight;
     box.__job = state.job.id;
-    state.seen = state.events.reduce((n, e) => Math.max(n, e.seq), state.seen);
+    // New items animate in once. Once drawn they count as seen, and the conversation is noted as it reads without
+    // their animation, so the next draw with nothing new leaves it alone (no lost selection, no replayed animation).
+    const newest = state.events.at(-1)?.seq || 0;
+    if (newest > state.seen) {
+      state.seen = newest;
+      if (drewThread) $('#thread').__html = threadHtml();
+    }
     paint('#composer-wrap', composerHtml());
     syncComposer();
     // A redraw of the viewer (a pin added, a row marked) must not lose the person's place in a long sheet.
@@ -273,17 +280,17 @@ async function loadJob(id) {
   state.loading = true;
   render(); // the page on show fades while the run loads, so a click is seen to have done something
   try {
-    const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
-    const events = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=0`);
+    const [job, events] = await Promise.all([api(`/api/jobs/${encodeURIComponent(id)}`), allEvents(id)]);
     if (ticket !== loads || state.view !== from) return false; // the person went elsewhere meanwhile
     leaveRun();
     Object.assign(state, { job, events, view: 'run', notice: '' });
-    state.seen = events.reduce((n, e) => Math.max(n, e.seq), 0); // an opened run appears whole, without animating in
+    state.seen = events.at(-1)?.seq || 0; // an opened run appears whole, without animating in
     await Promise.all([loadMap(), loadRounds(), loadVersions()]);
     return true;
   } finally {
     if (ticket === loads) state.loading = false;
     render(); // also after a failure, so the page does not stay faded
+    wake(); // a run opened while it is going shows its progress from the first seconds
   }
 }
 
@@ -478,6 +485,7 @@ async function action(name, arg) {
   } finally {
     state.busy = false;
     render();
+    wake();
   }
 }
 
@@ -556,6 +564,7 @@ async function answerWith(text) {
   } finally {
     state.busy = false;
     render();
+    wake();
   }
 }
 
@@ -586,6 +595,7 @@ async function sendText() {
     throw e;
   } finally {
     render();
+    wake();
   }
 }
 
@@ -699,7 +709,13 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('[data-answer]'))) await answerWith(el.dataset.answer);
     else if ((el = target('[data-back]'))) await goBack(el.dataset.back);
     else if ((el = target('[data-view]'))) await openView(el.dataset.view);
-    else if ((el = target('[data-job]'))) await loadJob(el.dataset.job);
+    else if ((el = target('[data-job]'))) {
+      // The run already open is shown as it was left (its preview, its scroll), not loaded afresh.
+      if (state.job?.id === el.dataset.job) {
+        state.view = 'run';
+        render();
+      } else await loadJob(el.dataset.job);
+    }
     else if ((el = target('[data-download]'))) {
       const version = el.dataset.fileVersion ? `&version=${el.dataset.fileVersion}` : ''; // an older version on show
       await download(fileUrl('file', el.dataset.download, version), baseName(el.dataset.download));
@@ -719,7 +735,7 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('tr[data-row]'))) markRow(el);
     else if ((el = target('[data-group]'))) {
       const id = Number(el.dataset.group);
-      state.toggled.has(id) ? state.toggled.delete(id) : state.toggled.add(id);
+      state.toggled.set(id, el.getAttribute('aria-expanded') !== 'true');
       render();
     } else if ((el = target('[data-act]'))) openAct(el);
     else if ((el = target('[data-act-code]'))) {
@@ -1011,7 +1027,9 @@ document.addEventListener('input', (e) => {
   if (id === 'find-q' && state.find) typed(value, turnPage, render);
   if (id === 'files-q') {
     state.fileQuery = value;
-    render();
+    // As in the log search, the list is filtered once typing pauses, not redrawn on every key.
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(render, 150);
   }
   if (id === 'playbook-text') startDraft(state.book, value);
   if (id === 'client-notes') typeNotes(value);
@@ -1119,6 +1137,7 @@ document.addEventListener('submit', async (e) => {
       if (starting) {
         state.showVersions = false;
         await refreshJob();
+        wake();
       }
       return render();
     }
@@ -1184,10 +1203,38 @@ document.addEventListener('drop', (e) => {
 
 // --- Polling ---------------------------------------------------------------
 
-async function refreshJob() {
+// One look at the open run at a time. A button press while the regular look is out waits for it and then looks
+// again, so an older answer can never land after a newer one (Pause flashing back, an answered question unlocking).
+let refreshing = null;
+let refreshQueued = null;
+function refreshJob() {
+  if (refreshQueued) return refreshQueued;
+  if (!refreshing) return (refreshing = fetchJob().finally(() => (refreshing = null)));
+  refreshQueued = refreshing.catch(() => {}).then(() => {
+    refreshQueued = null;
+    return refreshJob();
+  });
+  return refreshQueued;
+}
+
+// The server hands out events 500 at a time (store.py), so a long run is read to its end before it is drawn: it opens
+// whole rather than filling in over several looks, with older items animating in as if new.
+const EVENT_PAGE = 500;
+async function allEvents(id, after = 0) {
+  const all = [];
+  for (;;) {
+    const page = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=${after}`);
+    all.push(...page);
+    if (page.length < EVENT_PAGE) return all;
+    after = page[page.length - 1].seq;
+  }
+}
+
+async function fetchJob() {
+  if (!state.job) return;
   const id = state.job.id;
   const after = state.events.reduce((n, ev) => Math.max(n, ev.seq), 0);
-  const [job, events] = await Promise.all([api(`/api/jobs/${id}`), api(`/api/jobs/${id}/events?after=${after}`)]);
+  const [job, events] = await Promise.all([api(`/api/jobs/${id}`), allEvents(id, after)]);
   if (state.job?.id !== id) return;
   const statusChanged = job.status !== state.job.status;
   state.connectionError = '';
@@ -1203,7 +1250,34 @@ async function refreshJob() {
 
 let listedAt = 0; // when the run list was last fetched for other runs going meanwhile
 
+// The next regular look is booked when the last one ends, from how busy the run was then. A press that sets a run
+// going (Start, Send, Resume) books it again from the run's new state, so live progress shows within seconds rather
+// than after the idle wait.
+let pollTimer;
+let pollBusy = false;
+let pollAgain = false;
+function wake() {
+  if (pollBusy) pollAgain = true;
+  else {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, 1500);
+  }
+}
+
 async function poll() {
+  clearTimeout(pollTimer);
+  pollBusy = true;
+  try {
+    await pollOnce();
+  } finally {
+    pollBusy = false;
+  }
+  const idle = isActive() || (jobStatus() === 'waiting' && state.job?.answer) ? 1500 : state.book?.tests?.running ? 3000 : 8000;
+  pollTimer = setTimeout(poll, pollAgain ? 1500 : idle);
+  pollAgain = false;
+}
+
+async function pollOnce() {
   if (state.job && !state.polling && !state.loading) {
     state.polling = true;
     try {
@@ -1231,8 +1305,6 @@ async function poll() {
   } catch {
     // the next round tries again
   }
-  // A sent answer is picked up within seconds, so look again soon rather than leave the answered card showing.
-  setTimeout(poll, isActive() || (jobStatus() === 'waiting' && state.job?.answer) ? 1500 : state.book?.tests?.running ? 3000 : 8000);
 }
 
 initVoice(render);

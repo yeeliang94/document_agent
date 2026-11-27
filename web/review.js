@@ -101,8 +101,10 @@ export async function stepFind(delta, turnPage, draw) {
   draw();
 }
 
-// The search changed: start again from the first match, and for a PDF ask the server once typing pauses.
+// The search changed: start again from the first match, and for a PDF ask the server once typing pauses. The file is
+// marked up again once typing pauses too, so a long sheet is not rebuilt on every key.
 let findTimer;
+let drawTimer;
 export function typed(value, turnPage, draw) {
   state.find.query = value;
   state.find.at = 0;
@@ -111,7 +113,8 @@ export function typed(value, turnPage, draw) {
   const view = state.preview;
   if (view?.data?.kind === "pages")
     findTimer = setTimeout(() => searchPdf(view, turnPage, draw), 300);
-  draw();
+  clearTimeout(drawTimer);
+  drawTimer = setTimeout(draw, 150);
 }
 
 export async function searchPdf(view, turnPage, draw) {
@@ -121,7 +124,7 @@ export async function searchPdf(view, turnPage, draw) {
   if (!q || view.hits?.query === q) return draw();
   try {
     const { hits, more, text } = await api(
-      fileUrl("find", view.path, `&q=${encodeURIComponent(q)}`),
+      fileUrl("find", view.path, `&q=${encodeURIComponent(q)}${view.version ? `&version=${view.version}` : ""}`),
     );
     if (state.preview !== view || query() !== q) return;
     view.hits = { query: q, list: hits, more, text };
@@ -169,6 +172,11 @@ export function revealMarks(root) {
       if (view?.ring) view.ring.jump = false;
       state.changes.jump = false;
     }
+  }
+  if (view?.rowJump) {
+    const el = root.querySelector(".grid tr.sel");
+    if (el) el.scrollIntoView({ block: "center", inline: "nearest" });
+    if (el || view.data || view.error) view.rowJump = false;
   }
   if (view?.found?.jump) {
     const el = root.querySelector(".found");

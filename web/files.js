@@ -435,11 +435,14 @@ function bodyHtml(view) {
     const drawn = draft?.path === view.path && (draft.page || null) === (where.page || null) && isBox(draft) ? draft : null;
     const picture = `<div class="stage ${commenting() ? 'spots' : ''}" ${canComment() ? 'data-stage' : ''}><img src="${view.image}" alt="${esc(data.name)}${data.kind === 'pages' ? `, page ${view.page}` : ''}" draggable="false">${data.kind === 'pages' ? pageMarksHtml(view) : ''}${pins}${drawn ? area(drawn, 'live') : ''}</div>`;
     const shot = `<div class="shot">${view.image ? picture : '<span class="empty">Loading</span>'}</div>`;
+    // Quick clicks count on from the page last asked for, not the one still showing while it loads.
+    const asked = view.wanted || view.page;
     const pager = data.kind === 'pages' && data.pages > 1
-      ? `<div class="pager"><button class="icon-btn" data-page="${view.page - 1}" aria-label="Previous page" ${view.page <= 1 ? 'disabled' : ''}>${icon('back')}</button>
-          Page ${view.page} of ${data.pages}<button class="icon-btn" data-page="${view.page + 1}" aria-label="Next page" ${view.page >= data.pages ? 'disabled' : ''}>${icon('chev')}</button></div>`
+      ? `<div class="pager"><button class="icon-btn" data-page="${asked - 1}" aria-label="Previous page" ${asked <= 1 ? 'disabled' : ''}>${icon('back')}</button>
+          Page ${asked} of ${data.pages}<button class="icon-btn" data-page="${asked + 1}" aria-label="Next page" ${asked >= data.pages ? 'disabled' : ''}>${icon('chev')}</button></div>`
       : '';
-    return shot + pager;
+    const failed = view.pageError ? `<p class="meta problem">${esc(view.pageError)}</p>` : '';
+    return shot + pager + failed;
   }
   return `<p class="empty">${data.error ? 'This file could not be opened for preview.' : 'There is no preview for this kind of file.'}</p>`;
 }
@@ -547,7 +550,8 @@ export function closeFile() {
 // into view: a cell, a line, or a box on a page.
 export async function openFile(path, draw, { sheet = null, row = null, back = null, found = null, page = 1, version = null, ring = null } = {}) {
   dropImage();
-  const view = { path, data: null, page: 1, image: null, error: '', back, found, hits: null, changes: null, version, ring: ring && { ...ring, jump: true } };
+  // Back to a row brings that row into view again, as it was when the person left it.
+  const view = { path, data: null, page: 1, image: null, error: '', back, found, hits: null, changes: null, version, ring: ring && { ...ring, jump: true }, rowJump: Boolean(row) };
   state.menu = null;
   if (state.open !== path) resetZoom();
   state.open = path;
@@ -605,13 +609,19 @@ export function openSpot(spot, draw, back = null) {
 export async function turnPage(page, draw) {
   const view = state.preview;
   if (!view?.data || page < 1 || page > view.data.pages) return;
+  // The page asked for last is the one that shows: a slower answer for an earlier click is thrown away.
+  view.wanted = page;
+  const stale = () => state.preview !== view || view.wanted !== page;
   try {
     const image = await blobUrl(fileUrl('page', view.path, `&page=${page}${versionOf(view)}`));
-    if (state.preview !== view) return URL.revokeObjectURL(image);
+    if (stale()) return URL.revokeObjectURL(image);
     dropImage();
-    Object.assign(view, { page, image });
+    Object.assign(view, { page, image, pageError: '' });
   } catch (error) {
-    view.error = error.message;
+    if (stale()) return;
+    // A page that would not load is said under the page on show, which keeps its controls to try again.
+    view.pageError = error.message;
+    view.wanted = view.page;
   }
   draw();
 }

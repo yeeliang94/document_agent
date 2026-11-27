@@ -282,7 +282,7 @@ NUMBER = re.compile(r'^\(?-?\s*(?:RM|MYR|USD|SGD|EUR|GBP|AUD|[A-Z]{0,2}\$|€|£
 
 
 def find_in_pdf(
-    root: Path, relative: str, needles: list[str], whole_words: bool = False
+    root: Path, relative: str, needles: list[str], whole_words: bool = False, version: int | None = None
 ) -> tuple[list[dict], bool, bool]:
     """Where each needle appears in a PDF, page by page: {page, x, y, w, h, needle} with the box as shares of the
     page's width and height. Also whether the search stopped before the end, and whether any page read has text: a
@@ -292,7 +292,7 @@ def find_in_pdf(
     whole app, so it is held one page at a time: page images for other people are not kept waiting for a search."""
     import pypdfium2 as pdfium
 
-    path = job_file(root, relative)
+    path = any_file(root, relative, version)
     if path.suffix.lower() != '.pdf':
         raise ValueError('Only a PDF can be searched this way')
     needles = [n.strip() for n in needles]

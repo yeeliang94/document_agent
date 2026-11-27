@@ -122,7 +122,7 @@ export const state = {
   jobs: [],
   events: [],
   seen: 0, // highest event number already drawn, so only newer items animate in
-  toggled: new Set(), // work blocks, stages and thinking notes the user opened or closed by hand
+  toggled: new Map(), // work blocks, stages and thinking notes the user opened or closed by hand: id to open or not
   act: null, // the action opened in full, by its event number; see thread.js
   actCode: false, // the opened action shows its code
   scripts: {}, // each opened action's code and what it printed, as fetched: { code, output } or { error }
@@ -263,15 +263,26 @@ export function toast(message, action = '') {
 }
 export const hideToast = () => $('#toast').classList.remove('visible');
 
+// One Cancel stands for the requests refused with it, so the box does not come straight back for each of them.
+let declinedAt = 0;
+function askToken() {
+  if (Date.now() - declinedAt < 2000) return null;
+  const token = window.prompt('Application access token');
+  if (!token) declinedAt = Date.now();
+  return token;
+}
+
 export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
   // JSON unless the body says otherwise: a form or a file (a recording) carries its own type.
   if (options.body && !(options.body instanceof FormData) && !(options.body instanceof Blob) && !headers.has('Content-Type'))
     headers.set('Content-Type', 'application/json');
+  const sent = state.token;
   let res = await fetch(path, { ...options, headers });
   if (res.status === 401) {
-    const token = window.prompt('Application access token');
+    // Several requests refused at once ask once: those after the first use the token it was given.
+    const token = state.token && state.token !== sent ? state.token : askToken();
     if (token) {
       state.token = token;
       sessionStorage.setItem('di-token', token);

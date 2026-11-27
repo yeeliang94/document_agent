@@ -403,7 +403,7 @@ def create_app(settings_override: Settings | None = None):
             return JSONResponse({'detail': str(error), 'field': error.field}, 400)
 
     @api.get('/api/jobs')
-    async def jobs():
+    def jobs():
         return store.summaries()
 
     @api.post('/api/jobs', status_code=201)
@@ -515,8 +515,9 @@ def create_app(settings_override: Settings | None = None):
         # Every engine run of the job, priced now (app/costs.py); None when no price is set.
         return {**found, 'cost': costs.job_cost(found, store.settings())}
 
+    # Plain functions, not async: their database reads would otherwise hold up every other request, voice included.
     @api.get('/api/jobs/{job_id}')
-    async def job(job_id):
+    def job(job_id):
         return job_view(get(job_id))
 
     class JobInput(BaseModel):
@@ -974,7 +975,7 @@ def create_app(settings_override: Settings | None = None):
         return {'files': files}
 
     @api.get('/api/jobs/{job_id}/events')
-    async def events(job_id, after: int = 0):
+    def events(job_id, after: int = 0):
         get(job_id)
         return store.events(job_id, after)
 
@@ -1093,10 +1094,10 @@ def create_app(settings_override: Settings | None = None):
             raise job_file_error(error) from None
 
     @api.get('/api/jobs/{job_id}/find')
-    def file_find(job_id, path: str, q: str = Query(min_length=1, max_length=200)):
+    def file_find(job_id, path: str, q: str = Query(min_length=1, max_length=200), version: int | None = None):
         get(job_id)
         try:
-            hits, more, text = preview.find_in_pdf(store.path(job_id), path, [q])
+            hits, more, text = preview.find_in_pdf(store.path(job_id), path, [q], version=version)
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
         except Exception as error:  # noqa: BLE001 - a damaged PDF

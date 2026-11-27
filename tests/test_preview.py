@@ -294,6 +294,23 @@ def text_pdf(pages: list[list[str]]) -> bytes:
 INVOICE = text_pdf([['Cover letter for invoice SC26100217'], ['Tax invoice SC26100217', 'Licences 2,315.60', 'Service tax 185.25', 'Total due 2,500.85']])  # fmt: skip
 
 
+def test_a_search_in_an_older_version_of_a_pdf_looks_in_that_version(client):
+    job = create_job(client)
+    folder = client.root / 'jobs' / job['id']
+    (folder / 'outputs').mkdir(exist_ok=True)
+    (folder / 'outputs' / 'report.pdf').write_bytes(text_pdf([['Total due 900.00']]))
+    kept = folder / 'versions' / 'v0001' / 'files'
+    kept.mkdir(parents=True)
+    (kept / 'report.pdf').write_bytes(INVOICE)
+
+    def pages(**more):
+        params = {'path': 'outputs/report.pdf', 'q': 'SC26100217', **more}
+        return [h['page'] for h in client.get(f'/api/jobs/{job["id"]}/find', params=params).json()['hits']]
+
+    assert pages() == []
+    assert pages(version=1) == [1, 2]
+
+
 def test_a_search_finds_each_match_in_a_pdf_with_its_page_and_box(client):
     job, path = upload(client, 'invoice.pdf', INVOICE)
     found = client.get(f'/api/jobs/{job["id"]}/find', params={'path': path, 'q': 'sc26100217'}).json()

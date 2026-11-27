@@ -210,6 +210,8 @@ export function threadItems() {
 }
 
 const fresh = (seq) => (seq > state.seen ? 'fresh' : '');
+// Open as the person last left it by hand, else as it opens by default (a block the agent is working in is open).
+const isOpen = (id, byDefault) => (state.toggled.has(id) ? state.toggled.get(id) : byDefault);
 
 function fileButton(path) {
   const stored = storedPath(path);
@@ -296,7 +298,7 @@ function groupHtml(g, live = '') {
   const names = new Set(g.steps.flatMap(stepFiles));
   const flags = g.steps.filter((s) => s.problem).length;
   const title = names.size ? `Worked through ${plural(names.size, 'file')}` : plural(Math.max(steps.length, 1), 'step');
-  const open = state.toggled.has(g.id) ? !live : Boolean(live);
+  const open = isOpen(g.id, Boolean(live));
   return `<div class="grp ${open ? 'open' : ''} ${fresh(g.id)}">
     <button class="grp-head" data-group="${g.id}" aria-expanded="${open}">${icon('chev')}<span>${title}</span>
       ${flags ? `<span class="flagged">${plural(flags, 'problem')}</span>` : ''}<time>${duration(g.to - g.from)}</time></button>
@@ -311,7 +313,7 @@ const thinkingShown = () => (state.settings?.values?.thinking_summaries ?? 'shor
 // paragraph of each part.
 function thoughtHtml(t) {
   const id = -t.seq; // thinking notes are toggled by the negative of their event number, stages by the positive
-  const open = state.toggled.has(id);
+  const open = isOpen(id, false);
   const clean = (text) => String(text || '').replace(/\*\*/g, '').trim();
   const paras = t.parts.flatMap((p, i) => {
     const text = clean(p.text).split(/\n\s*\n/).filter(Boolean);
@@ -333,7 +335,7 @@ function changeHtml(e) {
 
 function sectionHtml(g, sec, live, last) {
   const here = Boolean(live) && last;
-  const open = state.toggled.has(sec.id) ? !here : here;
+  const open = isOpen(sec.id, here);
   const think = thinkingShown();
   // The stage's work: each thinking note heads the actions after it, up to the next note.
   const parts = [];
@@ -378,7 +380,7 @@ function stagedHtml(g, live) {
   const html = sections.map((sec, i) => sectionHtml(g, sec, live, i === sections.length - 1)).join('');
   // The live line shows even when the person folded the stage going on now.
   const last = sections[sections.length - 1];
-  const hidden = live && state.toggled.has(last.id);
+  const hidden = live && !isOpen(last.id, true);
   return `<div class="work-stages ${fresh(g.id)}">${html}</div>${hidden ? live : ''}`;
 }
 
