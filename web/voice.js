@@ -114,7 +114,7 @@ function write(s) {
   const words = s.text.trim();
   const gapBefore = words && s.before && !/\s$/.test(s.before) ? ' ' : '';
   const gapAfter = words && s.after && !/^\s/.test(s.after) ? ' ' : '';
-  const value = s.before + gapBefore + words + gapAfter + s.after;
+  const value = words ? s.before + gapBefore + words + gapAfter + s.after : s.original; // nothing heard: as it was
   box.readOnly = s.phase === 'listening'; // typing while it listens would be overwritten by the next words
   s.written = value;
   if (box.value !== value) {
@@ -149,7 +149,10 @@ async function start(target) {
     return redraw();
   }
   // Claimed before anything is awaited, so a second press while the browser asks for the microphone does nothing.
-  const s = { target, phase: 'starting', text: '', owner: ownerOf(target), ...anchor(target) };
+  // `written` starts as the box's text, so an edit made while the microphone starts stops the recording rather
+  // than being overwritten, and `original` is what goes back if no words are heard (a selection stays).
+  const original = box.value;
+  const s = { target, phase: 'starting', text: '', owner: ownerOf(target), ...anchor(target), original, written: original };
   active = s;
   redraw();
   try {

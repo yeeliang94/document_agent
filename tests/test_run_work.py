@@ -79,8 +79,6 @@ def test_a_step_that_only_moved_is_neither_new_nor_dropped():
     'sent, problem',
     [
         ([], 'no steps'),
-        (steps(*[(f'Step {n}', 'pending') for n in range(11)]), 'at most'),
-        (steps(('x' * 121, 'pending')), 'under 120'),
         (steps(('Read the rules', 'pending'), ('read the  rules', 'done')), 'twice'),
         (steps(('   ', 'pending')), 'no words'),
     ],

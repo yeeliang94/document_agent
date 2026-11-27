@@ -583,7 +583,7 @@ async def update_plan(ctx: RunContextWrapper[Job], steps: list[PlanStep], why: s
     when a step finishes or the plan changes, not after every script.
 
     Args:
-        steps: The whole plan in order, three to eight steps, each under 120 characters: "done", "in_progress"
+        steps: The whole plan in order, three to eight steps, each a short line the person reads at a glance: "done", "in_progress"
             (the one step you are on) or "pending".
         why: When you add, drop or reword a step: why, in one plain sentence the person reads. Empty when you only
             tick steps off.

@@ -11,8 +11,6 @@ import re
 from difflib import SequenceMatcher
 
 STATUSES = ('pending', 'in_progress', 'done')
-MAX_STEPS = 10
-STEP_CHARS = 120
 SIMILAR = 0.5  # how alike a step's old and new wording must be to count as the same step reworded
 
 
@@ -24,16 +22,9 @@ def clean(steps: list[dict]) -> tuple[list[dict], str]:
         status = step.get('status') if step.get('status') in STATUSES else 'pending'
         if not text:
             return [], f'Step {number} has no words. Give every step a few plain words.'
-        if len(text) > STEP_CHARS:
-            return [], (
-                f'Step {number} is {len(text)} characters long. Keep each step under {STEP_CHARS}: a short line the '
-                'person reads at a glance, with the detail left to your notes.'
-            )
         kept.append({'step': text, 'status': status})
     if not kept:
         return [], 'The plan has no steps. Send the whole plan, three to eight steps.'
-    if len(kept) > MAX_STEPS:
-        return [], f'The plan has {len(kept)} steps. Keep it to {MAX_STEPS} at most by joining related work.'
     seen = set()
     for step in kept:
         key = step['step'].lower()

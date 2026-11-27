@@ -266,6 +266,7 @@ function leaveRun() {
 
 let loads = 0; // each run opened counts one; a load another page or run has overtaken is dropped
 
+// True once the run is on show; false when the person went elsewhere before it arrived.
 async function loadJob(id) {
   const ticket = ++loads;
   const from = state.view;
@@ -274,11 +275,12 @@ async function loadJob(id) {
   try {
     const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
     const events = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=0`);
-    if (ticket !== loads || state.view !== from) return; // the person went elsewhere meanwhile
+    if (ticket !== loads || state.view !== from) return false; // the person went elsewhere meanwhile
     leaveRun();
     Object.assign(state, { job, events, view: 'run', notice: '' });
     state.seen = events.reduce((n, e) => Math.max(n, e.seq), 0); // an opened run appears whole, without animating in
     await Promise.all([loadMap(), loadRounds(), loadVersions()]);
+    return true;
   } finally {
     if (ticket === loads) state.loading = false;
     render(); // also after a failure, so the page does not stay faded
@@ -330,7 +332,7 @@ function syncAddress() {
 
 async function goTo({ view, id, version }) {
   if (view === 'run' || view === 'log') {
-    if (state.job?.id !== id) await loadJob(id);
+    if (state.job?.id !== id && !(await loadJob(id))) return; // overtaken: the page chosen since stays
     state.view = view;
   } else if (view === 'playbook') await openPlaybook(id, { version });
   else if (view === 'client') await openClient(id, { keepTab: true, version });

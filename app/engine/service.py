@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -325,11 +326,23 @@ def choose_past_runs(store, job: dict) -> list[dict]:
     return found
 
 
+def keep_copy(outputs: Path, copy: Path) -> None:
+    """A fixed copy of a finished run's files, put in place whole: a reader never sees half of it."""
+    building = copy.with_name(copy.name + '.part')
+    shutil.rmtree(building, ignore_errors=True)
+    for path in past_files(outputs):
+        target = building / path.relative_to(outputs)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+    building.mkdir(parents=True, exist_ok=True)
+    building.rename(copy)
+
+
 def past_runs(store, job: dict) -> tuple[dict, ...]:
     """The job's earlier runs with what the engine needs to open one. Left out: a run deleted since, and a run
     that is no longer finished because the user sent it back with comments. Its files are then work in progress;
-    it is offered again, under the same label, once it finishes. (One job runs at a time, so a run cannot change
-    while another job is reading it.)"""
+    it is offered again, under the same label, once it finishes. Each is read from a copy this job takes while that
+    run is finished: several runs go at once, so the run itself may be sent back and change while this one reads it."""
     held = []
     for run in choose_past_runs(store, job):
         try:
@@ -338,8 +351,10 @@ def past_runs(store, job: dict) -> tuple[dict, ...]:
             continue
         if other['status'] != 'completed':
             continue
-        outputs = store.path(run['id']) / 'outputs'
-        held.append({**run, 'goal': (other.get('instructions') or '')[:1000], 'outputs': outputs})
+        copy = store.path(job['id']) / 'past' / run['label']
+        if not copy.is_dir():
+            keep_copy(store.path(run['id']) / 'outputs', copy)
+        held.append({**run, 'goal': (other.get('instructions') or '')[:1000], 'outputs': copy})
     return tuple(held)
 
 
