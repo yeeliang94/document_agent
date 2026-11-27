@@ -25,5 +25,5 @@ def from_answer(answer: dict | None) -> dict | None:
     if not any(report.values()):
         return None
     # What a client's first run found worth keeping, offered to the person as the client's notes (plan Step 50).
-    keep = _lines(answer.get('for_next_time'))[:5]
+    keep = _lines(answer.get('for_next_time'))
     return report | ({'for_next_time': keep} if keep else {})

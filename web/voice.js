@@ -176,11 +176,17 @@ async function start(target) {
   } catch (e) {
     return fail(s, `The microphone could not be started: ${e.message}`);
   }
+  if (s.stopSoon) return stop(s);
   redraw();
 }
 
 function stop(s) {
   if (s.phase !== 'listening') return;
+  // Stop pressed while the recording is still being set up: it stops as soon as it can be.
+  if (!s.stop) {
+    s.stopSoon = true;
+    return;
+  }
   s.phase = 'working';
   clearInterval(s.ticker);
   clearTimeout(s.limitTimer);

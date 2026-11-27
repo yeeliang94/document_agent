@@ -18,9 +18,9 @@ def test_the_agent_is_asked_for_what_to_keep_only_when_the_client_has_no_notes(t
     assert 'for_next_time' in new and 'for_next_time' not in known
 
 
-def test_the_report_keeps_at_most_five_lines_to_keep():
+def test_the_report_keeps_every_line_to_keep():
     answer = {'headline': 'Done.', 'for_next_time': [f'Rule {n}.' for n in range(8)]}
-    assert from_answer(answer)['for_next_time'] == [f'Rule {n}.' for n in range(5)]
+    assert from_answer(answer)['for_next_time'] == [f'Rule {n}.' for n in range(8)]
     assert 'for_next_time' not in from_answer({'headline': 'Done.'})  # nothing offered when nothing was listed
 
 

@@ -117,7 +117,7 @@ class JobSummary(BaseModel):
     open_questions: list[str] = []
     for_next_time: list[str] = Field(
         default=[],
-        description='Only when the goal card says the client has no notes yet: up to five short lines a later run for '
+        description='Only when the goal card says the client has no notes yet: a few short lines a later run for '
         'this client should follow (which file wins, cut-off dates, rates, what to leave out), each a standing rule, '
         'not a figure from this period. Empty otherwise.',
     )

@@ -113,11 +113,6 @@ class RunStore:
 
 OUTPUT_MARK = '\n\n# ---- output ----\n'
 CODE_NAME = re.compile(r'\d{3}-[A-Za-z0-9_.-]+\.py')
-SHOWN_CHARS = 20_000  # of a script's code, and of what it printed, sent to the screen
-
-
-def _cut(text: str) -> str:
-    return text if len(text) <= SHOWN_CHARS else text[:SHOWN_CHARS] + '\n...'
 
 
 def read_code(folder: Path, name: str) -> dict:
@@ -129,7 +124,7 @@ def read_code(folder: Path, name: str) -> dict:
     text = path.read_text(encoding='utf-8', errors='replace')
     code, _, printed = text.partition(OUTPUT_MARK)
     output = '\n'.join(line[2:] if line.startswith('# ') else line.lstrip('#') for line in printed.splitlines())
-    return {'name': name, 'code': _cut(code.rstrip()), 'output': _cut(output.rstrip())}
+    return {'name': name, 'code': code.rstrip(), 'output': output.rstrip()}
 
 
 def lead_scripts(folder: Path) -> list[str]:
