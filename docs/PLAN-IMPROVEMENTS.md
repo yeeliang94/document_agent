@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `91%` (58 of 64 steps) (Phases 1-11 and 14-17 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 18: Steps 63-64 done, Step 62 has one fix left)
+**Overall Progress:** `92%` (59 of 64 steps) (Phases 1-11 and 14-17 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 18 done)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -422,7 +422,7 @@ The tester's first batch (source links, runs told apart, Settings errors in view
 
 Today a run shows one line per action the agent took (20-40 in a normal run), each cut short, and none can be opened. The person can't tell at a glance what stage the run is in or what is left. Codex and similar tools fold the actions under short headings and show the agent's own checklist. Each step that changes a screen starts with a prototype.
 
-- [ ] 🟨 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
+- [x] 🟩 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
   - **Verify:** in a browser, a live run and a finished run of the sample packet: fold and unfold each stage, open three actions, at 642 and 1440 wide.
 - [x] 🟩 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
   - **Verify:** a live run with each setting; I report the extra cost per run, and the switch reaches the run.
@@ -430,7 +430,7 @@ Today a run shows one line per action the agent took (20-40 in a normal run), ea
   - **Verify:** tests for writing, updating and restoring the plan after a stop; a live run of the sample packet with and without the tool: the score, the cost, and whether the plan matched what it did.
   - **Built (2026-11-27), live check left for Steps 62-64:** the agent keeps its plan with an `update_plan` tool; the plan is stored with the run, given back after condensing and on a continued run, and dropped on Start over or Continue from an earlier version. Stages fold with the plan steps ticked in them (counts when there is none); an action opens in full with its code folded. "Show the agent's thinking" (Off, Short, Detailed; Short by default) asks for summaries, and a service that refuses them is asked again once without. Tests in `tests/test_run_work.py`; screens checked at 1440, 642 and 375 on written test data. Not yet known: whether the gateway sends summaries, their cost, and the score with the plan tool.
   - **Live check (2026-11-27), direct OpenAI (gpt-6-luna), sample packet, one run per thinking setting:** every run scored 10 of 10 and kept a five-step plan, ticked as it went (3-4 plan updates). Off: 97k tokens, 2m 40s. Short: 91k tokens, 2m 40s, 8 thinking headings (about 3,900 characters in all). Detailed: 125k tokens, 3m 20s, 14 headings (about 7,500 characters). The earlier sample run without the plan tool used 133k tokens and 3.5 minutes, so the plan adds no visible cost. Short costs about the same as Off within run-to-run noise; Detailed cost about 30% more in this run. Not checked: the enterprise gateway (it may not send summaries; the run then carries on without them).
-  - **Left for Step 62:** in the live runs a stage's one-line summary sometimes lists plan steps from a later stage (the agent ticks several steps in one update, so "Reading files" listed "Fill the template"). The stages, timings and opened actions read correctly at 1440 and 642.
+  - **Step 62 fix (2026-11-27):** a stage's one-line summary listed plan steps from a later stage, because the agent marks a step as started just before it starts, while the stage still names the one before. A step now counts towards the stage of the first script or save after it was started; status lines do not count, and each new run starts afresh. Checked on the live Detailed run: Reading files lists the two reading steps, Filling in the three after. The stages, timings and opened actions read correctly at 1440 and 642.
 
 ## Risks
 

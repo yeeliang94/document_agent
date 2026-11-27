@@ -328,3 +328,29 @@ def test_a_service_that_refuses_the_summary_setting_is_asked_again_without_it(tm
     runs[:] = [Refusing(False)]
     with pytest.raises(APIError):
         asyncio.run(agent._drive(lead, 'go', lead_job(store), store, lambda *_: None, QUIET_CONTROL))
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='needs Node.js to run the screen code')
+def test_a_plan_step_counts_towards_the_stage_of_the_first_action_after_the_agent_started_it():
+    # As in a live run: the agent says it is on "Fill the template" while the stage still says reading, and the stage
+    # moves to filling only with its first write. The step belongs to filling, not reading.
+    script = """
+import { stepStages } from './stages.js';
+const worked = stepStages();
+worked.on(['Reconcile the records']); worked.acted('reading');
+worked.on(['Fill the template']);  // said while the stage is still reading
+worked.acted('filling');  // the first action after: a write, so the stage is filling
+worked.on(['Fill the template']);  // said again: it stays with the stage it was first worked in
+worked.acted('checking');
+worked.on(['Save and review']);  // ticked before any action since: the stage it was ticked in
+const save = worked.done('Save and review', 'checking');
+worked.acted('later');  // and a later action no longer moves it
+console.log(JSON.stringify([
+  worked.done('Reconcile the records', 'x'), worked.done('Fill the template', 'x'),
+  save, worked.done('Save and review', 'x'), worked.done('Never started', 'filling'),
+]));
+"""
+    out = subprocess.run(
+        ['node', '--input-type=module', '-e', script], cwd=WEB, capture_output=True, text=True, check=True
+    )
+    assert json.loads(out.stdout) == ['reading', 'filling', 'checking', 'checking', 'filling']

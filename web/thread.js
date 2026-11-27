@@ -10,7 +10,7 @@ import { followingHtml } from './clients.js';
 import { learnedHtml, roundHtml } from './comments.js';
 import { linked } from './links.js';
 import { versionRows, versionWhat } from './versions.js';
-import { stageSummary, stagesOf, stepFiles } from './stages.js';
+import { stageSummary, stagesOf, stepFiles, stepStages } from './stages.js';
 
 // Engine events that are housekeeping, or that another item already shows.
 const QUIET = new Set([
@@ -80,7 +80,7 @@ export function threadItems() {
   let stage = null; // the stage of the run going now, in a staged run
   let lastRun = 0; // the run the latest engine event came from, for the events that name none
   let ticked = new Set(); // the plan steps done so far
-  const doing = new Map(); // each plan step, by its words: the stage it was first marked as going on in
+  let worked = stepStages(); // the stage each plan step was worked on in, in the run going now
   const scripts = []; // every action that is a script, to tell each how many scripts its run kept
   const counts = {}; // scripts per run
   const push = (item) => {
@@ -123,6 +123,7 @@ export function threadItems() {
     const run = e.run || lastRun;
     const base = { seq: e.seq, at: time(e), stage: staged.has(run) ? stage || 'reading' : null };
     // A script cut short: the run stopped, or OpenAI dropped the reply it was part of.
+    if (e.name === 'engine.run.started') worked = stepStages(); // a new run's steps are placed by its own work
     if (['engine.run.started', 'engine.model.retry', 'job.paused', 'job.cancelled', ...ENDINGS].includes(e.name)) {
       script = null;
       running.length = 0;
@@ -138,8 +139,8 @@ export function threadItems() {
       const newly = done.filter((s) => !ticked.has(s));
       ticked = new Set(done);
       // A step counts towards the stage it was worked on in: the agent often ticks it only once the next stage began.
-      for (const s of e.steps || []) if (s.status === 'in_progress' && !doing.has(s.step)) doing.set(s.step, base.stage);
-      for (const s of newly) mark({ kind: 'tick', ...base, stage: doing.get(s) || base.stage, steps: [s] });
+      worked.on((e.steps || []).filter((s) => s.status === 'in_progress').map((s) => s.step));
+      for (const s of newly) mark({ kind: 'tick', ...base, stage: worked.done(s, base.stage), steps: [s] });
       if (!e.first && planChanged(e)) mark({ kind: 'change', ...base, event: e });
       continue;
     }
@@ -164,7 +165,10 @@ export function threadItems() {
     else if (e.type === 'question' || e.name === 'engine.question.asked') {
       if (e !== asked) push({ kind: 'say', ...base, text: String(e.message).replace(/^Question for you:\s*/, '') });
     } else if (e.type === 'tool') {
-      if (e.status !== 'running') step(toolStep(e)); // earlier-engine runs logged a start and an end per tool
+      if (e.status !== 'running') {
+        worked.acted(base.stage);
+        step(toolStep(e)); // earlier-engine runs logged a start and an end per tool
+      }
     } else if (e.name === 'engine.code.started') {
       step(base);
       group.code += 1;
@@ -182,6 +186,7 @@ export function threadItems() {
       counts[run] = (counts[run] || 0) + 1;
       const code = { run, name: kept.get(e.item) || e.code || '', index: counts[run] };
       scripts.push(code);
+      worked.acted(base.stage);
       step({ ...base, verb: sentence(e.message), files: e.files || [], plain: true, secs, code });
       const started = running.shift();
       if (started) started.code -= 1;
@@ -190,6 +195,7 @@ export function threadItems() {
       // A limit coming close is a warning, not a problem with the work.
       const problem = isWarning(e) && e.name !== 'engine.limit.near';
       const back = e.name === 'engine.outputs.saved' && e.issues ? { passed: e.passed, issues: e.issues } : null;
+      if (e.name === 'engine.outputs.saved') worked.acted(base.stage);
       if (!QUIET.has(e.name)) step({ ...base, verb: sentence(e.message), plain: true, flag: isWarning(e), problem, back });
     } else if (ENDINGS.includes(e.name)) {
       if (e.seq !== settled) push({ kind: e.name === 'job.failed' ? 'note' : 'say', ...base, text: e.message });

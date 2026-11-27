@@ -30,6 +30,32 @@ export function stagesOf(entries) {
   return out.filter((sec) => sec.entries.length || sec.ticked.length);
 }
 
+// Which stage each plan step belongs to: the stage of the first action taken after the agent said it was on the
+// step. It says so just before it starts, while the run's stage still names the stage before (the stage moves on
+// only with the first action of the next kind). An action is work: a script or a save, not a status line. A step
+// ticked with no action since takes the stage it was ticked in.
+export function stepStages() {
+  const known = new Map();
+  let waiting = [];
+  return {
+    on(steps) {
+      for (const s of steps) if (!known.has(s) && !waiting.includes(s)) waiting.push(s);
+    },
+    acted(stage) {
+      for (const s of waiting) known.set(s, stage);
+      waiting = [];
+    },
+    // The stage a step just ticked off counts towards; it no longer waits for an action.
+    done(step, fallback) {
+      if (waiting.includes(step)) {
+        waiting = waiting.filter((s) => s !== step);
+        known.set(step, fallback);
+      }
+      return known.get(step) || fallback;
+    },
+  };
+}
+
 const asSentence = (text) => (/[.!?]$/.test(text) ? text : text + '.');
 
 // A stage in a line: the plan steps ticked off in it. A stage going on now with nothing ticked yet says the step the
