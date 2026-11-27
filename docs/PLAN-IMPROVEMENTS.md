@@ -1,6 +1,6 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `88%` (56 of 64 steps) (Phases 1-11 and 14-17 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 18 built, its live check left)
+**Overall Progress:** `91%` (58 of 64 steps) (Phases 1-11 and 14-17 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 18: Steps 63-64 done, Step 62 has one fix left)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
 **Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
@@ -424,11 +424,13 @@ Today a run shows one line per action the agent took (20-40 in a normal run), ea
 
 - [ ] 🟨 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
   - **Verify:** in a browser, a live run and a finished run of the sample packet: fold and unfold each stage, open three actions, at 642 and 1440 wide.
-- [ ] 🟨 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
+- [x] 🟩 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
   - **Verify:** a live run with each setting; I report the extra cost per run, and the switch reaches the run.
-- [ ] 🟨 **Step 64: The agent keeps a plan** — a tool the agent uses to write its plan as a short checklist and tick steps off as it goes. The plan is kept with the run, survives condensed history and a picked-up run, and is shown at the top of the run (prototype first).
+- [x] 🟩 **Step 64: The agent keeps a plan** — a tool the agent uses to write its plan as a short checklist and tick steps off as it goes. The plan is kept with the run, survives condensed history and a picked-up run, and is shown at the top of the run (prototype first).
   - **Verify:** tests for writing, updating and restoring the plan after a stop; a live run of the sample packet with and without the tool: the score, the cost, and whether the plan matched what it did.
   - **Built (2026-11-27), live check left for Steps 62-64:** the agent keeps its plan with an `update_plan` tool; the plan is stored with the run, given back after condensing and on a continued run, and dropped on Start over or Continue from an earlier version. Stages fold with the plan steps ticked in them (counts when there is none); an action opens in full with its code folded. "Show the agent's thinking" (Off, Short, Detailed; Short by default) asks for summaries, and a service that refuses them is asked again once without. Tests in `tests/test_run_work.py`; screens checked at 1440, 642 and 375 on written test data. Not yet known: whether the gateway sends summaries, their cost, and the score with the plan tool.
+  - **Live check (2026-11-27), direct OpenAI (gpt-6-luna), sample packet, one run per thinking setting:** every run scored 10 of 10 and kept a five-step plan, ticked as it went (3-4 plan updates). Off: 97k tokens, 2m 40s. Short: 91k tokens, 2m 40s, 8 thinking headings (about 3,900 characters in all). Detailed: 125k tokens, 3m 20s, 14 headings (about 7,500 characters). The earlier sample run without the plan tool used 133k tokens and 3.5 minutes, so the plan adds no visible cost. Short costs about the same as Off within run-to-run noise; Detailed cost about 30% more in this run. Not checked: the enterprise gateway (it may not send summaries; the run then carries on without them).
+  - **Left for Step 62:** in the live runs a stage's one-line summary sometimes lists plan steps from a later stage (the agent ticks several steps in one update, so "Reading files" listed "Fill the template"). The stages, timings and opened actions read correctly at 1440 and 642.
 
 ## Risks
 
