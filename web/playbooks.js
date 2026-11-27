@@ -2,7 +2,7 @@
 // A playbook is what the agent follows on every run of one kind of work. Every change to its instructions is a
 // version; the agent can propose a rewrite, and nothing is saved until the person accepts it.
 
-import { $, api, attr, btn, esc, hideToast, icon, jobTitle, money, pill, plural, playbooks, state, toast } from './core.js';
+import { $, api, attr, btn, esc, facts, hideToast, icon, jobTitle, money, pill, plural, playbooks, state, toast } from './core.js';
 import { pageAddress } from './routes.js';
 import { micButton, voiceNote } from './voice.js';
 
@@ -24,7 +24,7 @@ export function playbooksPage() {
   const rows = playbooks()
     .map(
       (p) => `<button class="row link" data-book="${esc(p.id)}" title="${esc(p.name)}"><span class="name"><span>${esc(p.name)}</span>
-        <span class="desc">${plural(p.skills, 'skill')} · version ${p.version}</span></span>${icon('chev')}</button>`,
+        <span class="desc">${plural(p.skills, 'skill')}, version ${p.version}</span></span>${icon('chev')}</button>`,
     )
     .join('');
   return page(`<div class="page-head"><h1>Playbooks</h1>${btn('new-playbook', 'New playbook', 'primary', false, 'plus')}</div>
@@ -127,7 +127,7 @@ function skillsTab(book) {
     : '';
   const rows = book.skills
     .map(
-      (s) => `<div class="row"><button class="name link" data-skill-open="${esc(s.name)}"><span>${esc(s.name)}</span><span class="desc">${esc(s.description)}${s.programs ? ` · ${plural(s.programs, 'program')}` : ''}</span></button>
+      (s) => `<div class="row"><button class="name link" data-skill-open="${esc(s.name)}"><span>${esc(s.name)}</span><span class="desc">${esc(facts(s.description, s.programs ? plural(s.programs, 'program') : ''))}</span></button>
         <div class="val">${book.added === s.name ? pill('ok', 'Added') : ''}
           <button class="switch ${s.enabled ? 'on' : ''}" role="switch" aria-checked="${s.enabled}" aria-label="Use ${esc(s.name)}" data-skill-toggle="${esc(s.name)}"></button>
           <button class="icon-btn" aria-label="Remove ${esc(s.name)}" data-skill-remove="${esc(s.name)}">${icon('x')}</button></div></div>`,
@@ -171,7 +171,7 @@ function historyHtml(rec) {
   const latest = rec.data.version;
   const rows = rec.versions
     .map(
-      (v) => `<button class="row link" data-version-open="${v.version}" aria-label="Open version ${v.version}"><span class="name"><span>Version ${v.version} · ${esc(versionLabel(v))}</span>
+      (v) => `<button class="row link" data-version-open="${v.version}" aria-label="Open version ${v.version}"><span class="name"><span>Version ${v.version}: ${esc(versionLabel(v))}</span>
           ${shownChange(v) ? `<span class="desc">${esc(shownChange(v))}</span>` : ''}</span>
         <span class="val"><span class="when">${day(v.created_at)}</span>${v.version === latest ? pill('ok', 'Current') : ''}${icon('chev')}</span></button>`,
     )
@@ -209,18 +209,18 @@ function versionHtml(rec) {
         .join('')}</div>${look === 'diff' && !same ? '<div class="legend"><span class="back">Comes back</span><span class="gone">Goes</span></div>' : ''}</div>`;
   const shown = look === 'diff' ? (same ? '<p class="empty">Same as now.</p>' : diffHtml(rec.data.text, text)) : fullHtml(text, words);
   const blocked = unsaved(rec);
-  const hint = blocked ? `Save your edits on ${tab} first.` : same ? 'This is the same as the current text.' : '';
+  const hint = blocked ? `Save your edits on ${tab} first.` : '';
   const restore = isCurrent ? pill('ok', 'Current') : `<button class="btn primary" data-version-restore ${attr('disabled', state.busy || blocked || same)}>Restore</button>`;
   const change = shownChange(v);
   return `<div class="version"><div class="version-head">
       <button class="icon-btn" data-version-back aria-label="Back to history" title="Back to history">${icon('back')}</button>
-      <div class="title"><h2>Version ${v.version}</h2><p>${howHtml(v)} · ${day(v.created_at)}</p></div>
+      <div class="title"><h2>Version ${v.version}</h2><p>${howHtml(v)}, ${day(v.created_at)}</p></div>
       <div class="steps">${step(older, 'Older')}${step(newer, 'Newer')}</div></div>
     ${change ? `<p class="why">${esc(change)}</p>` : ''}
     ${v.source === 'tuned' && v.change ? `<p class="why">You asked: “${esc(v.change)}”</p>` : ''}
     ${seg}
     <div class="box diff" aria-label="${esc(tab)} in version ${v.version}">${shown}</div>
-    <div class="end">${hint ? `<span class="hint">${esc(hint)}</span>` : ''}<button class="btn text" data-version-back>Back</button>${restore}</div></div>`;
+    <div class="end">${hint ? `<span class="hint">${esc(hint)}</span>` : ''}${restore}</div></div>`;
 }
 
 export const historyBody = (rec) => (rec.open ? versionHtml(rec) : historyHtml(rec));
@@ -298,8 +298,8 @@ function testsTab(book) {
     const from = state.jobs.find((j) => j.id === c.job_id);
     const where = `${c.file}, ${c.where}`;
     const brief = (value) => (String(value).length > 120 ? `${String(value).slice(0, 120)}…` : value); // a whole paragraph can be the value
-    if (c.last && c.last.passed === false) return `${where} · got ${brief(c.last.got ?? 'nothing')}, expected ${brief(c.expected)}`;
-    return `${where}${from ? ` · from ${jobTitle(from)}` : ''}`;
+    if (c.last && c.last.passed === false) return `${where}: got ${brief(c.last.got ?? 'nothing')}, expected ${brief(c.expected)}`;
+    return `${where}${from ? `, from ${jobTitle(from)}` : ''}`;
   };
   const rows = t.cases
     .map((c) => `<div class="row"><span class="name"><span>${esc(c.lesson)}</span><span class="desc wrap">${esc(detail(c))}</span></span>${verdict(c.last)}</div>`)
@@ -385,7 +385,7 @@ export function syncPlaybook() {
 // --- Small dialogs ----------------------------------------------------------
 
 export function dialog(title, body, action, label) {
-  $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+  $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2></div>
     <form class="dialog-body" id="book-form" data-does="${action}">${body}
       <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn primary">${esc(label)}</button></div></form>`;
   $('#details').showModal();
@@ -409,7 +409,7 @@ export const playbookDialogs = {
     const name = state.book.data.name;
     const runs = (state.jobs || []).filter((j) => j.module === state.book.id).length;
     const stays = runs ? `Its ${plural(runs, 'run')} stay, and still open.` : 'It has no runs.';
-    $('#details').innerHTML = `<div class="dialog-head"><h2>Delete ${esc(name)}?</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+    $('#details').innerHTML = `<div class="dialog-head"><h2>Delete ${esc(name)}?</h2></div>
       <form class="dialog-body" id="book-form" data-does="delete-playbook"><p class="muted">Its instructions, skills, past corrections and history go, and can't be brought back. ${stays}</p>
         <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn danger">Delete playbook</button></div></form>`;
     $('#details').showModal();
@@ -417,7 +417,7 @@ export const playbookDialogs = {
 };
 
 function removeDialog(name) {
-  $('#details').innerHTML = `<div class="dialog-head"><h2>Remove ${esc(name)}?</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+  $('#details').innerHTML = `<div class="dialog-head"><h2>Remove ${esc(name)}?</h2></div>
     <form class="dialog-body" id="book-form" data-does="remove-skill" data-name="${esc(name)}">
       <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn primary">Remove</button></div></form>`;
   $('#details').showModal();
@@ -465,7 +465,6 @@ export const playbookActions = {
   'tests-check': async () => {
     await api(url('/tests/check'), { method: 'POST' });
     await loadTab();
-    toast('Checking past corrections');
   },
   'playbook-save': () => {
     const book = state.book;

@@ -467,7 +467,7 @@ export function isFound(view, text) {
 
 // --- Which value came from which file ---------------------------------------------
 // The server says where in each source it found each of the row's values (place.values). A row's cells are grouped
-// by where they came from, the way a person would read them: "Employee ID, name · employee_report.xlsx, Employees,
+// by where they came from, the way a person would read them: "Employee ID, name: employee_report.xlsx, Employees,
 // row 2". A worked-out cell says what it was worked out from.
 
 // A heading as it reads inside a list: "name" after "Employee ID", but "ID" stays as it is.

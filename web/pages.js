@@ -45,7 +45,7 @@ export function setupPage() {
   const format = state.deliverable === 'format';
   const size = state.files.reduce((sum, f) => sum + f.size, 0);
   const picked = state.files.length
-    ? `<em>${state.files.length === 1 ? esc(state.files[0].name) : `${state.files.length} files`} · ${bytes(size)}</em>`
+    ? `<em>${state.files.length === 1 ? esc(state.files[0].name) : `${state.files.length} files`}, ${bytes(size)}</em>`
     : '';
   const deliver = `<div class="seg">${segment('deliverable', 'template', 'Template', !format)}${segment('deliverable', 'format', 'Format', format)}</div>`;
   const chosen = state.template ? esc(state.template.name) : format ? 'Choose format' : 'Choose workbook';
@@ -94,9 +94,9 @@ const UNITS = {
   daily_token_limit_thousands: ['million tokens', 1000],
   voice_max_minutes: ['minutes'],
   // Prices are kept in ten-thousandths of a dollar, so a price can have four decimal places.
-  price_input_per_million: ['$ per million tokens', 10000],
-  price_cached_per_million: ['$ per million tokens', 10000],
-  price_output_per_million: ['$ per million tokens', 10000],
+  price_input_per_million: ['$', 10000],
+  price_cached_per_million: ['$', 10000],
+  price_output_per_million: ['$', 10000],
 };
 const scaleOf = (name) => UNITS[name]?.[1] || 1;
 const shownNumber = (n) => n.toLocaleString('en', { maximumFractionDigits: 4 });
@@ -143,9 +143,9 @@ export function settingsPage() {
   };
   const invalid = (name) => (errors[name] ? `aria-invalid="true" aria-describedby="setting-${name}-error"` : '');
   const number = (name, label, note = '') => {
-    const [unit] = UNITS[name];
+    const [unit] = UNITS[name]; // a dollar sign goes before the price, other units after the number
     const value = typeof v[name] === 'string' ? v[name] : shownNumber(v[name] / scaleOf(name)).replace(/,/g, '');
-    return field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}"><input id="setting-${name}" data-setting="${name}" inputmode="decimal" autocomplete="off" value="${esc(value)}" aria-label="${esc(label)}" ${invalid(name)}><span>${esc(unit)}</span></label>`, note);
+    return field(name, label, `<label class="unit ${errors[name] ? 'bad' : ''}">${unit === '$' ? '<span>$</span>' : ''}<input id="setting-${name}" data-setting="${name}" inputmode="decimal" autocomplete="off" value="${esc(value)}" aria-label="${esc(label)}" ${invalid(name)}>${unit === '$' ? '' : `<span>${esc(unit)}</span>`}</label>`, note);
   };
   const choice = (name, label, labels) =>
     field(name, label, `<div class="seg" role="group" aria-label="${esc(label)}">${options[name].choices.map((c) => segment(name, c, labels[c] ?? c, v[name] === c)).join('')}</div>`);

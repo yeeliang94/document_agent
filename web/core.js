@@ -59,11 +59,37 @@ export const HIDDEN_OUTPUTS = ['document_map.json', 'provenance.json'];
 export const isNote = (name) => name === 'notes.md' || /(^|_)processing_summary\.txt$/i.test(name);
 export const isDeliverable = (name) => !HIDDEN_OUTPUTS.includes(name) && !isNote(name);
 
+// Facts read as one line, joined by commas: "Reads monthly payslips, 2 programs". A full stop ending a fact goes.
+export const facts = (...parts) =>
+  parts
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .map((part, i, all) => (i < all.length - 1 ? part.replace(/\.$/, '') : part))
+    .join(', ');
+
 export const pill = (tone, label) => `<span class="pill ${tone}">${esc(label)}</span>`;
 
 const monthParts = new Intl.DateTimeFormat('en', { year: 'numeric', month: '2-digit' }).formatToParts(new Date());
 const currentPeriod =
   monthParts.find((p) => p.type === 'year').value + '-' + monthParts.find((p) => p.type === 'month').value;
+
+// Whether the plan at the top of a run shows every step: closed unless the person opened it, kept in this browser.
+const PLAN_KEY = 'di-plan-open';
+function planKept() {
+  try {
+    return localStorage.getItem(PLAN_KEY) === '1';
+  } catch {
+    return false; // storage blocked: the plan starts folded
+  }
+}
+export function keepPlanOpen(open) {
+  state.planOpen = open;
+  try {
+    localStorage.setItem(PLAN_KEY, open ? '1' : '0');
+  } catch {
+    // storage blocked: the choice lasts this visit only
+  }
+}
 
 export const state = {
   view: 'run', // run | playbooks | playbook | clients | client | settings | log
@@ -100,7 +126,7 @@ export const state = {
   act: null, // the action opened in full, by its event number; see thread.js
   actCode: false, // the opened action shows its code
   scripts: {}, // each opened action's code and what it printed, as fetched: { code, output } or { error }
-  planOpen: null, // the plan at the top of the run, opened or closed by hand; null: as the run's state suggests
+  planOpen: planKept(), // the plan at the top of the run opened in full; kept in this browser for every run
   wrapped: new Set(), // near-limit cards answered with Let it wrap up, as "job id:event number"
   files: [],
   template: null,
@@ -158,7 +184,7 @@ export const STATUS = {
   running: ['live', 'Working'],
   pausing: ['live', 'Pausing'],
   paused: ['', 'Paused'],
-  waiting: ['warn', 'Needs your answer'],
+  waiting: ['warn', 'Needs you'],
   completed: ['ok', 'Finished'],
   partial: ['warn', 'Partly done'],
   failed: ['bad', 'Stopped'],

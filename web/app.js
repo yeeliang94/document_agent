@@ -3,7 +3,7 @@
 
 import {
   $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, inGroup, isActive, jobStatus, jobTitle, telling,
-  jobUrl, state, toast,
+  jobUrl, keepPlanOpen, state, toast,
 } from './core.js'; // prettier-ignore
 import {
   MAX_BLOCK, blockCells, chooseRemember, columnName, commentAction, commenting, dropComment, editPin, forget, keepComment,
@@ -131,7 +131,7 @@ function render() {
   paint('#side', sideHtml());
   paint('#topnav', topnavHtml());
   document.body.classList.toggle('loading', !!state.loading);
-  document.title = tabTitle(`${state.job && state.view === 'run' ? jobTitle(state.job) + ' · ' : ''}Document Intelligence`);
+  document.title = tabTitle(`${state.job && state.view === 'run' ? jobTitle(state.job) + ' - ' : ''}Document Intelligence`);
 
   if (state.view === 'run' && state.job) {
     paint('#main', RUN);
@@ -261,7 +261,7 @@ function leaveRun() {
   Object.assign(state, { reply: null, activeComment: '', showResolved: false, menu: null });
   Object.assign(state.changes, { since: null, step: 0, jump: false }); // version numbers belong to one run
   state.toggled.clear();
-  Object.assign(state, { act: null, actCode: false, scripts: {}, planOpen: null });
+  Object.assign(state, { act: null, actCode: false, scripts: {} });
 }
 
 let loads = 0; // each run opened counts one; a load another page or run has overtaken is dropped
@@ -726,7 +726,7 @@ document.addEventListener('click', async (e) => {
       state.actCode = true;
       render();
     } else if ((el = target('[data-plan]'))) {
-      state.planOpen = el.getAttribute('aria-expanded') !== 'true';
+      keepPlanOpen(el.getAttribute('aria-expanded') !== 'true');
       render();
     } else if ((el = target('[data-segment]'))) {
       const { segment: name, value } = el.dataset;

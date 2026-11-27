@@ -75,7 +75,7 @@ function setMark(kind, draw) {
 }
 
 // The tab's title, with the mark in front while the person is away.
-export const tabTitle = (title) => (mark ? `${mark.word} · ${title}` : title);
+export const tabTitle = (title) => (mark ? `${mark.word}: ${title}` : title);
 
 export function clearMark(draw) {
   if (!mark || away()) return;

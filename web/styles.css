@@ -38,6 +38,32 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+/* Scroll bars: a thin, faint rounded bar with no track, darker under the pointer. Edge and Chrome draw the
+   ::-webkit- parts; Firefox, which has none of them, takes the standard properties. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+  background-clip: padding-box;
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #d4d4d8 transparent;
+  }
+}
 button,
 input,
 select,
@@ -548,17 +574,10 @@ body.loading #main {
 .plan-head h2 {
   font-size: 14px;
 }
-.plan-head .count,
-.plan-head .now-line {
+.plan-head .count {
   color: var(--muted);
   font-size: 13px;
   white-space: nowrap;
-}
-.plan-head .now-line {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .plan-head svg {
   width: 14px;
@@ -572,15 +591,12 @@ body.loading #main {
   transform: rotate(90deg);
 }
 .plan ol {
-  display: none;
+  display: flex;
   list-style: none;
   margin: 0;
   padding: 0 16px 12px;
   flex-direction: column;
   gap: 4px;
-}
-.plan.open ol {
-  display: flex;
 }
 .plan li {
   display: grid;
@@ -1266,8 +1282,6 @@ button.file:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  color: var(--faint);
 }
 .q-foot .skip {
   margin-left: auto;
@@ -2614,8 +2628,7 @@ dialog > h3 {
   }
 }
 @media (max-width: 560px) {
-  .live .file,
-  .q-foot .keys {
+  .live .file {
     display: none;
   }
   .detail {
@@ -3513,8 +3526,9 @@ button.chip:hover {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.row .unit input:not([inputmode]) {
-  text-align: left;
+.row .unit input:not([inputmode]),
+.row .unit span + input {
+  text-align: left; /* a price reads "$ 0.40", the sign beside the number */
 }
 .unit:focus-within {
   box-shadow: 0 0 0 2px var(--accent-bg);

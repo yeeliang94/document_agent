@@ -252,7 +252,7 @@ export function pendingHtml() {
   const rows = numbered()
     .map(
       (c) => `<div class="frow"><span class="pin still">${c.n}</span>
-        <button class="name" data-open="${esc(c.path)}" title="${esc(c.text)}">${esc(baseName(c.path))} · ${esc(label(c))}</button>
+        <button class="name" data-open="${esc(c.path)}" title="${esc(c.text)}">${esc(baseName(c.path))}, ${esc(label(c))}</button>
         ${given(c.path) ? '<span class="kind">Note</span>' : ''}<button class="icon-btn" aria-label="Remove comment ${c.n}" data-drop-comment="${c.id}">${icon('x')}</button></div>`,
     )
     .join('');
@@ -333,7 +333,7 @@ export function roundHtml(event, cls = '') {
       // An event from before comments carried their spot says where in its own words.
       const where = hasSpot(kept) ? label(kept) : c.where;
       return `<li><button class="spot" data-goto="${event.round}.${c.n}"><span class="pin ${verdictOf(round, c.n) || 'still'}">${c.n}</span>
-        <span><span class="where">${esc(baseName(c.path))} · ${esc(where)}</span>${c.remember ? '<span class="pill">Remember</span>' : ''}${esc(c.text)}</span></button></li>`;
+        <span><span class="where">${esc(baseName(c.path))}, ${esc(where)}</span>${c.remember ? '<span class="pill">Remember</span>' : ''}${esc(c.text)}</span></button></li>`;
     })
     .join('');
   // Remembered comments go to the playbook, the client's notes, or both, each as one version.
@@ -342,7 +342,7 @@ export function roundHtml(event, cls = '') {
     const { name, latest } = keptIn(scope);
     // Undo is offered while that version is still the latest: after that, undoing it would undo later work too.
     const undone = state.forgotten.has(forgetKey(scope, version));
-    return `<div class="saved ${cls}"><span>${undone ? `Removed from ${name}` : `Added to ${name} · version ${version}`}</span>
+    return `<div class="saved ${cls}"><span>${undone ? `Removed from ${name}` : `Added to ${name}, version ${version}`}</span>
         ${!undone && latest === version ? undoButton(scope, version) : ''}</div>`;
   };
   return `<div class="me round ${cls}"><ol class="notes">${lines}</ol></div>${kept('playbook', event.remembered_version)}${kept('client', event.remembered_client_version)}`;
@@ -468,7 +468,7 @@ export function sentHtml(path) {
       <p>${esc(root.c.text)}</p>${answerHtml(root)}${replies}${box}</div>`;
   };
   const doneRow = (t) => `<div class="resolved"><span class="pin still ${t.last.verdict}">${sentLabel(t.root)}</span>
-      <span>${esc(label(t.root.c))} · ${esc(t.root.c.text)}</span><button class="btn text small" data-reopen="${t.last.key}">Reopen</button></div>`;
+      <span>${esc(label(t.root.c))}: ${esc(t.root.c.text)}</span><button class="btn text small" data-reopen="${t.last.key}">Reopen</button></div>`;
   const toggle = done.length
     ? `<button type="button" class="switch-label" role="switch" aria-checked="${state.showResolved}" data-show-resolved><span class="switch ${state.showResolved ? 'on' : ''}"></span>Resolved (${done.length})</button>`
     : '';

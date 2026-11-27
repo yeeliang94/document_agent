@@ -222,14 +222,14 @@ function fileButton(path) {
 const fileName = (path) => `<span class="file" title="${esc(path)}">${nameHtml(baseName(path))}</span>`;
 
 // One action: a line that opens to show it in full. What it did wraps and reads in full; the files it named sit on
-// a line under it, each cut in the middle. The opened action lists them as buttons that open each file.
+// a line under it, each cut in the middle. The opened action lists them as buttons that open each file instead.
 function stepHtml(s) {
   const names = stepFiles(s);
-  const files = names.slice(0, 2).map(fileName).join('');
-  const extra = names.length > 2 ? `and ${names.length - 2} more` : '';
+  const on = state.act === s.seq;
+  const files = on ? '' : names.slice(0, 2).map(fileName).join('');
+  const extra = !on && names.length > 2 ? `and ${names.length - 2} more` : '';
   const more = [s.more, extra, s.times > 1 ? `${s.times} times` : ''].filter(Boolean).join(', ');
   const took = s.secs !== undefined && !(s.times > 1) ? `<time>${duration(s.secs * 1000)}</time>` : '';
-  const on = state.act === s.seq;
   const code = s.code ? Object.entries({ run: s.code.run, name: s.code.name, index: s.code.index, of: s.code.of }).map(([k, v]) => `data-script-${k}="${esc(v)}"`).join(' ') : '';
   const under = files || more ? `<span class="step-files">${files}${more ? `<span class="more">${esc(more)}</span>` : ''}</span>` : '';
   const line = `<button class="step act ${s.flag ? 'flag' : ''} ${s.plain ? 'plain' : ''} ${on ? 'on' : ''} ${fresh(s.seq)}" data-act="${s.seq}" aria-expanded="${on}" ${code}>
@@ -266,10 +266,8 @@ function detailHtml(s) {
   const got = s.code ? state.scripts[scriptKey(state.job.id, s.code)] : null;
   const code = !s.code || got?.code === undefined ? '' : state.actCode && got ? `<pre>${esc(got.code)}</pre>` : '<button class="code" data-act-code>Show the code</button>';
   const rows = [
-    [s.code ? 'What it was for' : 'What happened', `<span>${esc(s.verb)}</span>`],
     ['Files', names.length ? `<div class="chips">${names.map(chip).join('')}</div>` : '<span class="faint">None</span>'],
     back ? ['What came back', back] : null,
-    s.secs !== undefined ? ['Took', duration(s.secs * 1000)] : null,
     code ? ['', code] : null,
   ].filter(Boolean);
   return `<dl class="detail">${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join('')}</dl>`;
@@ -306,9 +304,6 @@ function groupHtml(g, live = '') {
 }
 
 // --- Work folded by stage ------------------------------------------------------
-
-// The plan step the agent is on now, for the stage going on now.
-const doingNow = () => (state.job.plan?.steps || []).find((s) => s.status === 'in_progress')?.step || '';
 
 const thinkingShown = () => (state.settings?.values?.thinking_summaries ?? 'short') !== 'off';
 
@@ -373,7 +368,7 @@ function sectionHtml(g, sec, live, last) {
   const since = here ? new Date(sec.from).toISOString() : '';
   const took = since ? `<time data-since="${esc(since)}"></time>` : `<time>${duration(sec.to - sec.from)}</time>`;
   return `<div class="stage ${open ? 'open' : ''} ${fresh(sec.id)}"><button class="stage-head" data-group="${sec.id}" aria-expanded="${open}">${icon('chev')}
-    <span class="name">${STAGE_NAMES[sec.stage] || sentence(sec.stage)}</span><span class="sum">${esc(stageSummary(sec, here ? doingNow() : ''))}${flags ? ` <span class="flagged">${plural(flags, 'problem')}</span>` : ''}</span>${took}</button>
+    <span class="name">${STAGE_NAMES[sec.stage] || sentence(sec.stage)}</span><span class="sum">${esc(stageSummary(sec))}${flags ? ` <span class="flagged">${plural(flags, 'problem')}</span>` : ''}</span>${took}</button>
     <div class="stage-body">${body}</div></div>`;
 }
 
@@ -389,13 +384,11 @@ function stagedHtml(g, live) {
 
 // --- The agent's plan, pinned at the top of the run ------------------------------
 
-const phone = () => window.matchMedia('(max-width: 560px)').matches;
-
 export function planHtml() {
   const steps = state.job?.plan?.steps;
   if (!steps?.length) return '';
   const going = isActive() || jobStatus() === 'waiting';
-  const open = state.planOpen ?? (going && !phone());
+  const open = state.planOpen;
   // The latest change shows on its steps while the run goes: New, or Changed with what the step said before.
   const change = going ? state.events.findLast((e) => e.name === 'engine.plan.updated' && !e.first && (e.run || 0) === latestRun() && planChanged(e)) : null;
   const added = new Set(change?.added || []);
@@ -403,7 +396,8 @@ export function planHtml() {
   const done = steps.filter((s) => s.status === 'done').length;
   const now = steps.find((s) => s.status === 'in_progress') || (going ? steps.find((s) => s.status === 'pending') : null);
   const count = done === steps.length ? `All ${steps.length} done` : `${done} of ${steps.length} done`;
-  const rows = steps
+  // Folded, the plan shows only the step the agent is on now; a finished run folds to the count alone.
+  const rows = (open ? steps : steps.filter((s) => s === now && going))
     .map((s) => {
       const cls = s.status === 'done' ? 'done' : s === now && going ? 'now' : 'later';
       const tag = added.has(s.step) ? pill('new', 'New') : was.has(s.step) ? pill('new', 'Changed') : '<span></span>';
@@ -411,7 +405,7 @@ export function planHtml() {
     })
     .join('');
   return `<section class="plan ${open ? 'open' : ''}" aria-label="The agent's plan"><button class="plan-head" data-plan aria-expanded="${open}">
-    <h2>Plan</h2><span class="count">${count}</span><span class="now-line">${now && !open ? '· ' + esc(now.step) : ''}</span>${icon('chev')}</button><ol>${rows}</ol></section>`;
+    <h2>Plan</h2><span class="count">${count}</span>${icon('chev')}</button>${rows ? `<ol>${rows}</ol>` : ''}</section>`;
 }
 
 // What the agent is doing this second, from the latest event.
@@ -424,7 +418,8 @@ function liveLine(script) {
   let file = '';
   if (status === 'queued') {
     const most = state.settings?.values?.runs_at_once;
-    text = state.job.waiting_for_slot && most ? `Waiting for a free slot. ${plural(most, 'run')} at once is the limit in Settings.` : 'Waiting to start';
+    text = state.job.waiting_for_slot && most ? `Waiting for a free slot. ${plural(most, 'run')} at once is the limit in Settings.` : '';
+    if (!text) return ''; // the Queued label says it all
   }
   else if (status === 'pausing') text = 'Finishing the current step';
   else if (script) {
@@ -459,10 +454,9 @@ function questionCard(q) {
   const own = `<form id="composer" class="own"><kbd>${choices.length ? choices.length + 1 : '›'}</kbd>
     <textarea id="msg" rows="1" aria-label="${hint}" placeholder="${hint}" ${attr('disabled', locked)}></textarea>
     ${micButton('msg', locked)}<button class="send" aria-label="Send" disabled>${icon('send')}</button></form>${voiceNote('msg')}`;
-  const keys = choices.length ? `<span class="keys">Press 1–${choices.length + 1} to choose</span>` : '';
   return `<section class="question" aria-label="Question from the agent"><h2>${esc(q.text)}</h2>${facts}
     <div class="opts" role="group" aria-label="Choices">${picks}${own}</div>
-    <div class="q-foot">${keys}<button class="skip" data-answer="${esc(LET_AGENT_DECIDE)}" ${attr('disabled', locked)}>Let the agent decide</button></div></section>`;
+    <div class="q-foot"><button class="skip" data-answer="${esc(LET_AGENT_DECIDE)}" ${attr('disabled', locked)}>Let the agent decide</button></div></section>`;
 }
 
 // A run that stopped: what happened in a sentence, how far the saved work goes, and the ways back. The raw error is
@@ -474,7 +468,7 @@ function rawDetail(job) {
   const failed = state.events.findLast((e) => e.name === 'job.failed' || e.name === 'job.paused');
   const p = job.progress || {};
   const where = [p.run ? `run ${p.run}` : '', p.steps ? `step ${p.steps}` : '', fmtTime(failed?.timestamp)].filter(Boolean);
-  return `<details><summary>Technical detail</summary><pre>${esc(job.error_detail)}${where.length ? '\n' + esc(where.join(' · ')) : ''}</pre></details>`;
+  return `<details><summary>Technical detail</summary><pre>${esc(job.error_detail)}${where.length ? '\n' + esc(where.join('\n')) : ''}</pre></details>`;
 }
 
 // The list of saved versions, shown in place of the choices that open it: on a stopped run and a partly done one.
@@ -525,13 +519,13 @@ const oldSummary = (summary) =>
     .join('\n')
     .trim();
 
-// "Took 4m 10s · cost $0.42": the time all the run's rounds took, and what they cost (when prices are set in
+// "Took 4m 10s, cost $0.42": the time all the run's rounds took, and what they cost (when prices are set in
 // Settings). It sits under the report's headline.
 function spent(job) {
   const seconds = (job.runs || []).reduce((sum, r) => sum + (r.seconds || 0), 0);
   const cost = job.cost ? money(job.cost.usd) : '';
   const took = seconds ? `Took ${duration(seconds * 1000)}` : '';
-  return [took, cost ? `${took ? 'cost' : 'Cost'} ${cost}` : ''].filter(Boolean).join(' · ');
+  return [took, cost ? `${took ? 'cost' : 'Cost'} ${cost}` : ''].filter(Boolean).join(', ');
 }
 
 // The report first, then the deliverable with its Download, then what the person can do next. A partly done run reads
@@ -616,7 +610,6 @@ export function threadHtml() {
     if (it.kind === 'say') return `<p class="say ${fresh(it.seq)}">${linked(it.text)}</p>`;
     return `<p class="say note ${fresh(it.seq)}">${esc(it.text)}</p>`;
   });
-  if (!state.events.length && !active) html.push('<p class="say note">Not started yet.</p>');
   return html.join('') + (inGroupLine ? '' : line) + followingHtml(state.job) + endCard(state.job);
 }
 
@@ -635,7 +628,7 @@ export function headHtml() {
   return `<h1>${esc(jobTitle(state.job))}</h1><div class="controls">${pill(tone, label)}${controls}</div>`;
 }
 
-// Three stages and how far the run has got against its limits: "Step 14 of 60 · 6 of 30 min". The engine sends
+// Three stages and how far the run has got against its limits: "Step 14 of 60, 6 of 30 min". The engine sends
 // both as the job's progress; a run made before it did shows the stages only, worked out from its events.
 const STAGES = ['reading', 'filling', 'checking'];
 
@@ -653,7 +646,7 @@ function budget(p) {
   const minutes = p.minutes == null ? '' : p.max_minutes ? `${p.minutes} of ${p.max_minutes} min` : `${p.minutes} min`;
   if (status === 'waiting' || p.clock_paused) return minutes ? `Clock paused at ${minutes}` : 'Clock paused';
   const steps = p.max_steps ? `Step ${p.steps} of ${p.max_steps}` : `Step ${p.steps}`;
-  return [steps, minutes].filter(Boolean).join(' · ');
+  return [steps, minutes].filter(Boolean).join(', ');
 }
 
 export function stagesHtml() {

@@ -58,11 +58,10 @@ export function stepStages() {
 
 const asSentence = (text) => (/[.!?]$/.test(text) ? text : text + '.');
 
-// A stage in a line: the plan steps ticked off in it. A stage going on now with nothing ticked yet says the step the
-// agent is on (doing); with no plan, how much work the stage held. Costs nothing: no AI is asked for it.
-export function stageSummary(sec, doing = '') {
+// A stage in a line: the plan steps ticked off in it, or with none ticked, how much work the stage held. The step the
+// agent is on now shows on the plan, not here as well. Costs nothing: no AI is asked for it.
+export function stageSummary(sec) {
   if (sec.ticked.length) return sec.ticked.map(asSentence).join(' ');
-  if (doing) return asSentence(doing);
   const steps = sec.entries.filter((en) => en.kind === 'step').map((en) => en.step);
   const files = new Set(steps.flatMap(stepFiles)).size;
   return `${count(steps.length, 'action')}${files ? ` on ${count(files, 'file')}` : ''}`;

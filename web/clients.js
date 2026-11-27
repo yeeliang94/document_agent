@@ -31,7 +31,7 @@ export function clientsPage() {
       const runs = runsOf(c.id);
       const books = [...new Set(runs.map((j) => j.playbook).filter(Boolean))].join(', ');
       return `<button class="row link" data-client="${esc(c.id)}"><span class="name"><span>${esc(c.name)}</span>
-        <span class="desc">${esc([books, plural(runs.length, 'run')].filter(Boolean).join(' · '))}</span></span>${icon('chev')}</button>`;
+        <span class="desc">${esc([books, plural(runs.length, 'run')].filter(Boolean).join(', '))}</span></span>${icon('chev')}</button>`;
     })
     .join('');
   return page(`<div class="page-head"><h1>Clients</h1>${btn('new-client', 'New client', 'primary', false, 'plus')}</div>
@@ -83,7 +83,7 @@ function runsTab(client) {
   const rows = runsOf(client.id)
     .map(
       (j) => `<button class="row link" data-job="${esc(j.id)}"><span class="name"><span>${esc(jobTitle(j))}</span>
-        <span class="desc">${esc([j.playbook, new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })].filter(Boolean).join(' · '))}</span></span>${icon('chev')}</button>`,
+        <span class="desc">${esc([j.playbook, new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })].filter(Boolean).join(', '))}</span></span>${icon('chev')}</button>`,
     )
     .join('');
   return rows ? `<div class="rows">${rows}</div>` : '<p class="empty">No runs yet.</p>';
@@ -263,7 +263,7 @@ export function offerHtml() {
   const open = opened.has(job.id);
   const body = open
     ? `<div class="offer-body"><ul>${keep.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
-        <div class="end">${btn('offer-save', 'Save to notes', 'primary small', state.busy)}${btn('offer-dismiss', 'Not now', 'text small', state.busy)}</div></div>`
+        <div class="end">${btn('offer-save', 'Save to notes', 'primary small', state.busy)}</div></div>`
     : '';
   return `<div class="offer"><div class="offer-line">
       <button class="open" id="offer-toggle" data-action="offer-toggle" aria-expanded="${open}">${icon('chev')}<span>Keep ${plural(keep.length, 'thing')} for ${name} next run?</span></button>

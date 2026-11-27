@@ -413,7 +413,7 @@ function bodyHtml(view) {
       const shown = md ? inline(marked(roles[i].text), plain || roles[i].role === 'code' || roles[i].role === 'table') : marked(line);
       return [`<span class="${cls}"${look.attrs}${was} ${canComment() && latest ? `data-line="${n}"` : ''}>${pins[n] || ''}${look.before}${shown}</span>`, ...after];
     }));
-    const more = data.more ? '<p class="meta">The rest of the file is not shown. Download it to read everything.</p>' : '';
+    const more = data.more ? '<p class="meta">The rest of the file is not shown.</p>' : '';
     if (md) return `<div class="doc md ${commenting() ? 'spots' : ''}">${lines.join('')}</div>${more}`;
     return `<pre class="doc ${commenting() ? 'spots' : ''}">${lines.join('\n')}</pre>${more}`;
   }
@@ -441,7 +441,7 @@ function bodyHtml(view) {
       : '';
     return shot + pager;
   }
-  return `<p class="empty">${data.error ? 'This file could not be opened for preview.' : 'There is no preview for this kind of file.'} Download it to look inside.</p>`;
+  return `<p class="empty">${data.error ? 'This file could not be opened for preview.' : 'There is no preview for this kind of file.'}</p>`;
 }
 
 // Whether the file on show has places a comment can go: a sheet with rows, text, or a page or picture once loaded.
@@ -474,9 +474,10 @@ function viewerHtml(view) {
   startMarks();
   const body = bodyHtml(view);
   const full = state.full;
-  const back = view.back ? (view.back.row ? `Back to row ${view.back.row}` : `Back to ${baseName(view.back.path)}`) : 'Back to files';
-  // At full screen the list beside the file takes the place of Back, except Back to the row a source was opened from.
-  const backBtn = !full || view.back ? `<button class="icon-btn" data-action="back-file" aria-label="${esc(back)}" title="${esc(back)}">${icon('back')}</button>` : '';
+  const back = view.back ? (view.back.row ? `Back to row ${view.back.row}` : `Back to ${baseName(view.back.path)}`) : '';
+  // Back only when there is somewhere to go back to, such as the row a source was opened from: otherwise the X
+  // (or, at full screen, the list beside the file) closes it.
+  const backBtn = view.back ? `<button class="icon-btn" data-action="back-file" aria-label="${esc(back)}" title="${esc(back)}">${icon('back')}</button>` : '';
   const railBtn = full
     ? `<button class="icon-btn" data-action="toggle-rail" aria-pressed="${state.rail}" aria-label="${state.rail ? 'Hide' : 'Show'} the file list" title="${state.rail ? 'Hide' : 'Show'} the file list">${icon('side')}</button>`
     : '';

@@ -249,7 +249,6 @@ console.log(JSON.stringify({
   stages: sections.map((s) => [s.stage, s.id, s.from, s.to]),
   reading: stageSummary(sections[0]),
   filling: stageSummary(sections[1]),
-  live: stageSummary(sections[1], 'Fill the template'),
   checking: stageSummary(sections[2]),
   empty: stagesOf([]).length,
 }));
@@ -261,8 +260,8 @@ console.log(JSON.stringify({
     # A stage's time starts when its first action started (the 1-second action at 5 began at 4).
     assert got['stages'] == [['reading', 1, 1000, 3000], ['filling', 5, 4000, 6000], ['checking', 7, 7000, 7000]]
     assert got['reading'] == 'Read the close rules. Pick the final file.'  # the ticked steps, no AI asked
-    assert got['filling'] == '2 actions on 1 file'  # no step ticked in it: how much work it held
-    assert got['live'] == 'Fill the template.'  # going on now: the step the agent is on
+    # No step ticked in it: how much work it held. The step going on now shows on the plan, not here as well.
+    assert got['filling'] == '2 actions on 1 file'
     assert got['checking'] == '1 action' and got['empty'] == 0
 
 
@@ -354,3 +353,38 @@ console.log(JSON.stringify([
         ['node', '--input-type=module', '-e', script], cwd=WEB, capture_output=True, text=True, check=True
     )
     assert json.loads(out.stdout) == ['reading', 'filling', 'checking', 'checking', 'filling']
+
+
+def test_the_plan_folds_to_the_step_going_on_now_and_opens_in_full_on_the_header():
+    """Folded (the start, on every screen) the plan shows only the step the agent is on; a run that is not going folds
+    to the count alone; opened, every step. The choice is kept in the browser for later runs."""
+    script = """
+const store = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)) }; };
+globalThis.sessionStorage = store();
+globalThis.localStorage = store();
+globalThis.window = { matchMedia: () => ({ matches: false }), addEventListener() {}, location: { hash: '' } };
+globalThis.document = { addEventListener() {}, querySelector: () => null };
+const { keepPlanOpen, state } = await import('./core.js');
+const { planHtml } = await import('./thread.js');
+state.config = { statuses: { active: ['queued', 'running', 'pausing'] } };
+state.events = [];
+const rows = (html) => [...html.matchAll(/<li class="(\\w+)">.*?<span>([^<]+)/g)].map((m) => `${m[1]} ${m[2]}`);
+const plan = { steps: [{ step: 'Read', status: 'done' }, { step: 'Fill', status: 'in_progress' }, { step: 'Check', status: 'pending' }] };
+state.job = { id: 'j', status: 'running', plan };
+const folded = planHtml();
+state.job = { id: 'j', status: 'completed', plan };
+const finished = planHtml();
+keepPlanOpen(true);
+state.job = { id: 'j', status: 'running', plan };
+console.log(JSON.stringify({
+  folded: rows(folded), foldedCount: folded.includes('1 of 3 done'), finished: rows(finished),
+  finishedList: finished.includes('<ol>'), open: rows(planHtml()), kept: localStorage.getItem('di-plan-open'),
+}));
+"""
+    out = subprocess.run(
+        ['node', '--input-type=module', '-e', script], cwd=WEB, capture_output=True, text=True, check=True
+    )
+    got = json.loads(out.stdout)
+    assert got['folded'] == ['now Fill'] and got['foldedCount']
+    assert got['finished'] == [] and not got['finishedList']  # a run not going: the count alone
+    assert got['open'] == ['done Read', 'now Fill', 'later Check'] and got['kept'] == '1'

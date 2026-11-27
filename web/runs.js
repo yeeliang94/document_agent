@@ -11,7 +11,7 @@ export function runItems() {
   const when = telling(state.jobs);
   return state.jobs.map((j) => {
     const status = statusOf(j);
-    const [tone, label] = status === 'waiting' ? ['warn', 'Needs you'] : STATUS[status] || ['', status];
+    const [tone, label] = STATUS[status] || ['', status];
     const on = j.id === state.job?.id && ['run', 'log'].includes(state.view);
     const open = state.menu === `run:${j.id}`;
     const title = jobTitle(j);
@@ -28,7 +28,7 @@ export function runItems() {
 }
 
 function dialog(title, body, does, id, label) {
-  $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+  $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2></div>
     <form class="dialog-body" id="run-form" data-does="${does}" data-id="${esc(id)}">${body}
       <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn primary">${esc(label)}</button></div></form>`;
   $('#details').showModal();
