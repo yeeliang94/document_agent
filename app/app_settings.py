@@ -81,6 +81,8 @@ OPTIONS = {
     'voice_live_model': Option('gpt-live-transcribe', 'Live voice model', pattern=r'[A-Za-z0-9_.-]{1,128}'),
     'voice_file_model': Option('gpt-transcribe', 'Voice model for recordings', pattern=r'[A-Za-z0-9_.-]{1,128}'),
     'voice_max_minutes': Option(2, 'Longest recording (minutes)', low=1, high=10),
+    # After Stop, how long live voice waits for the service's final words; a slower gateway may need longer.
+    'voice_settle_seconds': Option(20, 'Wait for the last words after you stop (seconds)', low=5, high=120),
     # Prices per million tokens, in ten-thousandths of a US dollar (the page shows dollars), for the money figure
     # of each run and playbook (app/costs.py). 0 for input and output means no figure; 0 for cached means cached
     # tokens cost what other input does.

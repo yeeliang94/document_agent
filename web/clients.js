@@ -271,8 +271,10 @@ export function offerHtml() {
 }
 
 const keepFor = async (action) => {
+  const id = state.job.id;
   try {
-    state.job = await api(jobUrl('/keep-for-client'), { method: 'POST', body: JSON.stringify({ action }) });
+    const job = await api(jobUrl('/keep-for-client'), { method: 'POST', body: JSON.stringify({ action }) });
+    if (state.job?.id === id) state.job = job; // another run opened meanwhile keeps its own place
   } finally {
     await refreshClients(); // the client's notes and version changed, or changed under it (a refused save)
   }

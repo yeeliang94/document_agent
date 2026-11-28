@@ -24,7 +24,6 @@ from .cleaning import clean
 RATE = 24000  # samples per second the live model takes
 BYTES_PER_SECOND = RATE * 2  # 16-bit mono
 FILE_LIMIT_BYTES = 25 * 1024 * 1024  # the most the transcription endpoint takes in one file
-SETTLE_SECONDS = 20  # after Stop, how long to wait for the final text
 
 
 class VoiceError(Exception):
@@ -87,8 +86,9 @@ def service_error(event: dict) -> VoiceError:
     return refused((event.get('error') or {}).get('message') or event.get('message') or '')
 
 
-async def relay(browser, upstream, max_minutes: int) -> None:
+async def relay(browser, upstream, max_minutes: int, settle_seconds: float) -> None:
     """Pass audio from browser to upstream and the words back, until the person stops and the text has settled.
+    settle_seconds is how long the final text has to arrive after Stop (the voice_settle_seconds setting).
 
     browser has receive() -> {'bytes'|'text'}, send_json(); upstream has send(str) and async iteration over str.
     """
@@ -146,7 +146,7 @@ async def relay(browser, upstream, max_minutes: int) -> None:
             await browser.send_json({'type': 'done', 'text': ''})
             return
         try:
-            await asyncio.wait_for(asyncio.shield(words), SETTLE_SECONDS)
+            await asyncio.wait_for(asyncio.shield(words), settle_seconds)
         except TimeoutError:
             raise VoiceError(
                 'The transcription service did not finish in time. What was heard so far is kept.', 'retry'

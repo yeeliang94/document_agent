@@ -280,8 +280,34 @@ def test_a_page_that_goes_away_does_not_hold_the_session(make):
     async def run():
         service = FakeService(script=[])
         async with service:
-            await asyncio.wait_for(voice.relay(Browser(), service, 2), 2)
+            await asyncio.wait_for(voice.relay(Browser(), service, 2, 20), 2)
         return service
 
     service = asyncio.run(run())
     assert [e['type'] for e in service.sent] == ['input_audio_buffer.append']  # no commit for a page that left
+
+
+def test_the_wait_for_the_last_words_after_stop_follows_its_setting():
+    """A service that never sends its final text is given up on after the wait set in Settings, not a fixed one."""
+
+    class Browser:
+        def __init__(self):
+            self.messages = [
+                {'type': 'websocket.receive', 'bytes': SECOND[:4800]},
+                {'type': 'websocket.receive', 'text': json.dumps({'type': 'stop'})},
+            ]
+
+        async def receive(self):
+            if not self.messages:
+                await asyncio.sleep(60)
+            return self.messages.pop(0)
+
+        async def send_json(self, _):
+            pass
+
+    async def run():
+        async with FakeService(script=[]) as service:
+            await asyncio.wait_for(voice.relay(Browser(), service, 2, settle_seconds=0.2), 2)
+
+    with pytest.raises(voice.VoiceError, match='did not finish in time'):
+        asyncio.run(run())

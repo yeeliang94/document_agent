@@ -1175,6 +1175,7 @@ def create_app(settings_override: Settings | None = None):
         if not values['voice_live']:
             return await refuse('Show words while you speak is turned off in Settings.', 'settings')
         minutes = values['voice_max_minutes']
+        settle = values['voice_settle_seconds']
         opened = False
         try:
             async with api.state.voice_connect(
@@ -1187,7 +1188,7 @@ def create_app(settings_override: Settings | None = None):
                 await ws.send_json({'type': 'ready'})
                 opened = True
                 # A page that opens a session and then sends nothing does not hold it open past the longest recording.
-                await asyncio.wait_for(voice.relay(ws, upstream, minutes), minutes * 60 + voice.SETTLE_SECONDS + 30)
+                await asyncio.wait_for(voice.relay(ws, upstream, minutes, settle), minutes * 60 + settle + 30)
         except WebSocketDisconnect:
             return
         except voice.VoiceError as error:

@@ -93,6 +93,7 @@ const UNITS = {
   versions_kept: ['versions'],
   daily_token_limit_thousands: ['million tokens', 1000],
   voice_max_minutes: ['minutes'],
+  voice_settle_seconds: ['seconds'],
   // Prices are kept in ten-thousandths of a dollar, so a price can have four decimal places.
   price_input_per_million: ['$', 10000],
   price_cached_per_million: ['$', 10000],
@@ -209,7 +210,8 @@ export function settingsPage() {
         // Live words are hidden unless the service offers Realtime transcription; off, words appear after you stop.
         onOff('voice_live', 'Show words while you speak') +
           (v.voice_live
-            ? choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) + text('voice_live_model', 'Live voice model')
+            ? choice('voice_mode', 'Words appear', { live: 'As you speak', after: 'After you stop' }) + text('voice_live_model', 'Live voice model') +
+              (v.voice_mode === 'live' ? number('voice_settle_seconds', 'Wait for the last words after you stop') : '')
             : '') +
           text('voice_file_model', 'Voice model for recordings') +
           number('voice_max_minutes', 'Longest recording'),
