@@ -4,6 +4,7 @@
 
 import { runClient } from './clients.js';
 import { $, api, attr, baseName, esc, icon, inGroup, jobUrl, playbooks, plural, state } from './core.js';
+import { micButton, voiceNote } from './voice.js';
 import { linked } from './links.js';
 
 export const canComment = () => !!state.job && !state.job.legacy && inGroup('accepts_comments');
@@ -11,6 +12,9 @@ export const canComment = () => !!state.job && !state.job.legacy && inGroup('acc
 export const commenting = () => canComment() && state.previewMode === 'comment';
 export const MAX_BLOCK = 1000; // cells one comment can cover; the server holds to the same limit
 export const pending = () => state.comments[state.job?.id] || [];
+// A file the agent was given (an upload or the template) rather than one of its outputs. It never edits these, so
+// a comment on one is a note or a question, which the server tells it.
+export const given = (path) => !String(path || '').startsWith('outputs/');
 
 // --- Where a comment points -------------------------------------------------
 
@@ -88,18 +92,84 @@ export function editPin(id, x, y) {
 export function popHtml() {
   const d = state.commentDraft;
   if (!d || !state.job) return '';
-  // Beside the click, kept inside the window; a narrow screen gets it along the bottom.
-  const narrow = window.innerWidth < 560;
-  const left = Math.max(8, Math.min(d.at[0] + 12, window.innerWidth - 328));
-  const top = Math.max(8, Math.min(d.at[1] + 12, window.innerHeight - (isBox(d) ? 360 : 260))); // room for the cut-out
-  const place = narrow ? 'left:8px;right:8px;bottom:8px' : `left:${left}px;top:${top}px`;
+  // An output takes a change; a file the agent was given takes a note or a question, and the agent tells which.
+  const ask = given(d.path) ? 'Add a note or ask a question' : 'What should change?';
+  // Placed by placePop once drawn, next to the spot it is about.
   return `<div class="catch" data-comment="away"></div>
-    <form class="pop" id="comment-form" style="${place}" role="dialog" aria-label="Comment">
+    <form class="pop" id="comment-form" style="left:8px;top:8px;visibility:hidden" role="dialog" aria-label="Comment">
       <h2>${esc(label(d))}</h2>${isBox(d) ? snipHtml(d) : ''}
-      <textarea id="note" aria-label="Comment" placeholder="What should change?" maxlength="2000"></textarea>
+      <div class="mic-box"><textarea id="note" aria-label="${ask}" placeholder="${ask}" maxlength="2000"></textarea>${micButton('note')}</div>${voiceNote('note')}
       ${rememberHtml(d)}
       <div class="end">${d.id ? '<button type="button" class="btn text" data-comment="delete">Delete</button>' : ''}
-        <button type="button" class="btn text" data-comment="cancel">Cancel</button><button class="btn quiet">${d.id ? 'Save' : 'Add comment'}</button></div></form>`;
+        <button type="button" class="btn text" data-comment="cancel">Cancel</button><button class="btn quiet">${d.id ? 'Save' : given(d.path) ? 'Add' : 'Add comment'}</button></div></form>`;
+}
+
+// What the comment box is about, as drawn in the viewer: the picked cells, the line, the drawn box, or else the
+// point that was clicked.
+function spotRect(d) {
+  const box = (els) => {
+    const rects = els.map((el) => el.getBoundingClientRect()).filter((r) => r.width || r.height);
+    if (!rects.length) return null;
+    const [top, left] = [Math.min(...rects.map((r) => r.top)), Math.min(...rects.map((r) => r.left))];
+    const [bottom, right] = [Math.max(...rects.map((r) => r.bottom)), Math.max(...rects.map((r) => r.right))];
+    return { top, left, bottom, right, el: els[0] };
+  };
+  const files = $('#files');
+  const els = !files ? [] : d.cell ? [...files.querySelectorAll('td.sel')] : d.line ? [files.querySelector(`[data-line="${d.line}"]`)] : isBox(d) ? [files.querySelector('.area.live')] : [];
+  const [x, y] = d.at;
+  return box(els.filter(Boolean)) || { top: y - 12, left: x - 12, bottom: y + 12, right: x + 12, el: null };
+}
+
+// The nearest part of the page that scrolls, around what the box is about.
+function scroller(el) {
+  for (let at = el?.parentElement; at && at !== document.body; at = at.parentElement) {
+    if (at.scrollHeight > at.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(at).overflowY)) return at;
+  }
+  return null;
+}
+
+// Put the comment box where it leaves its spot in view: under the spot, or over it near the bottom, else beside
+// it. Below 560 wide it is a sheet along the bottom, and the spot is scrolled to sit above it.
+let placed = null; // the draft the narrow sheet last scrolled for, so a redraw never scrolls the view again
+export function placePop() {
+  const form = $('#comment-form');
+  const d = state.commentDraft;
+  document.body.classList.toggle('pop-sheet', !!form && window.innerWidth < 560);
+  if (!form || !d) return void (placed = null);
+  const narrow = window.innerWidth < 560;
+  form.classList.toggle('sheet', narrow);
+  form.style.visibility = '';
+  const gap = 8;
+  if (narrow) {
+    Object.assign(form.style, { left: '', top: '' });
+    document.body.style.setProperty('--pop-height', `${form.offsetHeight + 2 * gap}px`);
+    if (placed === d) return;
+    placed = d;
+    const spot = spotRect(d);
+    const room = window.innerHeight - form.offsetHeight - 2 * gap; // the lowest the spot can sit and still show
+    const box = scroller(spot.el);
+    if (!box) return;
+    // Out of sight: scrolled to near the top of its part of the page, with the row above it showing too.
+    const edge = box.getBoundingClientRect();
+    const lead = 48;
+    if (spot.bottom > room || spot.top < edge.top) box.scrollTop += spot.top - (edge.top + lead);
+    if (spot.right > edge.right || spot.left < edge.left) box.scrollLeft += spot.left - (edge.left + lead);
+    return;
+  }
+  const spot = spotRect(d);
+  const [w, h, wide, tall] = [form.offsetWidth, form.offsetHeight, window.innerWidth, window.innerHeight];
+  const fitsX = (left) => Math.max(gap, Math.min(left, wide - w - gap));
+  const fitsY = (top) => Math.max(gap, Math.min(top, tall - h - gap));
+  let left = fitsX(spot.left);
+  let top;
+  if (spot.bottom + gap + h <= tall - gap) top = spot.bottom + gap; // under it
+  else if (spot.top - gap - h >= gap) top = spot.top - gap - h; // over it, near the bottom of the window
+  else {
+    // Neither: beside it, on whichever side has room.
+    top = fitsY(spot.top);
+    left = spot.right + gap + w <= wide - gap ? spot.right + gap : fitsX(spot.left - gap - w);
+  }
+  Object.assign(form.style, { left: `${left}px`, top: `${top}px` });
 }
 
 // Whether the agent keeps this comment for later runs, and where. A run with a client chooses: this run only, the
@@ -147,6 +217,7 @@ function snipHtml(d) {
 
 // Put the typed comment back after a redraw, so typing never redraws the box.
 export function syncPop() {
+  placePop();
   const box = $('#note');
   if (!box) return;
   if (box.value !== state.commentDraft.text) box.value = state.commentDraft.text;
@@ -181,8 +252,8 @@ export function pendingHtml() {
   const rows = numbered()
     .map(
       (c) => `<div class="frow"><span class="pin still">${c.n}</span>
-        <button class="name" data-open="${esc(c.path)}" title="${esc(c.text)}">${esc(baseName(c.path))} · ${esc(label(c))}</button>
-        <button class="icon-btn" aria-label="Remove comment ${c.n}" data-drop-comment="${c.id}">${icon('x')}</button></div>`,
+        <button class="name" data-open="${esc(c.path)}" title="${esc(c.text)}">${esc(baseName(c.path))}, ${esc(label(c))}</button>
+        ${given(c.path) ? '<span class="kind">Note</span>' : ''}<button class="icon-btn" aria-label="Remove comment ${c.n}" data-drop-comment="${c.id}">${icon('x')}</button></div>`,
     )
     .join('');
   return rows ? `<div class="list"><h3>Comments to send</h3>${rows}</div>` : '';
@@ -199,7 +270,12 @@ export function barHtml() {
   const n = pending().length;
   if (!canComment() || !n) return '';
   const files = new Set(pending().map((c) => c.path)).size;
-  return `<div class="files-foot"><span>${plural(n, 'comment')}${files > 1 ? ` on ${files} files` : ''}</span>
+  // Notes on the files the agent was given are counted apart from the changes asked of its outputs.
+  const notes = pending().filter((c) => given(c.path)).length;
+  const said = notes
+    ? [n - notes ? plural(n - notes, 'change') : '', plural(notes, 'note')].filter(Boolean).join(', ')
+    : `${plural(n, 'comment')}${files > 1 ? ` on ${files} files` : ''}`;
+  return `<div class="files-foot"><span>${said}</span>
     <button class="btn primary" data-action="send-comments" ${attr('disabled', state.busy)}>Send to agent</button></div>`;
 }
 
@@ -257,7 +333,7 @@ export function roundHtml(event, cls = '') {
       // An event from before comments carried their spot says where in its own words.
       const where = hasSpot(kept) ? label(kept) : c.where;
       return `<li><button class="spot" data-goto="${event.round}.${c.n}"><span class="pin ${verdictOf(round, c.n) || 'still'}">${c.n}</span>
-        <span><span class="where">${esc(baseName(c.path))} · ${esc(where)}</span>${c.remember ? '<span class="pill">Remember</span>' : ''}${esc(c.text)}</span></button></li>`;
+        <span><span class="where">${esc(baseName(c.path))}, ${esc(where)}</span>${c.remember ? '<span class="pill">Remember</span>' : ''}${esc(c.text)}</span></button></li>`;
     })
     .join('');
   // Remembered comments go to the playbook, the client's notes, or both, each as one version.
@@ -266,7 +342,7 @@ export function roundHtml(event, cls = '') {
     const { name, latest } = keptIn(scope);
     // Undo is offered while that version is still the latest: after that, undoing it would undo later work too.
     const undone = state.forgotten.has(forgetKey(scope, version));
-    return `<div class="saved ${cls}"><span>${undone ? `Removed from ${name}` : `Added to ${name} · version ${version}`}</span>
+    return `<div class="saved ${cls}"><span>${undone ? `Removed from ${name}` : `Added to ${name}, version ${version}`}</span>
         ${!undone && latest === version ? undoButton(scope, version) : ''}</div>`;
   };
   return `<div class="me round ${cls}"><ol class="notes">${lines}</ol></div>${kept('playbook', event.remembered_version)}${kept('client', event.remembered_client_version)}`;
@@ -295,9 +371,11 @@ const SPOT = ['path', 'sheet', 'cell', 'page', 'x', 'y', 'w', 'h', 'line'];
 const hasSpot = (c) => !!(c.cell || c.line || c.page || c.x != null);
 const OPEN_ROUND = ['saving', 'sent', 'delivered'];
 
-// 'done' when the spot changed, 'left' when it did not, 'wait' while the agent works on it.
+// 'done' when the spot changed, 'left' when it did not, 'wait' while the agent works on it. A note or question on a
+// file the agent was given is never changed, so once its run is done it is 'noted'.
 export function verdictOf(round, n) {
   if (!round) return '';
+  if (round.report && given(round.comments.find((c) => c.n === n)?.path)) return 'noted';
   if (round.report) return round.report.spots?.some((v) => v.round === round.number && v.n === n && v.changed) ? 'done' : 'left';
   return OPEN_ROUND.includes(round.status) ? 'wait' : '';
 }
@@ -373,13 +451,13 @@ export function sentHtml(path) {
     const { root, last } = t;
     const replying = state.reply?.to === last.key;
     const waiting = last.open && !last.answer;
-    const verdict = VERDICT[last.verdict] || '';
+    const verdict = last.verdict === 'noted' ? (last.answer ? 'Answered' : '') : VERDICT[last.verdict] || '';
     const replies = t.items
       .slice(1)
       .map((r) => `<div class="answer you"><span class="who">You</span><p>${esc(r.c.text)}</p></div>${answerHtml(r)}`)
       .join('');
     const box = replying
-      ? `<form class="reply" id="reply-form"><textarea id="reply-text" placeholder="Reply" aria-label="Reply to the agent" maxlength="2000"></textarea>
+      ? `<form class="reply" id="reply-form"><div class="mic-box"><textarea id="reply-text" placeholder="Reply" aria-label="Reply to the agent" maxlength="2000"></textarea>${micButton('reply-text')}</div>${voiceNote('reply-text')}
           <div class="row"><button type="button" class="btn text" data-reply-cancel>Cancel</button><button class="btn primary small" ${attr('disabled', state.busy)}>Send</button></div></form>`
       : waiting || !canReply ? '' : `<div class="c-act"><button class="btn text small" data-reply="${last.key}">Reply</button></div>`;
     return `<div class="c ${t.items.some((x) => x.key === state.activeComment) ? 'on' : ''}">
@@ -390,7 +468,7 @@ export function sentHtml(path) {
       <p>${esc(root.c.text)}</p>${answerHtml(root)}${replies}${box}</div>`;
   };
   const doneRow = (t) => `<div class="resolved"><span class="pin still ${t.last.verdict}">${sentLabel(t.root)}</span>
-      <span>${esc(label(t.root.c))} · ${esc(t.root.c.text)}</span><button class="btn text small" data-reopen="${t.last.key}">Reopen</button></div>`;
+      <span>${esc(label(t.root.c))}: ${esc(t.root.c.text)}</span><button class="btn text small" data-reopen="${t.last.key}">Reopen</button></div>`;
   const toggle = done.length
     ? `<button type="button" class="switch-label" role="switch" aria-checked="${state.showResolved}" data-show-resolved><span class="switch ${state.showResolved ? 'on' : ''}"></span>Resolved (${done.length})</button>`
     : '';

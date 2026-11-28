@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -68,7 +69,7 @@ class RunStore:
         name = f'{self._code_count:03d}-{who}.py'
         printed = '\n'.join(str(o.get('logs', '')) if isinstance(o, dict) else str(o) for o in outputs or [])
         body = code + (
-            '\n\n# ---- output ----\n' + '\n'.join('# ' + line for line in printed.splitlines()) if printed else ''
+            OUTPUT_MARK + '\n'.join('# ' + line for line in printed.splitlines()) if printed else ''
         )
         (self.dir / 'code' / name).write_text(body, encoding='utf-8')
         return name
@@ -108,6 +109,27 @@ class RunStore:
         self.record.update(updates)
         self.record['elapsed_seconds'] = round(time.monotonic() - self.started, 1)
         self.write_json('run.json', self.record)
+
+
+OUTPUT_MARK = '\n\n# ---- output ----\n'
+CODE_NAME = re.compile(r'\d{3}-[A-Za-z0-9_.-]+\.py')
+
+
+def read_code(folder: Path, name: str) -> dict:
+    """One saved script as save_code wrote it, split back into its code and what it printed. folder is the run's
+    code/ folder. Raises KeyError for a name that is not a saved script."""
+    path = folder / name
+    if not CODE_NAME.fullmatch(name) or not path.is_file():
+        raise KeyError(name)
+    text = path.read_text(encoding='utf-8', errors='replace')
+    code, _, printed = text.partition(OUTPUT_MARK)
+    output = '\n'.join(line[2:] if line.startswith('# ') else line.lstrip('#') for line in printed.splitlines())
+    return {'name': name, 'code': code.rstrip(), 'output': output.rstrip()}
+
+
+def lead_scripts(folder: Path) -> list[str]:
+    """The lead agent's saved scripts, in the order they ran."""
+    return sorted(p.name for p in folder.glob('*-main.py')) if folder.is_dir() else []
 
 
 def _rename(source: Path, target: Path, attempts: int = 3):

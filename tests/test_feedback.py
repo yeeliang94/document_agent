@@ -161,6 +161,28 @@ def test_a_round_keeps_what_the_agent_receives_and_the_outputs_as_they_were(tmp_
     assert [r['number'] for r in feedback.rounds(store, job['id'])] == [1, 2]
 
 
+def test_a_comment_on_a_file_the_agent_was_given_is_a_note_or_a_question_not_a_change(tmp_path):
+    store, job = job_with_outputs(tmp_path)
+    root = store.path(job['id'])
+    (root / 'template').mkdir(exist_ok=True)
+    workbook(root / 'template' / 'form.xlsx')
+    source = {'path': 'inputs/source.txt', 'line': 1, 'text': 'Is this the October file?'}
+    template = {'path': 'template/form.xlsx', 'sheet': 'Employees', 'cell': 'C1', 'text': 'Basic pay is before tax.'}
+    feedback.create_round(store, job['id'], ROUND, [CELL, source, template])
+    opening, *lines = store.get(job['id'])['pending_messages'][0]['text'].splitlines()
+    # One general principle for the whole round: the agent changes only its outputs.
+    assert 'You change only your outputs' in opening and 'never a change to make to it' in opening
+    assert 'Answer a question in its answer' in opening
+    marked = 'a file you were given: a note or a question, not a change'
+    assert [marked in line for line in lines] == [False, True, True]
+    # A round on outputs alone says nothing of the kind.
+    feedback.create_round(store, job['id'], 'round-0002-efgh', [CELL])
+    assert 'files you were given' not in store.get(job['id'])['pending_messages'][1]['text']
+    assert 'You change only your outputs' not in store.get(job['id'])['pending_messages'][1]['text']
+    assert feedback.given('inputs/a/b.pdf') and feedback.given('template/form.xlsx')
+    assert not feedback.given('outputs/upload.xlsx')
+
+
 def test_a_bad_spot_saves_and_queues_nothing(tmp_path):
     store, job = job_with_outputs(tmp_path)
     bad = {'path': 'outputs/upload.xlsx', 'cell': 'A1', 'sheet': 'Nope', 'text': 'x'}
@@ -214,7 +236,7 @@ def test_the_report_says_what_changed_where_asked_and_what_changed_elsewhere(tmp
     assert report['not_changed_where_asked'] == [
         '1.2 outputs/upload.xlsx, sheet "Employees", cell C3: this cell\'s own content is as it was',
         '1.4 outputs/summary.pdf, page 1, about 25% across and 50% down: the file is as it was',
-        '1.5 inputs/source.txt, line 1: a comment on a source file; there is nothing to compare',
+        '1.5 inputs/source.txt, line 1: a note or question on a file you were given, which you do not change',
     ]
     assert report['changed_elsewhere'] == [
         'extra.txt: the file was added, removed or rewritten',
@@ -228,7 +250,9 @@ def test_the_report_says_what_changed_where_asked_and_what_changed_elsewhere(tmp
     kept = feedback.rounds(store, job['id'])[0]
     assert kept['status'] == 'done' and kept['report']['changed_where_asked'] == report['changed_where_asked']
     done = store.events(job['id'])[-1]
-    assert (done['name'], done['changed'], done['unchanged'], done['elsewhere']) == ('feedback.done', 2, 3, 3)
+    # The note on a source file is counted apart: it is answered, never changed.
+    assert (done['name'], done['changed'], done['unchanged'], done['notes'], done['elsewhere']) == ('feedback.done', 2, 2, 1, 3)
+    assert report['notes'] == 1
     assert feedback.change_report(store, job['id']) is None and control.after_save() == {}
 
 

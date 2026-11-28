@@ -2,7 +2,7 @@
 
 They know only the job (zip, templates, formats, rules), never an answer key, and they apply to any job:
 - a template deliverable keeps the template's sheets, their visibility, its formulas and its data-validation rules
-  (dropdowns, number-only cells), follows those rules and gains no duplicate rows. Template content may move down
+  (dropdowns, number-only cells) and follows those rules; duplicate rows are listed to remove or explain. Template content may move down
   when the agent inserts rows; content that moved or is no longer there as it was is listed as a template change,
   which the agent explains rather than fixes
 - a format deliverable has the specified sheets, headers, types and allowed values (rules.py)
@@ -361,7 +361,10 @@ def _duplicate_rows(title: str, alignment: Alignment) -> list[str]:
     for number in sorted(alignment.written):
         key = tuple(sorted(alignment.after[number].items()))
         if key in seen:
-            issues.append(f'{title} row {number} duplicates row {seen[key]}.')
+            issues.append(
+                f'{title} row {number} duplicates row {seen[key]}. Remove one, or if both are real records, keep both '
+                'and say why in notes.md.'
+            )
         seen.setdefault(key, number)
     return issues
 
@@ -480,11 +483,12 @@ class TemplateCheck:
     changes: list[str]  # allowed when deliberate; the agent explains them in notes.md
     alignments: dict[str, Alignment]  # per sheet
     gaps: list[str]  # rows left empty among the agent's records: fill them or say why they stay empty
+    duplicates: list[str]  # rows the same as another: remove one, or keep both and say why
 
 
 def check_template(out, template: Path) -> TemplateCheck:
     tpl = load_workbook(template)
-    issues, changes, alignments, gaps = [], [], {}, []
+    issues, changes, alignments, gaps, duplicates = [], [], {}, [], []
     for sheet in tpl.worksheets:
         if sheet.title not in out.sheetnames:
             issues.append(f'Template sheet "{sheet.title}" is missing.')
@@ -497,9 +501,9 @@ def check_template(out, template: Path) -> TemplateCheck:
         issues += _lost_formulas(sheet.title, alignment)
         issues += _lost_rules(sheet, target, alignment)
         issues += _validation_issues(tpl, sheet, alignment)
-        issues += _duplicate_rows(sheet.title, alignment)
+        duplicates += _duplicate_rows(sheet.title, alignment)
         gaps += _gaps(sheet.title, alignment)
-    return TemplateCheck(issues, changes, alignments, gaps)
+    return TemplateCheck(issues, changes, alignments, gaps, duplicates)
 
 
 def _open(path: Path):
@@ -515,6 +519,7 @@ class DeliverableCheck:
     changes: list[str]  # template changes the agent explains
     written: dict[str, set[int]]  # per sheet, the rows the agent wrote, which need sources
     gaps: list[str] = field(default_factory=list)  # rows left empty among the agent's records
+    duplicates: list[str] = field(default_factory=list)  # rows the same as another, kept or explained
 
 
 def check_deliverable(outputs: Path, deliverable: Deliverable, job_rules) -> DeliverableCheck:
@@ -540,7 +545,11 @@ def check_deliverable(outputs: Path, deliverable: Deliverable, job_rules) -> Del
             for r in rules
         ]  # fmt: skip
         return DeliverableCheck(
-            issues + check_rules(wb, rules, deliverable.name, skip), changes, written, template.gaps
+            issues + check_rules(wb, rules, deliverable.name, skip),
+            changes,
+            written,
+            template.gaps,
+            template.duplicates,
         )
     issues = check_format(wb, deliverable.format, deliverable.name)
     written = {}
@@ -613,6 +622,12 @@ def read_map(outputs: Path) -> tuple[dict[str, dict] | None, str | None]:
         return None, f'{DOCUMENT_MAP} is not valid JSON: {error}'
 
 
+def some(items: list, limit: int = 10) -> str:
+    """The first `limit` items, and how many were left out: 'a, b, c ... and 4 more'."""
+    shown = ', '.join(str(i) for i in items[:limit])
+    return shown + (f' ... and {len(items) - limit} more' if len(items) > limit else '')
+
+
 def check_map(entries: dict[str, dict], files: list[dict]) -> tuple[list[str], int]:
     """Problems with the map, and how many files that need a decision have a valid one."""
     missing, bad, unexplained, decided = [], [], [], 0
@@ -629,11 +644,11 @@ def check_map(entries: dict[str, dict], files: list[dict]) -> tuple[list[str], i
                 unexplained.append(f['path'])
     issues = []
     if missing:
-        issues.append(f'{DOCUMENT_MAP} has no entry with "path" for {len(missing)} file(s): {missing[:10]}')
+        issues.append(f'{DOCUMENT_MAP} has no entry with "path" for {len(missing)} file(s): {some(missing)}')
     if bad:
-        issues.append(f'{DOCUMENT_MAP}: "decision" must be one of {list(DECISIONS)} for {bad[:10]}')
+        issues.append(f'{DOCUMENT_MAP}: "decision" must be one of {list(DECISIONS)} for {some(bad)}')
     if unexplained:
-        issues.append(f'{DOCUMENT_MAP}: give a one-line "reason" for {unexplained[:10]}')
+        issues.append(f'{DOCUMENT_MAP}: give a one-line "reason" for {some(unexplained)}')
     return issues, decided
 
 
@@ -681,7 +696,7 @@ def check_provenance(
         assert isinstance(records, list)
     except Exception:  # noqa: BLE001
         return [f'{PROVENANCE} must be a JSON list of {{"file", "sheet", "rows", "sources"}} objects.'], counts
-    issues, covered_rows = [], {}
+    issues, covered_rows, cited = [], {}, set()
     paths = {f['path'] for f in files}
     last = max((max(rows) for rows in written.values()), default=0)  # rows past the last written one prove nothing
     for number, record in enumerate(records):
@@ -692,7 +707,7 @@ def check_provenance(
         except Exception:  # noqa: BLE001
             issues.append(f'{PROVENANCE} item {number} needs "file", "sheet", "rows" (e.g. "2-40") and "sources".')
             continue
-        valid = bool(sources)
+        valid, matched = bool(sources), []
         if not sources:
             issues.append(f'{PROVENANCE} item {number} ({key[0]} {key[1]} rows {record["rows"]}) names no sources.')
         for source in sources:
@@ -701,6 +716,7 @@ def check_provenance(
                 valid = False
                 issues.append(f'{PROVENANCE} item {number} cites {source!r}, which is not a file in the packet.')
                 continue
+            matched.append(match)
             entry = entry_for(entries or {}, match)
             if entry is not None and normal_decision(entry.get('decision')) not in ('used', 'reference'):
                 valid = False
@@ -710,11 +726,22 @@ def check_provenance(
                 )
         if valid:
             covered_rows.setdefault(key, set()).update(rows)
+            if rows & written.get(key, set()):  # a record for rows that were written counts as a citation
+                cited.update(matched)
     for (name, sheet), rows in written.items():
         left = rows - covered_rows.get((name, sheet), set())
         counts['sourced'] += len(rows) - len(left)
         if left:
             issues.append(f'{PROVENANCE} gives no sources for {name} "{sheet}" rows {_ranges(left)}.')
+    # "used" means the deliverable takes data from the file, and people reading the map trust that word. A used file no
+    # written row cites is listed for the agent to look at, not refused: it may feed only a memo or another output
+    # without rows.
+    uncited = sorted(
+        f['path'] for f in files
+        if f['path'] not in cited and normal_decision((entry_for(entries or {}, f['path']) or {}).get('decision')) == 'used'
+    )  # fmt: skip
+    counts['used_not_cited'] = uncited[:10]
+    counts['used_not_cited_more'] = max(0, len(uncited) - 10)  # how many more, kept apart so the list is only paths
     return issues, counts
 
 
@@ -752,7 +779,7 @@ def free_form_file(path: Path) -> tuple[str | None, dict[str, set[int]]]:
 
 def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row') -> dict:
     """Every check, plus a summary per area for people: deliverable problems, files decided, rows with sources."""
-    deliverable_issues, changes, written, gaps = [], [], {}, []
+    deliverable_issues, changes, written, gaps, duplicates = [], [], {}, [], []
     # The workbooks whose totals and look are checked: (name, path, template, format)
     books = [(d.name, outputs / d.name, d.template, d.format) for d in job.deliverables]
     for deliverable in job.deliverables:
@@ -760,6 +787,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         deliverable_issues += result.issues
         changes += [f'{deliverable.name}: {line}' for line in result.changes]
         gaps += [f'{deliverable.name}: {line}' for line in result.gaps]
+        duplicates += [f'{deliverable.name}: {line}' for line in result.duplicates]
         written |= {(deliverable.name, sheet): rows for sheet, rows in result.written.items()}
     if not job.deliverables:
         # No template and no format: the form of the output is the agent's choice. What can be checked is that
@@ -781,7 +809,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
             written |= {(name, sheet): numbers for sheet, numbers in rows.items()}
             if path.suffix.lower() in WORKBOOKS and not problem:
                 books.append((name, path, None, None))
-    totals_issues, totals_lines, unsupported, looks = [], [], 0, []
+    totals_issues, totals_lines, unsupported, looks = [], [], [], []
     for name, path, template, format_spec in books:
         if not path.exists():
             continue
@@ -791,7 +819,7 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
             continue
         totals_issues += [f'{name}: {line}' for line in found.problems]
         totals_lines += listed(name, found)
-        unsupported += found.unsupported
+        unsupported += [f'{name}: {place}' for place in found.unsupported_at]
         rows = {sheet: numbers for (book, sheet), numbers in written.items() if book == name}
         try:
             looks += [f'{name}: {line}' for line in look_warnings(path, rows, format_spec)]
@@ -807,17 +835,27 @@ def run_checks(outputs: Path, job: JobSpec, files: list[dict], proof: str = 'row
         'totals_problems': len(totals_issues),
         'looks_right': not looks,
     }
-    provenance_issues = []
+    provenance_issues, used_not_cited, uncited_more = [], [], 0
     if proof == 'row':
         provenance_issues, counts = check_provenance(outputs, written, files, entries)
         summary |= {'rows_sourced': counts['sourced'], 'rows_written': counts['written']}
+        used_not_cited = counts.get('used_not_cited', [])
+        uncited_more = counts.get('used_not_cited_more', 0)
     issues = deliverable_issues + totals_issues + map_issues + provenance_issues
     shown = issues[:MAX_ISSUES] + ([f'... and {len(issues) - MAX_ISSUES} more.'] if len(issues) > MAX_ISSUES else [])
-    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps,
-              'totals': totals_lines, 'looks': looks, 'summary': summary}  # fmt: skip
+    doubles = duplicates[:MAX_ISSUES] + (
+        [f'... and {len(duplicates) - MAX_ISSUES} more.'] if len(duplicates) > MAX_ISSUES else []
+    )
+    result = {'passed': not issues, 'issues': shown, 'template_changes': changes, 'empty_rows': gaps, 'duplicate_rows': doubles,
+              'totals': totals_lines, 'looks': looks, 'summary': summary, 'issue_count': len(issues)}  # fmt: skip
+    if used_not_cited:
+        result['used_not_cited'] = used_not_cited
+    if uncited_more:
+        result['used_not_cited_more'] = uncited_more
     if unsupported:
         result['totals_not_worked_out'] = (
-            f'{unsupported} formula(s) use something this machine cannot work out; check those in the sandbox.'
+            f'{len(unsupported)} formula(s) use something this machine cannot work out: {some(unsupported)}. Check '
+            'those cells in the sandbox.'
         )
     return result
 

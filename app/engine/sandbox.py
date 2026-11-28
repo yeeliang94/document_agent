@@ -65,7 +65,10 @@ class Sandbox:
         for item in await self.list_files():
             if item['path'] == wanted:
                 return await self.download_id(item['id'])
-        raise FileNotFoundError(f'{wanted} is not in the container. Save it under {DATA_DIR}/ first.')
+        raise FileNotFoundError(
+            f'{wanted} is not in the sandbox. Outputs belong under {DATA_DIR}/outputs/: save the file there first, '
+            'or check its name.'
+        )
 
     async def status(self) -> str:
         return (await self.client.containers.retrieve(self.id)).status

@@ -1,6 +1,6 @@
 // The run list in the sidebar: each run's own name and status, and a menu to rename or delete it.
 
-import { $, STATUS, api, esc, icon, inGroup, jobTitle, pill, state, toast } from './core.js';
+import { $, STATUS, api, esc, icon, inGroup, jobTitle, pill, state, telling, toast } from './core.js';
 
 const STILL_GOING = 'This run is still going. Stop it before you delete it.';
 
@@ -8,9 +8,10 @@ const statusOf = (job) => (job.id === state.job?.id ? state.job.status : job.sta
 const listed = (id) => state.jobs.find((j) => j.id === id) || (state.job?.id === id ? state.job : null);
 
 export function runItems() {
+  const when = telling(state.jobs);
   return state.jobs.map((j) => {
     const status = statusOf(j);
-    const [tone, label] = status === 'waiting' ? ['warn', 'Needs you'] : STATUS[status] || ['', status];
+    const [tone, label] = STATUS[status] || ['', status];
     const on = j.id === state.job?.id && ['run', 'log'].includes(state.view);
     const open = state.menu === `run:${j.id}`;
     const title = jobTitle(j);
@@ -20,14 +21,14 @@ export function runItems() {
           <button type="button" role="menuitem" data-run-delete="${esc(j.id)}">Delete</button></div>`
       : '';
     return `<div class="item run ${on ? 'on' : ''}" data-job="${esc(j.id)}">
-      <button type="button" class="run-open" ${on ? 'aria-current="page"' : ''}><span>${esc(title)}</span></button>${pill(tone, label)}
-      <span class="menu-wrap"><button type="button" class="icon-btn run-more" data-menu="run:${esc(j.id)}" aria-haspopup="menu" aria-expanded="${open}" aria-label="More for ${esc(title)}" title="More">${icon('more')}</button>${menu}</span>
+      <button type="button" class="run-open" ${on ? 'aria-current="page"' : ''}><span>${esc(title)}</span>${when[j.id] ? `<span class="when">${esc(when[j.id])}</span>` : ''}</button>${pill(tone, label)}
+      <span class="menu-wrap"><button type="button" class="icon-btn run-more" data-menu="run:${esc(j.id)}" aria-haspopup="menu" aria-expanded="${open}" aria-label="More for ${esc(title)}${when[j.id] ? `, ${esc(when[j.id])}` : ''}" title="More">${icon('more')}</button>${menu}</span>
     </div>`;
   });
 }
 
 function dialog(title, body, does, id, label) {
-  $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+  $('#details').innerHTML = `<div class="dialog-head"><h2>${esc(title)}</h2></div>
     <form class="dialog-body" id="run-form" data-does="${does}" data-id="${esc(id)}">${body}
       <div class="end"><button type="button" class="btn text" data-close>Cancel</button><button class="btn primary">${esc(label)}</button></div></form>`;
   $('#details').showModal();
@@ -40,7 +41,7 @@ export function renameRun(id) {
   const made = jobTitle({ ...job, name: null });
   dialog(
     'Rename run',
-    `<label>Name<input class="field" name="name" value="${esc(job.name || '')}" placeholder="${esc(made)}" maxlength="80" autocomplete="off"></label>`,
+    `<label>Name<input class="field" name="name" value="${esc(job.name || '')}" placeholder="${esc(made)}" autocomplete="off"></label>`,
     'rename',
     id,
     'Rename',
@@ -57,7 +58,7 @@ export function deleteRun(id) {
 
 // Start over sets the current files aside (they are kept as a version first), so it asks before it does.
 export function confirmStartOver(id) {
-  dialog('Start over?', '<p>The agent does the job again from the beginning. The current files are kept as a version.</p>', 'start-over', id, 'Start over');
+  dialog('Start over?', '<p>The agent does the run again from the start. The current files are kept as a version.</p>', 'start-over', id, 'Start over');
 }
 
 // The rename, delete or start over the dialog asked for. Returns the id of a run that was deleted, so the caller can leave it.

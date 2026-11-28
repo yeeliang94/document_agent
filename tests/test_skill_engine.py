@@ -266,12 +266,12 @@ def test_a_run_does_not_start_when_a_listed_skill_is_missing_or_changed(tmp_path
     monkeypatch.setattr(engine, 'Sandbox', FakeBox)
     store = asyncio.run(engine.run_job(spec, Endpoint(api_key='unused'), tmp_path / 'runs', echo=lambda _: None))
     assert store.record['status'] == 'failed' and FakeBox.made == {}  # no sandbox was opened
-    assert 'The files of skill "bank-checks" are missing from this job' in store.record['error']
+    assert 'The files of skill "bank-checks" are missing from this run' in store.record['error']
     # Files that are there but no longer what the job copied are refused the same way.
     spec = spec_with_skills(tmp_path)
     (spec.skills_dir / 'payroll-proration' / 'SKILL.md').write_text('Edited on disk.', encoding='utf-8')
     store = asyncio.run(engine.run_job(spec, Endpoint(api_key='unused'), tmp_path / 'runs2', echo=lambda _: None))
-    assert store.record['status'] == 'failed' and 'changed after this job was created' in store.record['error']
+    assert store.record['status'] == 'failed' and 'changed after this run was created' in store.record['error']
 
 
 def test_a_link_placed_in_a_skill_folder_is_not_part_of_the_skill(tmp_path):

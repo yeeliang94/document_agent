@@ -15,6 +15,8 @@ import asyncio
 import hashlib
 import io
 import json
+import re
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -23,6 +25,7 @@ from .. import clients, feedback, lessons, plain_errors, preview
 from ..jobstatus import FINISHED, stop_status
 from ..modules import MODULE_LABELS
 from ..store import clean
+from . import plan as plans
 from . import report as finish
 from .agent import Control, run_job
 from .endpoint import Settings as Endpoint
@@ -44,7 +47,7 @@ MESSAGES = {
     'run.started': lambda d: f'Started on {count(d.get("files"), "file")}',
     'sandbox.ready': lambda d: 'Set up the workspace and copied in the files',
     'code.started': lambda d: 'Working on the files',
-    'tool.called': lambda d: f'Using {d.get("tool")}',
+    'tool.called': lambda d: None if d.get('tool') in OWN_LINE else f'Using {d.get("tool")}',
     'tool.failed': lambda d: tool_failure(d.get('error')),
     'scout.started': lambda d: f'A helper is reading {d.get("folder")} ({count(d.get("files"), "file")})',
     'scout.finished': lambda d: f'The helper finished reading {d.get("folder")}',
@@ -87,12 +90,34 @@ MESSAGES = {
     'model.unavailable': lambda d: 'The AI service stopped answering; saved work is kept',
     'outputs.versioned': lambda d: f'Kept version {d.get("number")}: {d.get("description")}',
     'output.looked': lambda d: f'Looking at {d.get("file")} as Excel shows it',
+    # Kept in the Technical log; the run itself shows no thinking then, and the Settings page says why that can be.
+    'thinking.refused': lambda d: (
+        "The AI service does not send summaries of the agent's thinking; carrying on without them"
+    ),
     'outputs.pictured': lambda d: (
         f'Showed the agent {count(d.get("pictures"), "picture")} of its files before it finishes '
         f'(about {d.get("tokens") or 0:,} tokens)'
     ),
 }
-WARNINGS = {'limit.near', 'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable'}
+WARNINGS = {'limit.near', 'tool.failed', 'scout.failed', 'sandbox.keepalive_failed', 'model.unavailable',
+            'thinking.refused'}  # fmt: skip
+# Tools whose work the feed already says in its own words (a save, a look at a file, the plan), so "Using ..." is not.
+OWN_LINE = {'update_plan', 'save_outputs', 'look_at_output'}
+STAGE_NAMES = {'reading': 'Reading files', 'filling': 'Filling in', 'checking': 'Checking'}
+
+
+def plan_message(data: dict) -> str:
+    """What the feed says when the agent writes or changes its plan."""
+    if data.get('first'):
+        return f'Made a plan: {plans.counted(data.get("steps") or [])}'
+    said = [f'added "{s}"' for s in data.get('added') or []]
+    said += [f'changed "{c["was"]}" to "{c["step"]}"' for c in data.get('changed') or []]
+    said += [f'dropped "{s}"' for s in data.get('removed') or []]
+    if said:
+        return 'Changed its plan: ' + '; '.join(said)
+    return f'Updated its plan: {plans.counted(data.get("steps") or [])}'
+
+
 DAY_USED_UP = (
     "Today's token limit is used up. Saved work is kept. Continue tomorrow, or raise the limit on the Settings page."
 )
@@ -301,11 +326,23 @@ def choose_past_runs(store, job: dict) -> list[dict]:
     return found
 
 
+def keep_copy(outputs: Path, copy: Path) -> None:
+    """A fixed copy of a finished run's files, put in place whole: a reader never sees half of it."""
+    building = copy.with_name(copy.name + '.part')
+    shutil.rmtree(building, ignore_errors=True)
+    for path in past_files(outputs):
+        target = building / path.relative_to(outputs)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+    building.mkdir(parents=True, exist_ok=True)
+    building.rename(copy)
+
+
 def past_runs(store, job: dict) -> tuple[dict, ...]:
     """The job's earlier runs with what the engine needs to open one. Left out: a run deleted since, and a run
     that is no longer finished because the user sent it back with comments. Its files are then work in progress;
-    it is offered again, under the same label, once it finishes. (One job runs at a time, so a run cannot change
-    while another job is reading it.)"""
+    it is offered again, under the same label, once it finishes. Each is read from a copy this job takes while that
+    run is finished: several runs go at once, so the run itself may be sent back and change while this one reads it."""
     held = []
     for run in choose_past_runs(store, job):
         try:
@@ -314,8 +351,10 @@ def past_runs(store, job: dict) -> tuple[dict, ...]:
             continue
         if other['status'] != 'completed':
             continue
-        outputs = store.path(run['id']) / 'outputs'
-        held.append({**run, 'goal': (other.get('instructions') or '')[:1000], 'outputs': outputs})
+        copy = store.path(job['id']) / 'past' / run['label']
+        if not copy.is_dir():
+            keep_copy(store.path(run['id']) / 'outputs', copy)
+        held.append({**run, 'goal': (other.get('instructions') or '')[:1000], 'outputs': copy})
     return tuple(held)
 
 
@@ -369,7 +408,7 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
         return '\n\n'.join(parts + _still_holds(job, new, fresh=True))
     parts = [
         'You are resuming this job in a fresh sandbox; the earlier sandbox is gone. Continue from where the work '
-        f'stands rather than starting over. The previous run ended as "{last.get("status")}".'
+        f'stands rather than starting over. The previous run ended as "{last.get("status")}"{why_stopped(last)}.'
     ]
     start = job.get('resume_from')
     if start:
@@ -380,11 +419,57 @@ def resume_card(store, job: dict, new: list[str] = ()) -> str | None:
         )
     check = last.get('final_check') or {}
     if check.get('issues'):
-        parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in check['issues'][:20]))
+        parts.append('The last check listed:\n' + '\n'.join(f'- {i}' for i in some_issues(check['issues'], total=check.get('issue_count'))))
     notes = root / 'outputs' / 'notes.md'
     if notes.exists():
         parts.append('Your notes so far:\n' + notes.read_text(encoding='utf-8', errors='replace')[:NOTES_LIMIT])
+    steps = (job.get('plan') or {}).get('steps')
+    if steps:
+        parts.append(
+            'Your plan from the earlier run, as you left it. Carry on from it with update_plan: tick what is done, and '
+            'change it, saying why, if the work now is different:\n' + plans.as_text(steps)
+        )
     return '\n\n'.join(parts + _still_holds(job, new))
+
+
+CARD_ISSUES = 20  # check issues on the resume card
+MORE = re.compile(r'\.\.\. and (\d+) more\.')
+
+
+def without_offer(report: dict | None, offer: dict | None) -> dict | None:
+    """The report, less its lines to keep for the client once the person saved or put away this run's offer."""
+    if report and offer and (offer.get('saved') or offer.get('dismissed')):
+        return {k: v for k, v in report.items() if k != 'for_next_time'}
+    return report
+
+
+def why_stopped(last: dict) -> str:
+    """Why an earlier run ended, for the resume card: a limit, the AI service, the user, or a fault."""
+    cut, status, error = last.get('cut_short'), last.get('status'), last.get('error')
+    if cut in ('turns', 'tokens', 'time'):
+        return f', because it reached a limit ({error or cut})'
+    if cut == 'service':
+        return ', because the AI service stopped answering'
+    if status == 'waiting':
+        return ', because it was waiting for an answer to its question'
+    if status == 'paused':
+        return ', because the user paused it'
+    if status == 'cancelled':
+        return ', because the user stopped it'
+    if status == 'failed' and error:
+        return f', because of a fault ({error[:200]})'
+    return ''
+
+
+def some_issues(issues: list[str], limit: int = CARD_ISSUES, total: int | None = None) -> list[str]:
+    """The first issues, and how many were left out. `total` is how many the checks found (issue_count); a record
+    from before it was kept is read from the checks' own closing '... and N more.' line."""
+    more = MORE.fullmatch(issues[-1]) if issues else None
+    real = issues[:-1] if more else issues
+    if total is None:
+        total = len(real) + (int(more.group(1)) if more else 0)
+    shown = real[:limit]
+    return shown + ([f'... and {total - len(shown)} more.'] if total > len(shown) else [])
 
 
 def _still_holds(job: dict, new, fresh: bool = False) -> list[str]:
@@ -407,6 +492,16 @@ def _still_holds(job: dict, new, fresh: bool = False) -> list[str]:
             'the affected work, and save again:\n' + '\n'.join(new)
         )
     return parts
+
+
+def run_spent(parts: list[dict], seconds: float) -> dict:
+    """What one engine run took, from its lead, scout and review usage entries: an entry of the job's runs.
+    cached_input_tokens is the part of the input the service had cached, which costs less (app/costs.py)."""
+    return {
+        'seconds': seconds,
+        'requests': sum(p.get('requests', 0) for p in parts),
+        **{k: sum(p.get(k, 0) for p in parts) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')},
+    }
 
 
 def shown_issues(issues: list[str], limit: int = 10) -> list[str]:
@@ -462,6 +557,8 @@ class SandboxEngine:
         options = store.settings()
         allowance = options['token_limit_thousands'] * 1000
         day_bound = left is not None and left < allowance
+        if left is not None:  # set aside now, before any wait, so a run starting alongside sees the rest only
+            store.hold(job_id, min(left, allowance))
         team = {'max_scouts': options['max_scouts'], 'reviewer': options['reviewer']}
         job = store.update(job_id, engine_team=team)
         root = store.path(job_id)
@@ -483,6 +580,27 @@ class SandboxEngine:
             if name == 'run.progress':  # how far the run has got, on the job for the screen; not a feed line
                 store.update(job_id, progress={**data, 'run': attempt})
                 return
+            if name == 'plan.updated':
+                # Kept on the job, so the plan shows at the top of the run and a later run picks it up.
+                store.update(job_id, plan={'steps': data['steps'], 'why': data.get('why') or '', 'run': attempt})
+                keep = {k: data.get(k) for k in ('steps', 'added', 'changed', 'removed', 'why', 'first')}
+                store.event(job_id, 'engine.plan.updated', plan_message(data), type='engine', run=attempt, **keep)
+                return
+            if name == 'stage.changed':  # where the work moves on; the run screen folds the work by stage
+                stage = data.get('stage')
+                store.event(job_id, 'engine.stage.changed', STAGE_NAMES.get(stage, stage), type='engine', run=attempt,
+                            stage=stage)  # fmt: skip
+                return
+            if name == 'thinking':
+                parts = data.get('parts') or []
+                store.event(job_id, 'engine.thinking', parts[0]['title'] if parts else '', type='engine', run=attempt,
+                            parts=parts, detail=options['thinking_summaries'])  # fmt: skip
+                return
+            if name == 'code.ran' and data.get('shown'):
+                # The script is already in the feed: this says only where its code and output are kept.
+                store.event(job_id, 'engine.code.saved', 'Kept the script', type='engine', run=attempt,
+                            code=data.get('file'), item=data.get('item'))  # fmt: skip
+                return
             message = MESSAGES.get(name)
             text = message(data) if message is not None else None
             if text:
@@ -493,6 +611,12 @@ class SandboxEngine:
                     extra.update(what=data.get('what'), said=data.get('said'))
                 if data.get('interrupted'):
                     extra['interrupted'] = True  # the thread says the step was stopped only once it was
+                if data.get('item'):  # which script, so the screen can open its code and what it printed
+                    extra['item'] = data['item']
+                if name == 'code.ran' and data.get('file'):
+                    extra['code'] = data['file']
+                if name == 'outputs.saved':  # what came back, for the action opened in full
+                    extra.update(passed=bool(data.get('passed')), issues=list(data.get('issues') or [])[:20])
                 store.event(job_id, 'engine.' + name, text, type='engine', level=level, run=attempt, **extra)
 
         one_question = asyncio.Lock()  # the agent may call tools in parallel; the user sees one question at a time
@@ -553,19 +677,26 @@ class SandboxEngine:
         except BaseException:
             # Cut off before it could settle (the app stopping, the backstop time limit): what it used still counts
             # towards the day. The engine writes its record as it ends, so read the usage from there.
-            await asyncio.shield(asyncio.to_thread(self.count_unsettled, root / 'engine' / run_id))
+            await asyncio.shield(asyncio.to_thread(self.count_unsettled, job_id, root / 'engine' / run_id))
             raise
         if day_bound and record.get('cut_short') == 'tokens':
             record.update(error=DAY_USED_UP, cut_short='day')
         await asyncio.to_thread(self.settle, job_id, record, control.waiting)
 
-    def count_unsettled(self, run_folder) -> None:
+    def count_unsettled(self, job_id: str, run_folder) -> None:
         try:
-            usage = json.loads((run_folder / 'run.json').read_text(encoding='utf-8')).get('usage') or {}
+            record = json.loads((run_folder / 'run.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             return
+        usage = record.get('usage') or {}
         parts = [*usage.get('lead', []), *usage.get('scouts', []), *usage.get('reviews', [])]
-        self.store.add_spend(sum(p.get('input_tokens', 0) + p.get('output_tokens', 0) for p in parts))
+        spent = run_spent(parts, record.get('seconds') or 0)
+        self.store.add_spend(spent['input_tokens'] + spent['output_tokens'])
+        # It is one of the job's runs too, so the job's whole time, usage and cost count it.
+        try:
+            self.store.mutate(job_id, lambda job: job.update(runs=[*(job.get('runs') or []), spent]))
+        except KeyError:  # the job was removed meanwhile
+            pass
 
     async def _run(
         self, spec, options, root, run_id, on_event, control, resume, pictures, ask, job, max_tokens
@@ -595,6 +726,8 @@ class SandboxEngine:
                 versions_kept=options['versions_kept'],
                 max_questions=options['max_questions'],
                 timeout_seconds=options['time_limit_minutes'] * 60,
+                thinking=options['thinking_summaries'],
+                plan=None if job.get('start_over') or job.get('resume_from') else (job.get('plan') or {}).get('steps'),
                 echo=lambda _: None,
             )
         ).record
@@ -637,12 +770,10 @@ class SandboxEngine:
             added += '\nStill to fix: ' + ' '.join(left[:3]) + (f' ... and {len(left) - 3} more.' if len(left) > 3 else '')
         added = added.strip()
         summary = '\n'.join(part for part in (summary, added) if part)
-        if status in ('completed', 'partial'):
-            text = finish.as_text(final_report, unresolved, added)
-            (store.path(job_id) / 'outputs' / 'processing_summary.txt').write_text(text, encoding='utf-8')
         tokens = record.get('usage') or {}
         parts = [*tokens.get('lead', []), *tokens.get('scouts', []), *tokens.get('reviews', [])]
         reviews = record.get('reviews') or []
+        spent = run_spent(parts, record.get('seconds') or 0)
         updates = {
             # None when the run never reached its checks, so the screen shows no green pills for a failed start.
             'engine_check': {
@@ -661,23 +792,15 @@ class SandboxEngine:
             'cut_short': record.get('cut_short'),  # turns, tokens, day, time or service: the agent did not finish
             'artifacts': self.artifacts(job_id, status == 'completed'),
             'summary': summary,
-            'report': final_report,  # None for a run that ended without one; older runs have only the summary
+            # None for a run that ended without one; older runs have only the summary. Lines to keep for a client are
+            # offered once per run: a run continued after they were saved or put away does not offer them again.
+            'report': without_offer(final_report, store.get(job_id).get('offer')),
             'unresolved': unresolved,
-            'request_count': sum(p.get('requests', 0) for p in parts),
-            'usage': {
-                'input_tokens': sum(p.get('input_tokens', 0) for p in parts),
-                'output_tokens': sum(p.get('output_tokens', 0) for p in parts),
-            },
+            'request_count': spent['requests'],
+            'usage': {k: spent[k] for k in ('input_tokens', 'cached_input_tokens', 'output_tokens')},  # this run's
         }
         final = {}
-        store.add_spend(updates['usage']['input_tokens'] + updates['usage']['output_tokens'])
-
-        spent = {
-            'seconds': record.get('seconds') or 0,
-            'requests': updates['request_count'],
-            'input_tokens': updates['usage']['input_tokens'],
-            'output_tokens': updates['usage']['output_tokens'],
-        }
+        store.add_spend(spent['input_tokens'] + spent['output_tokens'])
 
         def apply(job):
             # What each run of this job took, so the job's whole time and usage can be shown, not only the last run's.

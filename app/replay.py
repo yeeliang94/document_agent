@@ -14,13 +14,16 @@ applied only if its check passes, see app/tidy.py).
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import threading
 import uuid
 from pathlib import Path
 
-from . import cases, feedback, preview
+from . import cases, costs, feedback, preview
 from .cleaning import now
+
+log = logging.getLogger(__name__)
 
 LOCK = threading.Lock()  # one writer at a time for a check's record
 KEPT_CHECKS = 10  # records kept per playbook; the jobs of a check are removed once a later check starts
@@ -215,8 +218,8 @@ def finished(store, job: dict) -> dict | None:
     else:
         note = 'the test no longer exists' if not case else f'the run ended as {job["status"]}'
         result = {'passed': None, 'got': None, 'note': note}
-    usage = job.get('usage') or {}
-    result.update(at=now(), check=check_id, job_id=job['id'], tokens=usage.get('input_tokens', 0) + usage.get('output_tokens', 0))  # fmt: skip
+    used = costs.job_tokens(job)  # every engine run of the replay, not only its last
+    result.update(at=now(), check=check_id, job_id=job['id'], tokens=used['input_tokens'] + used['output_tokens'])  # fmt: skip
     with LOCK:
         try:
             check = read(store, playbook_id, check_id)
@@ -229,6 +232,12 @@ def finished(store, job: dict) -> dict | None:
         entry.update(status=status, **{k: result[k] for k in ('got', 'note', 'tokens') if k in result})
         closed = _settle(check)
         _write(store, check)
+        # Counted once, here, as its case gets its result: the job itself is removed when a later check starts. A
+        # failed tally is logged and never stops the case being scored or the check closing.
+        try:
+            store.add_replay_spend(playbook_id, used)
+        except Exception:  # noqa: BLE001 - see above
+            log.exception('Could not add a replayed test to its playbook spend')
     if case and check.get('candidate') is None:  # a candidate's results say nothing about the saved instructions
         cases.add_replay(store, playbook_id, case['id'], {**result, 'version': check['version']})
     words = {'passed': 'still right', 'failed': 'no longer right', 'error': 'could not be checked'}[status]

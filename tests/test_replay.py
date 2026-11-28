@@ -507,5 +507,6 @@ def test_the_activity_tab_reads_the_latest_entries_first_and_a_job_adds_up_its_r
             'seconds': 12.5,
             'requests': 3,
             'input_tokens': 900,
+            'cached_input_tokens': 0,
             'output_tokens': 100,
         }

@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import date
@@ -18,6 +19,7 @@ DAY_FLOOR = 50_000  # tokens; less than this cannot finish even a small run
 class Store:
     def __init__(self, root: Path):
         self.root = root
+        self._held, self._lock = {}, threading.Lock()  # tokens held for runs going now (hold)
         root.mkdir(parents=True, exist_ok=True)
         self.db = root / 'jobs.db'
         with self.connect() as c:
@@ -27,6 +29,8 @@ class Store:
                 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
                 CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS spend(day TEXT PRIMARY KEY, tokens INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS replay_spend(playbook_id TEXT PRIMARY KEY, runs INTEGER NOT NULL,
+                    input_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL);
             """)
         self.playbooks = Playbooks(self)
         self.clients = Clients(self)
@@ -70,7 +74,7 @@ class Store:
 
     def path(self, job_id):
         if not re.fullmatch('[a-f0-9]{32}', job_id):
-            raise ValueError('Invalid job ID')
+            raise ValueError('That run no longer exists.')
         return self.root / 'jobs' / job_id
 
     def save(self, job):
@@ -126,6 +130,43 @@ class Store:
             ).fetchall()
         return [dict(zip((*fields, 'playbook', 'client', 'client_id', 'title'), r, strict=True)) for r in rows]
 
+    def replay_jobs(self, playbook_id) -> list[str]:
+        """The ids of the hidden jobs that replayed a playbook's past corrections (app/replay.py)."""
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT id FROM jobs WHERE json_extract(data,'$.module')=? AND json_extract(data,'$.replay') IS NOT NULL",
+                (playbook_id,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def playbook_jobs(self, playbook_id):
+        """The runs of one playbook the user started, whole; the hidden replay jobs are left out, as in summaries."""
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT data FROM jobs WHERE json_extract(data,'$.module')=? AND json_extract(data,'$.replay') IS NULL",
+                (playbook_id,),
+            ).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def add_replay_spend(self, playbook_id: str, used: dict):
+        """Tally a replayed test's tokens against its playbook. Its job is removed when a later check starts, so the
+        tally is what keeps them."""
+        with self.connect() as c:
+            c.execute(
+                'INSERT INTO replay_spend VALUES (?,1,?,?,?) ON CONFLICT(playbook_id) DO UPDATE SET runs=runs+1, '
+                'input_tokens=input_tokens+excluded.input_tokens, cached_tokens=cached_tokens+excluded.cached_tokens, '
+                'output_tokens=output_tokens+excluded.output_tokens',
+                (playbook_id, used['input_tokens'], used['cached_tokens'], used['output_tokens']),
+            )
+
+    def replay_spend(self, playbook_id: str) -> dict:
+        with self.connect() as c:
+            row = c.execute(
+                'SELECT runs, input_tokens, cached_tokens, output_tokens FROM replay_spend WHERE playbook_id=?',
+                (playbook_id,),
+            ).fetchone()
+        return dict(zip(('runs', 'input_tokens', 'cached_tokens', 'output_tokens'), row or (0, 0, 0, 0), strict=True))
+
     def delete(self, job_id):
         with self.connect() as c:
             c.execute('DELETE FROM events WHERE job_id=?', (job_id,))
@@ -179,9 +220,22 @@ class Store:
         return row[0] if row else 0
 
     def tokens_left_today(self) -> int | None:
-        """What is left of the day's token limit from the Settings page; None when there is no limit."""
+        """What is left of the day's token limit from the Settings page, less what runs going now hold; None when
+        there is no limit."""
         limit = self.settings()['daily_token_limit_thousands'] * 1000
-        return limit - self.spent_today() if limit else None
+        with self._lock:
+            held = sum(self._held.values())
+        return limit - self.spent_today() - held if limit else None
+
+    def hold(self, job_id: str, tokens: int) -> None:
+        """Set aside part of the day for a run going now. Its spend is written only when it ends, so without this
+        several runs at once would each be given all that is left of the day."""
+        with self._lock:
+            self._held[job_id] = tokens
+
+    def release(self, job_id: str) -> None:
+        with self._lock:
+            self._held.pop(job_id, None)
 
     def day_used_up(self) -> bool:
         """Is too little left of the day to start a run? A run that could only read its files and stop is not

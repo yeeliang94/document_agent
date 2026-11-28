@@ -22,8 +22,8 @@ export async function loadVersions() {
 // What a version holds, without the step its line starts with: "saved pay.xlsx; checks passed".
 export const versionWhat = (v) => String(v.description || '').replace(/^Step \d+:?\s*/, '');
 
-// "Step 9: saved pay.xlsx; checks passed" reads as "Step 9 · saved pay.xlsx; checks passed".
-export const versionName = (v) => [`Step ${v.step}`, versionWhat(v)].filter(Boolean).join(' · ');
+// "Step 9: saved pay.xlsx; checks passed", whatever the description itself starts with.
+export const versionName = (v) => [`Step ${v.step}`, versionWhat(v)].filter(Boolean).join(': ');
 
 const at = (v) => (v.at ? new Date(v.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
 
@@ -55,7 +55,7 @@ export function versionMenuHtml(path, shown) {
   const items = list
     .map(
       (v, i) => `<button role="menuitemradio" aria-checked="${v.number === current}" data-pick-version="${i === 0 ? 'latest' : v.number}">
-        <span class="v">Version ${v.number}${what(v) ? ` · ${esc(what(v))}` : ''}</span><span class="when">${esc(at(v))}</span></button>`,
+        <span class="v">Version ${v.number}${what(v) ? `: ${esc(what(v))}` : ''}</span><span class="when">${esc(at(v))}</span></button>`,
     )
     .join('');
   return `<span class="menu-wrap"><button type="button" class="picker" data-menu="version" aria-haspopup="menu" aria-expanded="${open}">Version ${current}${icon('down1')}</button>

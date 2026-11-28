@@ -122,7 +122,6 @@ def test_a_free_form_run_goes_through_the_engine_with_the_proof_level_of_the_set
         done = wait_for_job(client, job['id'], {'completed'})
         # A file the agent put in a folder of its own is listed, and can be opened.
         assert [(a['name'], a['path']) for a in done['artifacts']] == [
-            ('processing_summary.txt', 'outputs/processing_summary.txt'),
             ('reports/summary.md', 'outputs/reports/summary.md'),
         ]
         shown = client.get(f'/api/jobs/{job["id"]}/preview', params={'path': 'outputs/reports/summary.md'})

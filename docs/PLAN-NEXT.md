@@ -2,7 +2,9 @@
 
 **Overall Progress:** `95%` (Phases 1 to 6 are built, reviewed and run live; scanned pages, failure handling and a daily limit are done; several runs at once and a money figure are not built)
 **Builds on:** `docs/PLAN.md` (Playbooks, all 8 phases done, branch `playbooks`)
-**Last Updated:** 2026-11-22
+**Last Updated:** 2026-11-26
+
+**Closed 2026-11-26:** Steps 17 and 18 moved to `docs/PLAN-IMPROVEMENTS.md` (Phase 15, Steps 51-52). The checklist below was settled while building: the tick box was removed (Step 9), replay defaults to large changes (Step 14), the playbook work is on `main` (brought in through a different branch, so the old `playbooks` branch itself was never merged), and the live runs were done (Steps 5, 7, 10). Step 20's final report is replaced by each phase's own review.
 
 ## Summary
 

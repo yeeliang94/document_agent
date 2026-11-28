@@ -10,25 +10,28 @@ import os
 import re
 import shutil
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import InvalidStatus
 
-from . import app_settings, cases, feedback, jobstatus, links, plain_errors, preview, replay, tuning
+from . import app_settings, cases, costs, feedback, jobstatus, links, plain_errors, preview, replay, tuning, voice
 from .config import ROOT, Settings, settings
 from .engine import versions
 from .engine.agent import UPLOAD_LIMIT
 from .engine.checks import normal_decision, read_map
 from .engine.rules import check_format_definition
+from .engine.runstore import lead_scripts, read_code
 from .engine.service import DAY_USED_UP
 from .files import add_file, add_zip, added_name, is_junk, within
 from .playbooks import MAX_NAME, MAX_TEXT, StaleVersion
@@ -81,18 +84,22 @@ def create_app(settings_override: Settings | None = None):
     api.state.store = store
     api.state.runner = runner
     api.state.settings = conf
+    api.state.voice_connect = ws_connect  # where the live voice relay opens its session; tests put a fake here
 
     trusted_hosts = conf.trusted_hosts()
     allowed_origins = {o.rstrip('/') for o in conf.allowed_origins}
 
-    @api.middleware('http')
-    async def boundary(request: Request, call_next):
+    def known_host(header: str) -> bool:
         # A DNS-rebinding page sends its own name as Host, so reject unknown hosts.
         try:
-            host = urlparse('//' + request.headers.get('host', '')).hostname or ''
+            host = urlparse('//' + header).hostname or ''
         except ValueError:
             host = ''
-        if '*' not in trusted_hosts and host not in trusted_hosts:
+        return '*' in trusted_hosts or host in trusted_hosts
+
+    @api.middleware('http')
+    async def boundary(request: Request, call_next):
+        if not known_host(request.headers.get('host', '')):
             return JSONResponse({'detail': 'Unknown host name. Add it to DI_ALLOWED_HOSTS.'}, 400)
         if request.url.path.startswith('/api/'):
             origin = (request.headers.get('origin') or '').rstrip('/')
@@ -113,7 +120,7 @@ def create_app(settings_override: Settings | None = None):
         try:
             return store.get(job_id)
         except (KeyError, ValueError):
-            raise HTTPException(404, 'Job not found') from None
+            raise HTTPException(404, 'That run no longer exists.') from None
 
     @api.get('/health/readiness')
     async def readiness():
@@ -176,7 +183,24 @@ def create_app(settings_override: Settings | None = None):
 
     @api.get('/api/playbooks/{playbook_id}')
     def playbook_get(playbook_id):
-        return playbook_call(lambda: playbooks.get(playbook_id))
+        # cost: its kept runs and its replayed tests, priced now (app/costs.py); None when no price is set.
+        return playbook_call(lambda: {**playbooks.get(playbook_id), 'cost': costs.playbook_cost(store, playbook_id)})
+
+    @api.delete('/api/playbooks/{playbook_id}')
+    def playbook_delete(playbook_id):
+        """Remove a playbook (Playbooks.delete). Refused while it is checking past corrections, whose hidden runs
+        need its folder; its own runs are kept and still open."""
+        # Under the checks' lock, so a check cannot start on it while it is being removed.
+        with replay.LOCK:
+            if replay.running(store, playbook_id):
+                raise HTTPException(409, 'This playbook is checking past corrections. Delete it when the check ends.')
+            kept = len(store.playbook_jobs(playbook_id))
+            gone = playbook_call(lambda: playbooks.delete(playbook_id))
+        # The hidden runs its last check of past corrections left behind go too: nothing can open them now.
+        for hidden in store.replay_jobs(playbook_id):
+            store.delete(hidden)
+            shutil.rmtree(store.path(hidden), ignore_errors=True)
+        return {**gone, 'runs_kept': kept}
 
     @api.patch('/api/playbooks/{playbook_id}')
     def playbook_rename(playbook_id, body: PlaybookInput):
@@ -371,13 +395,15 @@ def create_app(settings_override: Settings | None = None):
     @api.put('/api/settings')
     def app_settings_put(body: SettingsInput):
         try:
-            return settings_page(store.save_settings(body.values))
+            saved = settings_page(store.save_settings(body.values))
+            runner.limit_changed()  # a raised 'Runs at once' starts a waiting run now
+            return saved
         except app_settings.SettingError as error:
             # field says which setting the sentence is about, so the page shows it beside that field.
             return JSONResponse({'detail': str(error), 'field': error.field}, 400)
 
     @api.get('/api/jobs')
-    async def jobs():
+    def jobs():
         return store.summaries()
 
     @api.post('/api/jobs', status_code=201)
@@ -485,9 +511,14 @@ def create_app(settings_override: Settings | None = None):
                 load_workbook(definition, read_only=True).close()
         return manifest
 
+    def job_view(found):
+        # Every engine run of the job, priced now (app/costs.py); None when no price is set.
+        return {**found, 'cost': costs.job_cost(found, store.settings())}
+
+    # Plain functions, not async: their database reads would otherwise hold up every other request, voice included.
     @api.get('/api/jobs/{job_id}')
-    async def job(job_id):
-        return get(job_id)
+    def job(job_id):
+        return job_view(get(job_id))
 
     class JobInput(BaseModel):
         name: str = Field(max_length=MAX_NAME * 2)
@@ -501,11 +532,56 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(400, f'Use a name of at most {MAX_NAME} characters')
         return store.update(job_id, name=name or None)
 
+    class KeepInput(BaseModel):
+        action: Literal['save', 'undo', 'dismiss']
+
+    @api.post('/api/jobs/{job_id}/keep-for-client')
+    def keep_for_client(job_id, body: KeepInput):
+        """What a client's first run found worth keeping (report.for_next_time), offered on the run: save adds it to
+        the client's notes as a new version, undo brings back the version before, dismiss puts the offer away."""
+        job = get(job_id)
+        client = job.get('client') or {}
+        keep = (job.get('report') or {}).get('for_next_time') or []
+        if not client.get('id') or not keep:
+            raise HTTPException(400, 'This run has nothing to keep for a client.')
+        shown = lambda: job_view(get(job_id))  # noqa: E731 - the run as GET /api/jobs/{id} gives it, cost included
+        if body.action == 'dismiss':
+            store.mutate(job_id, lambda j: (j.get('offer') or {}).get('saved') or j.update(offer={'dismissed': True}))
+            return shown()
+        if body.action == 'save':
+            # Claimed in one write, so a second click or a retry cannot add the lines twice.
+            claimed = []
+
+            def claim(j):
+                offer = j.get('offer') or {}
+                if not offer.get('saved') and not offer.get('saving'):
+                    j['offer'] = {'saving': True}
+                    claimed.append(True)
+
+            store.mutate(job_id, claim)
+            if not claimed:
+                return shown()
+            try:
+                # Only onto the notes the run was made with: notes written since (another run, a person) win, and
+                # the lines are left for the person to add by hand.
+                text = '\n'.join(f'- {line}' for line in keep)
+                saved = client_call(lambda: clients.save(client['id'], text, 'learned', 'Kept from its first run',
+                                                         based_on=client.get('version'), job_id=job_id))  # fmt: skip
+            except BaseException:
+                store.update(job_id, offer={})
+                raise
+            return job_view(store.update(job_id, offer={'saved': saved['version']}))
+        saved = (job.get('offer') or {}).get('saved')
+        if not saved:
+            raise HTTPException(400, 'Nothing was saved from this run to undo.')
+        client_call(lambda: clients.restore(client['id'], saved - 1, based_on=saved))
+        return job_view(store.update(job_id, offer={}))
+
     @api.delete('/api/jobs/{job_id}', status_code=204)
     def job_delete(job_id):
         """Remove a run for good: its record, its events and its folder. A run that is going is refused."""
         j = get(job_id)
-        if j['status'] in jobstatus.ACTIVE or runner.active == job_id:
+        if j['status'] in jobstatus.ACTIVE or runner.is_running(job_id):
             raise HTTPException(409, 'This run is still going. Stop it before you delete it.')
         store.delete(job_id)
         shutil.rmtree(store.path(job_id), ignore_errors=True)
@@ -517,8 +593,8 @@ def create_app(settings_override: Settings | None = None):
         if not conf.api_key:
             raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
         if j['status'] not in jobstatus.STARTABLE or j.get('legacy'):
-            raise HTTPException(409, 'This job cannot start in its current state')
-        if runner.active == job_id:
+            raise HTTPException(409, 'This run cannot start now.')
+        if runner.is_running(job_id):
             raise HTTPException(409, 'The previous operation is still finishing')
         if not j['files']:
             raise HTTPException(400, 'No usable input files')
@@ -531,7 +607,7 @@ def create_app(settings_override: Settings | None = None):
     async def pause(job_id):
         j = get(job_id)
         if j['status'] not in jobstatus.PAUSABLE:
-            raise HTTPException(409, 'Job is not running')
+            raise HTTPException(409, 'This run is not going.')
         store.mutate(job_id, lambda job: job.update(status='pausing' if job['status'] == 'running' else 'paused'))
         store.event(job_id, 'job.pause_requested', 'Pause requested; completing current operation.', type='job')
         return get(job_id)
@@ -540,7 +616,7 @@ def create_app(settings_override: Settings | None = None):
     async def cancel(job_id):
         j = get(job_id)
         if j['status'] in jobstatus.FINISHED:
-            raise HTTPException(409, 'Job has already finished')
+            raise HTTPException(409, 'This run has already finished.')
         store.update(job_id, status='cancelled')
         store.event(job_id, 'job.cancelled', 'Cancelled; existing output retained.', type='job')
         return get(job_id)
@@ -549,14 +625,14 @@ def create_app(settings_override: Settings | None = None):
     async def answer(job_id, body: TextInput):
         j = get(job_id)
         if j['status'] != 'waiting' or not j.get('question'):
-            raise HTTPException(409, 'Job is not awaiting an answer')
+            raise HTTPException(409, 'This run is not waiting for an answer.')
         if not body.answer.strip():
             raise HTTPException(400, 'Enter an answer')
         store.update(job_id, answer=body.answer)
         store.event(job_id, 'user.answer', body.answer, type='user')
         # A run still holding its sandbox picks the answer up itself. Otherwise, or once that run has ended, the
         # runner queues the job; the answer was saved first, so whichever side looks last finds it.
-        if runner.active != job_id:
+        if not runner.is_running(job_id):
             await runner.resume_if_answered(job_id)
         return get(job_id)
 
@@ -600,7 +676,7 @@ def create_app(settings_override: Settings | None = None):
         # is still letting go of it: queuing then would undo a cancel the engine has not seen yet, or be overwritten
         # as that run settles. A finished run needs no wait: the runner starts it again as it lets go
         # (runtime.resume_if_answered).
-        if job['status'] not in jobstatus.ACTIVE | jobstatus.FINISHED and runner.active == job['id']:
+        if job['status'] not in jobstatus.ACTIVE | jobstatus.FINISHED and runner.is_running(job['id']):
             raise HTTPException(409, 'The previous operation is still finishing')
 
     def too_big() -> str:
@@ -737,7 +813,7 @@ def create_app(settings_override: Settings | None = None):
         def claim(job):  # in one write with the check, so a second click or a Start cannot run alongside
             if job['status'] not in jobstatus.STARTABLE | {'completed'} or job.get('legacy'):
                 before['refused'] = 'Stop the run before continuing from a version.'
-            elif runner.active == job_id:
+            elif runner.is_running(job_id):
                 before['refused'] = 'The previous operation is still finishing'
             else:
                 before['status'] = job['status']
@@ -755,7 +831,8 @@ def create_app(settings_override: Settings | None = None):
             if isinstance(error, KeyError):
                 raise HTTPException(404, 'That version is no longer kept.') from None
             raise HTTPException(409, plain_errors.sentence(error)) from None
-        store.update(job_id, resume_from=version, start_over=None, error=None,
+        # The plan described the work after that version too, which was set aside: the agent writes a new one.
+        store.update(job_id, resume_from=version, start_over=None, error=None, plan=None,
                      artifacts=runner.engine.artifacts(job_id, False))  # fmt: skip
         store.event(job_id, 'user.continue_from', f'Continuing from version {number}: {version["description"]}',
                     type='user', version=number)  # fmt: skip
@@ -778,7 +855,7 @@ def create_app(settings_override: Settings | None = None):
         def claim(job):  # in one write with the check, so a second click or a Start cannot run alongside
             if job['status'] not in jobstatus.STARTABLE | {'completed'} or job.get('legacy'):
                 before['refused'] = 'Stop the run before starting over.'
-            elif runner.active == job_id:
+            elif runner.is_running(job_id):
                 before['refused'] = 'The previous operation is still finishing'
             else:
                 before['status'] = job['status']
@@ -794,7 +871,7 @@ def create_app(settings_override: Settings | None = None):
         except OSError as error:
             store.update(job_id, status=before['status'])
             raise HTTPException(409, plain_errors.sentence(error)) from None
-        store.update(job_id, start_over=True, resume_from=None, error=None, artifacts=[])
+        store.update(job_id, start_over=True, resume_from=None, error=None, artifacts=[], plan=None)
         store.event(job_id, 'user.start_over', 'Starting over from the beginning', type='user')
         await runner.enqueue(job_id)
         return get(job_id)
@@ -836,7 +913,7 @@ def create_app(settings_override: Settings | None = None):
         if j['status'] not in jobstatus.ACTIVE:  # a stopped run starts again to act on them
             if not conf.api_key:
                 raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
-            if runner.active == job_id:
+            if runner.is_running(job_id):
                 raise HTTPException(409, 'The previous operation is still finishing')
         if any(not c.text.strip() for c in body.comments):
             raise HTTPException(400, 'Enter a comment')
@@ -848,7 +925,8 @@ def create_app(settings_override: Settings | None = None):
             raise HTTPException(400, clean(str(error))) from None
         # Queue the job unless a run is going and will pick the comments up itself. The comments were saved first,
         # so whichever side looks last finds them.
-        if not made.get('duplicate') and runner.active != job_id and get(job_id)['status'] not in jobstatus.ACTIVE:
+        going = runner.is_running(job_id) or get(job_id)['status'] in jobstatus.ACTIVE
+        if not made.get('duplicate') and not going:
             await runner.submit(job_id)
         return {'round': made, 'job': get(job_id)}
 
@@ -897,9 +975,28 @@ def create_app(settings_override: Settings | None = None):
         return {'files': files}
 
     @api.get('/api/jobs/{job_id}/events')
-    async def events(job_id, after: int = 0):
+    def events(job_id, after: int = 0):
         get(job_id)
         return store.events(job_id, after)
+
+    @api.get('/api/jobs/{job_id}/script')
+    def script(
+        job_id, run: int = Query(ge=1, le=999), name: str = '', index: int = Query(0, ge=0), of: int = Query(0, ge=0)
+    ):
+        """One of the lead agent's scripts in a run, with what it printed, for an action opened on the run screen.
+        A run made before each action named its script gives its place instead: the index-th of the `of` scripts the
+        screen shows, used only when the run kept exactly that many."""
+        get(job_id)
+        folder = store.path(job_id) / 'engine' / f'run-{run:02d}' / 'code'
+        if not name:
+            kept = lead_scripts(folder)
+            if not index or len(kept) != of or index > len(kept):
+                raise HTTPException(404, 'The code of this step was not kept.')
+            name = kept[index - 1]
+        try:
+            return read_code(folder, name)
+        except KeyError:
+            raise HTTPException(404, 'The code of this step was not kept.') from None
 
     @api.get('/api/jobs/{job_id}/stream')
     async def stream(job_id, request: Request, after: int = 0):
@@ -997,10 +1094,10 @@ def create_app(settings_override: Settings | None = None):
             raise job_file_error(error) from None
 
     @api.get('/api/jobs/{job_id}/find')
-    def file_find(job_id, path: str, q: str = Query(min_length=1, max_length=200)):
+    def file_find(job_id, path: str, q: str = Query(min_length=1, max_length=200), version: int | None = None):
         get(job_id)
         try:
-            hits, more, text = preview.find_in_pdf(store.path(job_id), path, [q])
+            hits, more, text = preview.find_in_pdf(store.path(job_id), path, [q], version=version)
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
         except Exception as error:  # noqa: BLE001 - a damaged PDF
@@ -1041,6 +1138,111 @@ def create_app(settings_override: Settings | None = None):
         except (FileNotFoundError, ValueError) as error:
             raise job_file_error(error) from None
         return FileResponse(found, filename=found.name)
+
+    # --- Voice: speak instead of type (app/voice.py) ---------------------------------------------------------
+    # The HTTP boundary above does not see WebSockets, so the live route checks host, origin and token itself.
+    # A browser cannot add headers to a WebSocket, so the access token comes in the first message, not the address.
+
+    def same_origin(ws: WebSocket) -> bool:
+        origin = (ws.headers.get('origin') or '').rstrip('/')
+        if origin in allowed_origins:
+            return True
+        parts = urlparse(origin)
+        return parts.scheme in ('http', 'https') and parts.netloc == ws.headers.get('host', '')
+
+    @api.websocket('/api/voice/live')
+    async def voice_live(ws: WebSocket):
+        if not known_host(ws.headers.get('host', '')) or not same_origin(ws):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+
+        async def refuse(message: str, action: str = ''):
+            with suppress(Exception):
+                await ws.send_json({'type': 'error', 'message': message, 'action': action})
+                await ws.close(code=1011)
+
+        try:
+            first = json.loads(await asyncio.wait_for(ws.receive_text(), 10))
+            token = str(first.get('token') or '') if isinstance(first, dict) else ''
+        except (TimeoutError, ValueError, KeyError, WebSocketDisconnect):
+            return await refuse('The voice connection did not start properly. Try again.', 'retry')
+        if conf.access_token and not hmac.compare_digest(token.encode(), conf.access_token.encode()):
+            return await refuse('Access token required.')
+        if not conf.api_key:
+            return await refuse('Add OPENAI_API_KEY to .env and restart the application.')
+        values = store.settings()
+        if not values['voice_live']:
+            return await refuse('Show words while you speak is turned off in Settings.', 'settings')
+        minutes = values['voice_max_minutes']
+        settle = values['voice_settle_seconds']
+        opened = False
+        try:
+            async with api.state.voice_connect(
+                voice.live_url(conf.base_url),
+                additional_headers=voice.headers(conf.api_key, values['litellm_provider']),
+                open_timeout=10,
+                max_size=None,
+            ) as upstream:
+                await upstream.send(json.dumps(voice.session_update(values['voice_live_model'])))
+                await ws.send_json({'type': 'ready'})
+                opened = True
+                # A page that opens a session and then sends nothing does not hold it open past the longest recording.
+                await asyncio.wait_for(voice.relay(ws, upstream, minutes, settle), minutes * 60 + settle + 30)
+        except WebSocketDisconnect:
+            return
+        except voice.VoiceError as error:
+            return await refuse(str(error), error.action)
+        except TimeoutError:
+            if opened:
+                return await refuse(voice.limit_message(minutes))
+            return await refuse('The transcription service did not answer in time. Try again.', 'retry')
+        except InvalidStatus as error:
+            code = error.response.status_code
+            return await refuse(f'The transcription service refused the live connection (HTTP {code}). If your gateway '
+                                'does not allow it, choose "After you stop" for voice in Settings.', 'settings')  # fmt: skip
+        except Exception as error:
+            return await refuse(f'Could not reach the transcription service ({type(error).__name__}). Try again.', 'retry')
+        with suppress(Exception):
+            await ws.close()
+
+    @api.get('/api/voice')
+    def voice_config():
+        values = store.settings()
+        minutes = values['voice_max_minutes']
+        mode = values['voice_mode'] if values['voice_live'] else 'after'  # live only where the service offers it
+        return {'mode': mode, 'max_minutes': minutes, 'limit_message': voice.limit_message(minutes)}
+
+    @api.post('/api/voice/transcribe')
+    async def voice_transcribe(request: Request):
+        """The recording arrives as the request body, read into memory up to the limit and never written to disk."""
+        if not conf.api_key:
+            raise HTTPException(503, 'Add OPENAI_API_KEY to .env and restart the application.')
+        values = store.settings()
+        minutes = values['voice_max_minutes']
+        # A browser recording is compressed far below this: 16-bit audio at 24 kHz, for the longest recording set.
+        limit = min(voice.FILE_LIMIT_BYTES, minutes * 60 * voice.BYTES_PER_SECOND)
+        if int(request.headers.get('content-length') or 0) > limit:
+            raise HTTPException(413, voice.too_long_message(minutes))
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > limit:
+                raise HTTPException(413, voice.too_long_message(minutes))
+        if not data:
+            raise HTTPException(400, 'The recording was empty.')
+        client = runner.engine.endpoint(values).client().with_options(timeout=120, max_retries=0)
+        name = voice.file_name(request.headers.get('content-type', ''))
+
+        async def lines():
+            try:
+                async for part in voice.transcribe_file(client, values['voice_file_model'], name, bytes(data)):
+                    yield json.dumps(part) + '\n'
+            except Exception as error:
+                failed = voice.refused(getattr(error, 'message', None) or str(error))
+                yield json.dumps({'type': 'error', 'message': str(failed), 'action': failed.action}) + '\n'
+
+        return StreamingResponse(lines(), media_type='application/x-ndjson')
 
     @api.post('/api/connection-check')
     async def connection_check():

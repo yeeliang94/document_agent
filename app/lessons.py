@@ -41,7 +41,7 @@ def note(store, job_id: str, comment: str, lesson: str, scope: str = 'playbook')
     if not open_rounds:
         return 'There is no open round of comments. Lessons are taken only from comments the user pinned to a file.'
     if not _playbook_id(job):
-        return 'This job has no playbook to keep a lesson in.'
+        return 'This run has no playbook to keep a lesson in.'
     label = re.fullmatch(r'\s*(\d+)\.(\d+)\s*', comment or '')
     records = {r['number']: r for r in feedback.rounds(store, job_id) if r['number'] in open_rounds}
     found = None

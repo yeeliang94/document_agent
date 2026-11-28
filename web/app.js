@@ -2,31 +2,35 @@
 // files.js and pages.js.
 
 import {
-  $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, isActive, jobStatus, jobTitle,
-  jobUrl, state, toast,
+  $, api, attr, baseName, btn, currentPlaybook, download, duration, esc, fileUrl, icon, inGroup, isActive, jobStatus, jobTitle, telling,
+  jobUrl, keepPlanOpen, state, toast,
 } from './core.js'; // prettier-ignore
 import {
   MAX_BLOCK, blockCells, chooseRemember, columnName, commentAction, commenting, dropComment, editPin, forget, keepComment,
-  loadRounds, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
+  loadRounds, placePop, popHtml, resolveComment, sendComments, sendReply, sentComment, syncPop, syncReply, writeAt,
 } from './comments.js'; // prettier-ignore
 import {
-  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, refreshClients, submitClientDialog,
-  suggestClient, syncClient, typeNotes,
+  chooseRunClient, clientActions, clientClick, clientDialogs, clientPage, clientsPage, offerHtml, offerLocal, offerServer,
+  openClient, refreshClients,
+  submitClientDialog, suggestClient, syncClient, typeNotes,
 } from './clients.js'; // prettier-ignore
 import { backFile, closeFile, filesHtml, loadMap, openFile, openSpot, proofHtml, turnPage } from './files.js';
 import { loadLinks } from './links.js';
 import { applyWidths } from './panels.js';
-import { logPage, settingProblem, settingsChanged, settingsPage, settingsValues, setupPage, startBlocked } from './pages.js';
+import { logPage, settingProblem, settingsChanged, settingsPage, settingsValues, setupPage, startBlocked, startWhy } from './pages.js';
 import {
   applyPlace, canFind, closeFind, foundFor, loadChanges, locateRow, openFind, revealMarks, stepChange, stepFind, typed,
 } from './review.js'; // prettier-ignore
 import {
-  askTune, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab, startDraft,
-  submitDialog, syncPlaybook, uploadSkill,
+  askTune, leaveVersion, openPlaybook, playbookActions, playbookClick, playbookDialogs, playbookPage, playbooksPage, refreshPlaybookTab,
+  startDraft, submitDialog, syncPlaybook, uploadSkill,
 } from './playbooks.js'; // prettier-ignore
+import { askPermission, clearMark, noticeRuns, tabTitle } from './alerts.js';
+import { pageAddress, parseAddress } from './routes.js';
 import { confirmStartOver, deleteRun, renameRun, runItems, submitRun } from './runs.js';
-import { composerHtml, headHtml, nearLimits, stagesHtml, threadHtml } from './thread.js';
+import { composerHtml, headHtml, nearLimits, planHtml, scriptKey, stagesHtml, threadHtml } from './thread.js';
 import { continueFrom, loadVersions } from './versions.js';
+import { dismissVoiceNote, initVoice, rememberCaret, syncVoice, toggleVoice } from './voice.js';
 import { applyZoom, canZoom, wheelZoom, zoomAction } from './zoom.js';
 
 const RUN = `
@@ -35,6 +39,8 @@ const RUN = `
     <section class="chat">
       <header class="chat-head" id="chat-head"></header>
       <div class="stages" id="stages"></div>
+      <div class="plan-wrap" id="plan"></div>
+      <div id="offer"></div>
       <div class="scroll" id="scroll"><div class="thread" id="thread" role="log" aria-label="Conversation with the agent" aria-live="polite"></div></div>
       <div class="composer" id="composer-wrap"></div>
     </section>
@@ -71,8 +77,9 @@ function topnavHtml() {
   const view = listView();
   const here = view === 'run' ? (state.job ? 'job:' + state.job.id : 'new') : view;
   const option = (value, label) => `<option value="${esc(value)}" ${attr('selected', value === here)}>${esc(label)}</option>`;
+  const when = telling(state.jobs);
   const runs = state.jobs.map((j) =>
-    option('job:' + j.id, `${jobTitle(j)}, ${new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}`),
+    option('job:' + j.id, `${jobTitle(j)}, ${when[j.id] || new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}`),
   );
   return `<div class="brand">Document Intelligence</div>
     <select aria-label="Go to" data-nav>${option('new', 'New run')}${runs.join('')}${state.job ? option('log', 'Technical log') : ''}${option('clients', 'Clients')}${option('playbooks', 'Playbooks')}${option('settings', 'Settings')}</select>`;
@@ -123,7 +130,8 @@ function render() {
   const selection = focused ? document.activeElement.selectionStart : null;
   paint('#side', sideHtml());
   paint('#topnav', topnavHtml());
-  document.title = `${state.job && state.view === 'run' ? jobTitle(state.job) + ' · ' : ''}Document Intelligence`;
+  document.body.classList.toggle('loading', !!state.loading);
+  document.title = tabTitle(`${state.job && state.view === 'run' ? jobTitle(state.job) + ' - ' : ''}Document Intelligence`);
 
   if (state.view === 'run' && state.job) {
     paint('#main', RUN);
@@ -131,21 +139,33 @@ function render() {
     paint('#notices', noticesHtml());
     paint('#chat-head', headHtml());
     paint('#stages', stagesHtml());
+    paint('#plan', planHtml());
+    paint('#offer', offerHtml());
     const box = $('#scroll');
     const first = box.__job !== state.job.id;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-    if (paint('#thread', threadHtml()) && (first || nearBottom)) box.scrollTop = box.scrollHeight;
+    const drewThread = paint('#thread', threadHtml());
+    if (drewThread && (first || nearBottom)) box.scrollTop = box.scrollHeight;
     box.__job = state.job.id;
-    state.seen = state.events.reduce((n, e) => Math.max(n, e.seq), state.seen);
+    // New items animate in once. Once drawn they count as seen, and the conversation is noted as it reads without
+    // their animation, so the next draw with nothing new leaves it alone (no lost selection, no replayed animation).
+    const newest = state.events.at(-1)?.seq || 0;
+    if (newest > state.seen) {
+      state.seen = newest;
+      if (drewThread) $('#thread').__html = threadHtml();
+    }
     paint('#composer-wrap', composerHtml());
     syncComposer();
     // A redraw of the viewer (a pin added, a row marked) must not lose the person's place in a long sheet.
-    const places = ['.files-body', '.sheet', '.shot'].map((sel) => [sel, $(sel)?.scrollTop, $(sel)?.scrollLeft]);
+    const places = ['.files-body', '.sheet', '.shot', '.rail'].map((sel) => [sel, $(sel)?.scrollTop, $(sel)?.scrollLeft]);
     const drawn = paint('#files', filesHtml());
     if (drawn) for (const [sel, top, left] of places) $(sel)?.scrollTo(left || 0, top || 0);
     applyZoom(drawn);
     revealMarks($('#files'));
     tick();
+    loadOpenScript();
+  } else if (starting) {
+    paint('#main', '<div class="page"><p class="empty">Loading</p></div>');
   } else {
     const pages = {
       run: setupPage, playbooks: playbooksPage, playbook: playbookPage, clients: clientsPage, client: clientPage,
@@ -159,6 +179,7 @@ function render() {
   paint('#pop-root', popHtml());
   syncPop();
   syncReply();
+  syncVoice(); // the recording clock, and the box it writes into locked while it listens
   loadLinks(render); // cells and files named in what was just drawn become links once the server has checked them
 
   const el = focused && $('#' + focused);
@@ -166,6 +187,7 @@ function render() {
     el.focus();
     if (typeof selection === 'number' && ['textarea', 'search', 'text'].includes(el.type)) el.setSelectionRange(selection, selection);
   }
+  syncAddress();
 }
 
 function detail(event) {
@@ -176,6 +198,51 @@ function detail(event) {
 }
 
 // --- Actions ---------------------------------------------------------------
+
+// Save sits at the top of a long page, so a refused value is brought into view and its field focused, once the
+// page has been drawn with the message beside it.
+function showSettingError() {
+  setTimeout(() => {
+    const name = Object.keys(state.settingsErrors || {})[0];
+    const field = name && ($(`#setting-${name}`) || $(`#setting-${name}-error`));
+    if (!field) return;
+    field.scrollIntoView({ block: 'center' });
+    field.focus?.({ preventScroll: true });
+  });
+}
+
+// An action opened in full, or closed again.
+function openAct(el) {
+  const seq = Number(el.dataset.act);
+  state.act = state.act === seq ? null : seq;
+  state.actCode = false;
+  render();
+}
+
+// The open action's code and what it printed, fetched after each drawing until they are in. A script still being
+// saved by a run that is going (its name comes a moment after it finishes), or a failed request, is asked for again a
+// few seconds later; only a finished run's 404 settles it as not kept.
+const RETRY_MS = 3000;
+async function loadOpenScript() {
+  const el = $('.step.act.on');
+  const { scriptRun: run, scriptName: name, scriptIndex: index, scriptOf: of } = el?.dataset || {};
+  if (!run) return;
+  const job = state.job.id;
+  const key = scriptKey(job, { run, name, index, of });
+  const had = state.scripts[key];
+  if (had && (had.code !== undefined || had.final || had.pending || Date.now() - had.at < RETRY_MS)) return;
+  state.scripts[key] = { ...had, pending: true };
+  const query = new URLSearchParams(name ? { run, name } : { run, index, of });
+  try {
+    state.scripts[key] = await api(jobUrl(`/script?${query}`));
+  } catch (e) {
+    const gone = e.status === 404 && !isActive();
+    const error = gone ? 'The code of this step was not kept.' : e.status === 404 ? 'Not ready yet.' : `It could not be loaded: ${e.message}`;
+    state.scripts[key] = { error, final: gone, at: Date.now() };
+    if (!gone) setTimeout(() => state.job?.id === job && render(), RETRY_MS);
+  }
+  if (state.job?.id === job) render();
+}
 
 async function refreshSettings() {
   try {
@@ -196,25 +263,35 @@ async function refreshConfig() {
 function leaveRun() {
   closeFile();
   Object.assign(state, { events: [], seen: 0, map: null, mapKey: '', mapFilter: 'all', showFiles: false, search: '', filter: 'all' });
+  Object.assign(state, { fileQuery: '', openFolders: new Set(), checksOpen: false });
   Object.assign(state, { commentDraft: null, rounds: [], roundsKey: '', versions: [], versionsKey: '', showVersions: false });
   Object.assign(state, { reply: null, activeComment: '', showResolved: false, menu: null });
   Object.assign(state.changes, { since: null, step: 0, jump: false }); // version numbers belong to one run
   state.toggled.clear();
+  Object.assign(state, { act: null, actCode: false, scripts: {} });
 }
 
+let loads = 0; // each run opened counts one; a load another page or run has overtaken is dropped
+
+// True once the run is on show; false when the person went elsewhere before it arrived.
 async function loadJob(id) {
+  const ticket = ++loads;
+  const from = state.view;
   state.loading = true;
+  render(); // the page on show fades while the run loads, so a click is seen to have done something
   try {
-    const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
-    const events = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=0`);
+    const [job, events] = await Promise.all([api(`/api/jobs/${encodeURIComponent(id)}`), allEvents(id)]);
+    if (ticket !== loads || state.view !== from) return false; // the person went elsewhere meanwhile
     leaveRun();
     Object.assign(state, { job, events, view: 'run', notice: '' });
-    state.seen = events.reduce((n, e) => Math.max(n, e.seq), 0); // an opened run appears whole, without animating in
+    state.seen = events.at(-1)?.seq || 0; // an opened run appears whole, without animating in
     await Promise.all([loadMap(), loadRounds(), loadVersions()]);
+    return true;
   } finally {
-    state.loading = false;
+    if (ticket === loads) state.loading = false;
+    render(); // also after a failure, so the page does not stay faded
+    wake(); // a run opened while it is going shows its progress from the first seconds
   }
-  render();
 }
 
 function newRun() {
@@ -243,6 +320,59 @@ async function uploadAndStart() {
   state.jobs = await api('/api/jobs');
 }
 
+// --- Page addresses: Back, Forward and Refresh go by them (routes.js) ---------------------------------------------
+
+let restoring = true; // until the page the app was opened at is on screen, and while going to an address
+let starting = true; // until then, the page says Loading rather than showing New run
+let replaceNext = false; // the next page takes the place of this one in history (a run just deleted)
+
+// A new page on screen gets its own entry in the browser's history; `depth` counts the app's own entries, so a back
+// arrow can tell whether there is a page of this app to go back to.
+function syncAddress() {
+  if (restoring) return;
+  const want = pageAddress();
+  if (!want || location.hash === want) return;
+  if (replaceNext) history.replaceState(history.state, '', want);
+  else history.pushState({ depth: (history.state?.depth || 0) + 1 }, '', want);
+  replaceNext = false;
+}
+
+async function goTo({ view, id, version }) {
+  if (view === 'run' || view === 'log') {
+    if (state.job?.id !== id && !(await loadJob(id))) return; // overtaken: the page chosen since stays
+    state.view = view;
+  } else if (view === 'playbook') await openPlaybook(id, { version });
+  else if (view === 'client') await openClient(id, { keepTab: true, version });
+  else if (view === 'new') newRun();
+  else await openView(view);
+}
+
+// Opens the page the address names. One that is gone (a deleted run or playbook) opens its list, or New run.
+async function followAddress(first = false) {
+  restoring = true;
+  const page = parseAddress(location.hash);
+  try {
+    await goTo(page);
+  } catch (error) {
+    const list = { playbook: 'playbooks', client: 'clients' }[page.view];
+    if (list) await openView(list).catch(() => newRun());
+    else newRun();
+    toast(page.view === 'run' || page.view === 'log' ? 'That run could not be opened. It may have been deleted.' : error.message);
+  } finally {
+    // The address now names the page on show, without adding a step to Back.
+    if (first || pageAddress() !== location.hash) history.replaceState({ ...history.state, depth: history.state?.depth || 0 }, '', pageAddress() || '#/new');
+    restoring = starting = false;
+    render();
+  }
+}
+addEventListener('popstate', () => followAddress());
+
+// A back arrow goes to the page before, as the browser's Back does; opened straight at this page, to its list.
+async function goBack(list) {
+  if (history.state?.depth > 0) history.back();
+  else await openView(list);
+}
+
 // Actions that only change the screen; they run instantly.
 const localActions = {
   'start-over': () => confirmStartOver(state.job.id),
@@ -259,6 +389,9 @@ const localActions = {
     $('#template-picker').click();
   },
   'toggle-files': () => (state.showFiles = !state.showFiles),
+  'toggle-rail': () => (state.rail = !state.rail),
+  'toggle-checks': () => (state.checksOpen = !state.checksOpen),
+  'allow-notify': () => askPermission(render),
   'close-file': closeFile,
   'skill-pick': () => $('#skill-picker').click(),
   attach: () => $('#attach-picker').click(),
@@ -267,11 +400,13 @@ const localActions = {
   'hide-versions': () => (state.showVersions = false),
   ...playbookDialogs,
   ...clientDialogs,
+  ...offerLocal,
 };
 localActions['back-file'] = () => backFile(render);
 
 // Actions that call the server; buttons are held while they run.
 const serverActions = {
+  ...offerServer,
   'refresh-config': refreshConfig,
   connection: async () => {
     const result = await api('/api/connection-check', { method: 'POST' });
@@ -286,13 +421,13 @@ const serverActions = {
       if (problem) errors[name] = problem;
     }
     state.settingsErrors = errors;
-    if (Object.keys(errors).length) return;
+    if (Object.keys(errors).length) return showSettingError();
     try {
       state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ values: settingsValues() }) });
     } catch (error) {
       if (!error.field) throw error;
       state.settingsErrors = { [error.field]: error.message };
-      return;
+      return showSettingError();
     }
     state.settingsDraft = { ...state.settings.values };
     await refreshConfig(); // the run screen names the More steps amount from it
@@ -350,6 +485,7 @@ async function action(name, arg) {
   } finally {
     state.busy = false;
     render();
+    wake();
   }
 }
 
@@ -428,6 +564,7 @@ async function answerWith(text) {
   } finally {
     state.busy = false;
     render();
+    wake();
   }
 }
 
@@ -458,6 +595,7 @@ async function sendText() {
     throw e;
   } finally {
     render();
+    wake();
   }
 }
 
@@ -474,6 +612,8 @@ document.addEventListener('click', async (e) => {
   try {
     let spot;
     if (target('[data-close]')) $('#details').close();
+    else if ((el = target('[data-mic]'))) await toggleVoice(el.dataset.mic);
+    else if (target('[data-voice-dismiss]')) dismissVoiceNote();
     else if ((el = target('[data-menu]'))) {
       state.menu = state.menu === el.dataset.menu ? null : el.dataset.menu;
       render();
@@ -567,8 +707,15 @@ document.addEventListener('click', async (e) => {
       render();
     }
     else if ((el = target('[data-answer]'))) await answerWith(el.dataset.answer);
+    else if ((el = target('[data-back]'))) await goBack(el.dataset.back);
     else if ((el = target('[data-view]'))) await openView(el.dataset.view);
-    else if ((el = target('[data-job]'))) await loadJob(el.dataset.job);
+    else if ((el = target('[data-job]'))) {
+      // The run already open is shown as it was left (its preview, its scroll), not loaded afresh.
+      if (state.job?.id === el.dataset.job) {
+        state.view = 'run';
+        render();
+      } else await loadJob(el.dataset.job);
+    }
     else if ((el = target('[data-download]'))) {
       const version = el.dataset.fileVersion ? `&version=${el.dataset.fileVersion}` : ''; // an older version on show
       await download(fileUrl('file', el.dataset.download, version), baseName(el.dataset.download));
@@ -576,15 +723,26 @@ document.addEventListener('click', async (e) => {
     else if ((el = target('[data-open]'))) {
       const from = target('.proof') && state.preview;
       const back = from ? { path: from.path, sheet: from.data?.sheet, row: state.row } : null;
-      // A source opened from a row opens where the row's values are, with them outlined.
-      const found = from ? foundFor(el.dataset.open) : null;
-      await openFile(el.dataset.open, render, { back, found, page: found?.page || 1 });
+      // A source opened from a row opens where the row's values are, with them outlined, at the spot of the value
+      // the link stands for when it is known.
+      const path = el.dataset.open;
+      const found = from ? foundFor(path) : null;
+      const spot = el.dataset.spot ? JSON.parse(el.dataset.spot) : {};
+      const ring = spot.cell || spot.line ? { path, ...spot } : null;
+      await openFile(path, render, { back, found, ring, sheet: spot.sheet || null, page: spot.page || found?.page || 1 });
     } else if ((el = target('[data-sheet]'))) await openFile(state.open, render, { sheet: el.dataset.sheet, back: state.preview?.back, version: state.preview?.version });
     else if ((el = target('[data-page]'))) await turnPage(Number(el.dataset.page), render);
     else if ((el = target('tr[data-row]'))) markRow(el);
     else if ((el = target('[data-group]'))) {
       const id = Number(el.dataset.group);
-      state.toggled.has(id) ? state.toggled.delete(id) : state.toggled.add(id);
+      state.toggled.set(id, el.getAttribute('aria-expanded') !== 'true');
+      render();
+    } else if ((el = target('[data-act]'))) openAct(el);
+    else if ((el = target('[data-act-code]'))) {
+      state.actCode = true;
+      render();
+    } else if ((el = target('[data-plan]'))) {
+      keepPlanOpen(el.getAttribute('aria-expanded') !== 'true');
       render();
     } else if ((el = target('[data-segment]'))) {
       const { segment: name, value } = el.dataset;
@@ -599,10 +757,15 @@ document.addEventListener('click', async (e) => {
       const v = state.settingsDraft;
       v[name] = on === undefined ? !v[name] : v[name] === on ? off : on;
       render();
+      if (name === 'notify' && v[name]) await askPermission(render); // the browser asks once, on this click
     } else if ((el = target('[data-step]'))) {
       const { step: name, delta } = el.dataset;
       const option = state.settings.options[name];
       state.settingsDraft[name] = Math.min(option.high, Math.max(option.low, state.settingsDraft[name] + Number(delta)));
+      render();
+    } else if ((el = target('[data-fold]'))) {
+      const name = el.dataset.fold;
+      state.openFolders.has(name) ? state.openFolders.delete(name) : state.openFolders.add(name);
       render();
     } else if ((el = target('[data-map-filter]'))) {
       state.mapFilter = el.dataset.mapFilter;
@@ -655,10 +818,17 @@ document.addEventListener('keydown', (e) => {
     state.commentDraft = null;
     return render();
   }
+  if (e.key === 'Escape' && e.target?.id === 'files-q' && state.fileQuery) {
+    state.fileQuery = ''; // Esc in the find box clears it first
+    return render();
+  }
   if (e.key === 'Escape' && state.full && state.view === 'run' && !$('#details').open) {
     state.full = false;
     return render();
   }
+  // Esc on an opened version of a playbook's or client's History goes back to the list, as Back does.
+  const rec = { playbook: state.book, client: state.client }[state.view];
+  if (e.key === 'Escape' && rec?.tab === 'history' && rec.open && !$('#details').open) return void leaveVersion(rec, render);
   // Ctrl/Cmd with +, - or 0 zooms the file on show, in place of the browser's zoom of the whole page.
   const zoomKey = { '=': 'in', '+': 'in', '-': 'out', 0: 'reset' }[e.key];
   if (zoomKey && (e.metaKey || e.ctrlKey) && !e.altKey && state.view === 'run' && state.open && canZoom()) {
@@ -668,7 +838,7 @@ document.addEventListener('keydown', (e) => {
   }
   // C flips the preview between View and Comment, unless the person is typing.
   const writing = e.target instanceof Element && e.target.matches('input, textarea, select, [contenteditable]');
-  if (e.key?.toLowerCase() === 'c' && !writing && !e.metaKey && !e.ctrlKey && !e.altKey && $('.modes') && !state.commentDraft) {
+  if (e.key?.toLowerCase() === 'c' && !writing && !e.metaKey && !e.ctrlKey && !e.altKey && $('.comment-btn') && !state.commentDraft) {
     return setMode(state.previewMode === 'view' ? 'comment' : 'view');
   }
   if (!(e.target instanceof Element)) return;
@@ -822,8 +992,22 @@ document.addEventListener('pointercancel', dropPick);
 document.addEventListener('contextmenu', dropPick);
 
 let searchTimer;
+// Full screen is offered only on a wide window. A window made narrow while in full screen leaves it, so the panel
+// gets its Close and Back again.
+const narrow = matchMedia('(max-width: 1000px)');
+function leaveFullWhenNarrow() {
+  if (narrow.matches && state.full) {
+    state.full = false;
+    render();
+  }
+}
+narrow.addEventListener('change', leaveFullWhenNarrow);
+addEventListener('resize', leaveFullWhenNarrow);
+addEventListener('resize', placePop); // the comment box keeps beside its spot, or becomes a sheet below 560 wide
+
 document.addEventListener('input', (e) => {
   const { id, value } = e.target;
+  if (e.target.matches?.('#details input[aria-invalid="true"]')) clearDialogProblem(e.target);
   if (id === 'msg') {
     state.drafts[state.job.id] = value;
     syncComposer();
@@ -832,6 +1016,8 @@ document.addEventListener('input', (e) => {
     state.instructions[currentPlaybook()?.id] = value;
     const start = $('[data-action="start"]'); // a goal in words is enough to start, so the button follows the typing
     if (start) start.disabled = startBlocked();
+    const why = $('#start-why');
+    if (why) why.textContent = startWhy();
   }
   if (id === 'note' && state.commentDraft) state.commentDraft.text = value;
   if (id === 'reply-text' && state.reply) {
@@ -839,6 +1025,12 @@ document.addEventListener('input', (e) => {
     syncReply();
   }
   if (id === 'find-q' && state.find) typed(value, turnPage, render);
+  if (id === 'files-q') {
+    state.fileQuery = value;
+    // As in the log search, the list is filtered once typing pauses, not redrawn on every key.
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(render, 150);
+  }
   if (id === 'playbook-text') startDraft(state.book, value);
   if (id === 'client-notes') typeNotes(value);
   if (id === 'tune') state.book.ask = value;
@@ -901,19 +1093,51 @@ document.addEventListener('change', async (e) => {
   render();
 });
 
+// A problem with what a dialog asks for shows in the dialog, under the name box, not in a toast behind it. Typing
+// in the box clears it, and the dialog is drawn afresh each time it opens, so Cancel leaves nothing behind.
+function dialogProblem(form, message) {
+  const box = form.querySelector('input[name="name"]');
+  form.querySelector('.problem')?.remove();
+  const problem = document.createElement('p');
+  problem.className = 'problem';
+  problem.id = 'dialog-problem';
+  problem.setAttribute('role', 'alert');
+  problem.textContent = message;
+  if (box) {
+    box.closest('label').after(problem);
+    box.classList.add('bad');
+    box.setAttribute('aria-invalid', 'true');
+    box.setAttribute('aria-describedby', problem.id);
+    box.focus();
+  } else form.querySelector('.end').before(problem);
+}
+
+function clearDialogProblem(box) {
+  box.closest('form')?.querySelector('.problem')?.remove();
+  box.classList.remove('bad');
+  box.removeAttribute('aria-invalid');
+  box.removeAttribute('aria-describedby');
+}
+
 document.addEventListener('submit', async (e) => {
   const form = e.target.id;
   if (!['composer', 'comment-form', 'tune-form', 'book-form', 'reply-form', 'run-form'].includes(form)) return;
   e.preventDefault();
   if (form === 'reply-form') return action('send-reply');
+  const needed = e.target.querySelector('[data-need-name]');
+  if (needed && !needed.value.trim()) return dialogProblem(e.target, 'Enter a name.');
   try {
     if (form === 'composer') return await sendText();
     if (form === 'run-form') {
       const starting = e.target.dataset.does === 'start-over';
-      if ((await submitRun(e.target)) === state.job?.id) newRun(); // the run on show was deleted
+      if ((await submitRun(e.target)) === state.job?.id) {
+        newRun(); // the run on show was deleted: New run takes its place in history, so Back does not reach it
+        replaceNext = true;
+      }
       if (starting) {
         state.showVersions = false;
         await refreshJob();
+        wake();
       }
       return render();
     }
@@ -928,6 +1152,7 @@ document.addEventListener('submit', async (e) => {
     }
     if (form === 'book-form') await refreshConfig();
   } catch (err) {
+    if (form === 'book-form' && $('#details').open) return dialogProblem(e.target, err.message);
     toast(err.message);
   }
   render();
@@ -978,10 +1203,38 @@ document.addEventListener('drop', (e) => {
 
 // --- Polling ---------------------------------------------------------------
 
-async function refreshJob() {
+// One look at the open run at a time. A button press while the regular look is out waits for it and then looks
+// again, so an older answer can never land after a newer one (Pause flashing back, an answered question unlocking).
+let refreshing = null;
+let refreshQueued = null;
+function refreshJob() {
+  if (refreshQueued) return refreshQueued;
+  if (!refreshing) return (refreshing = fetchJob().finally(() => (refreshing = null)));
+  refreshQueued = refreshing.catch(() => {}).then(() => {
+    refreshQueued = null;
+    return refreshJob();
+  });
+  return refreshQueued;
+}
+
+// The server hands out events 500 at a time (store.py), so a long run is read to its end before it is drawn: it opens
+// whole rather than filling in over several looks, with older items animating in as if new.
+const EVENT_PAGE = 500;
+async function allEvents(id, after = 0) {
+  const all = [];
+  for (;;) {
+    const page = await api(`/api/jobs/${encodeURIComponent(id)}/events?after=${after}`);
+    all.push(...page);
+    if (page.length < EVENT_PAGE) return all;
+    after = page[page.length - 1].seq;
+  }
+}
+
+async function fetchJob() {
+  if (!state.job) return;
   const id = state.job.id;
   const after = state.events.reduce((n, ev) => Math.max(n, ev.seq), 0);
-  const [job, events] = await Promise.all([api(`/api/jobs/${id}`), api(`/api/jobs/${id}/events?after=${after}`)]);
+  const [job, events] = await Promise.all([api(`/api/jobs/${id}`), allEvents(id, after)]);
   if (state.job?.id !== id) return;
   const statusChanged = job.status !== state.job.status;
   state.connectionError = '';
@@ -995,7 +1248,36 @@ async function refreshJob() {
   if (statusChanged) state.jobs = await api('/api/jobs');
 }
 
+let listedAt = 0; // when the run list was last fetched for other runs going meanwhile
+
+// The next regular look is booked when the last one ends, from how busy the run was then. A press that sets a run
+// going (Start, Send, Resume) books it again from the run's new state, so live progress shows within seconds rather
+// than after the idle wait.
+let pollTimer;
+let pollBusy = false;
+let pollAgain = false;
+function wake() {
+  if (pollBusy) pollAgain = true;
+  else {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, 1500);
+  }
+}
+
 async function poll() {
+  clearTimeout(pollTimer);
+  pollBusy = true;
+  try {
+    await pollOnce();
+  } finally {
+    pollBusy = false;
+  }
+  const idle = isActive() || (jobStatus() === 'waiting' && state.job?.answer) ? 1500 : state.book?.tests?.running ? 3000 : 8000;
+  pollTimer = setTimeout(poll, pollAgain ? 1500 : idle);
+  pollAgain = false;
+}
+
+async function pollOnce() {
   if (state.job && !state.polling && !state.loading) {
     state.polling = true;
     try {
@@ -1007,15 +1289,41 @@ async function poll() {
     }
     render();
   }
+  // Other runs going meanwhile are looked at too, so one that asks, finishes or stops can say so (alerts.js).
+  try {
+    const others = state.jobs?.some((j) => j.id !== state.job?.id && (inGroup('active', j.status) || j.status === 'waiting'));
+    if (others && Date.now() - listedAt > 8000) {
+      listedAt = Date.now(); // at most every 8 seconds, however often the open run is looked at
+      state.jobs = await api('/api/jobs');
+    }
+    await noticeRuns(state.jobs, loadJob, render);
+  } catch {
+    // the next round looks again
+  }
   try {
     await refreshPlaybookTab(render); // a check of past corrections fills in while its tab is open
   } catch {
     // the next round tries again
   }
-  // A sent answer is picked up within seconds, so look again soon rather than leave the answered card showing.
-  setTimeout(poll, isActive() || (jobStatus() === 'waiting' && state.job?.answer) ? 1500 : state.book?.tests?.running ? 3000 : 8000);
 }
 
+initVoice(render);
+// Back on the tab: the mark a run left on it clears.
+document.addEventListener('visibilitychange', () => clearMark(render));
+addEventListener('focus', () => clearMark(render));
+// The microphone button takes the focus on a click, so the cursor's place in the box is noted first.
+document.addEventListener('pointerdown', (e) => {
+  const mic = e.target.closest?.('[data-mic]');
+  if (mic) rememberCaret(mic.dataset.mic);
+}, true); // prettier-ignore
+// Ctrl+M in a box with a microphone starts or stops speaking into it.
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== 'm' || !e.target.id) return;
+  if (!document.getElementById(`mic-${e.target.id}`)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleVoice(e.target.id);
+}, true); // prettier-ignore
 render();
 setInterval(tick, 1000);
 (async () => {
@@ -1025,6 +1333,6 @@ setInterval(tick, 1000);
   } catch (e) {
     state.notice = e.message;
   }
-  render();
+  await followAddress(true); // the page the address names: after a Refresh, the one that was on show
   poll();
 })();

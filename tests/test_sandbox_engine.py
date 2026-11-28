@@ -97,7 +97,7 @@ def test_a_sandbox_job_runs_on_the_engine_and_settles(tmp_path, monkeypatch):
         done = wait_for_job(client, job['id'])
         assert done['status'] == 'completed' and done['request_count'] == 3
         assert {a['name']: a.get('status') for a in done['artifacts']} == {
-            'notes.md': None, 'processing_summary.txt': None, 'template_output.xlsx': 'validated'}  # fmt: skip
+            'notes.md': None, 'template_output.xlsx': 'validated'}  # fmt: skip
         call = fake.calls[0]
         assert call.options['max_scouts'] == 3 and call.options['review_on'] is True and call.resume is None
         assert 'Fill Employees A2:D2.' in call.spec.goal and '2026-10' in call.spec.goal
@@ -175,9 +175,10 @@ def test_a_script_is_described_while_it_streams_in_and_shown_once():
         ('code.started', {}),
         ('code.writing', {'summary': 'Check the bank file'}),  # once, as soon as its first line is written
         ('code.running', {'summary': 'Check the bank file', 'files': ['Bank.csv']}),
-        ('code.finished', {'summary': 'Check the bank file', 'files': ['Bank.csv']}),
+        # Both name the script by its id, so the screen can open the code and what it printed.
+        ('code.finished', {'summary': 'Check the bank file', 'files': ['Bank.csv'], 'item': 'ci_1'}),
         ('code.ran', {'file': '001-main.py', 'chars': len(code), 'summary': 'Check the bank file',
-                      'files': ['Bank.csv'], 'shown': True}),
+                      'files': ['Bank.csv'], 'shown': True, 'item': 'ci_1'}),
     ]  # fmt: skip
     assert set(live) == {'ci_1'}  # other streamed events leave no trace
 
@@ -204,8 +205,11 @@ def test_the_feed_shows_each_script_live_and_once(tmp_path, monkeypatch):
             ('engine.code.writing', 'Check the bank file', 'INFO', None),
             ('engine.code.running', 'Reading', 'INFO', ['Bank.csv']),
             ('engine.code.finished', 'Check the bank file', 'INFO', ['Bank.csv']),
+            # The end-of-reply copy of a script already shown is not repeated; it says only where its code is kept.
+            ('engine.code.saved', 'Kept the script', 'INFO', None),
             ('engine.code.finished', 'Worked on the files', 'INFO', []),
-        ]  # the end-of-reply copy of a script already shown is not repeated
+        ]
+        assert events[4]['code'] == '001-main.py'
 
 
 def test_a_question_is_answered_in_the_app_while_the_sandbox_waits(tmp_path, monkeypatch):
@@ -295,7 +299,7 @@ def test_an_unanswered_question_parks_the_job_and_the_answer_resumes_it(tmp_path
 
 def wait_for_runner_idle(client, timeout=5):
     deadline = time.monotonic() + timeout
-    while client.app.state.runner.active is not None and time.monotonic() < deadline:
+    while client.app.state.runner.running and time.monotonic() < deadline:
         time.sleep(0.02)
 
 
@@ -381,7 +385,7 @@ def test_a_limit_stop_is_partial_and_can_continue(tmp_path, monkeypatch):
         job = start_sandbox_job(client)
         done = wait_for_job(client, job['id'])
         assert done['status'] == 'partial' and 'all the AI usage it was allowed' in done['summary']
-        assert (tmp_path / 'jobs' / job['id'] / 'outputs' / 'processing_summary.txt').exists()
+        assert not (tmp_path / 'jobs' / job['id'] / 'outputs' / 'processing_summary.txt').exists()
 
 
 def test_an_answer_sent_while_the_run_winds_down_still_resumes_the_job(tmp_path, monkeypatch):

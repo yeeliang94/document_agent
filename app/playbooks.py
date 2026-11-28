@@ -20,12 +20,17 @@ class Playbooks(Versioned):
         # can be reviewed and replayed (app/runtime.py).
         super().__init__(store)
         with self.connect() as c:
+            # A built-in playbook the user deleted stays deleted: it is not made again at the next start.
+            c.execute('CREATE TABLE IF NOT EXISTS playbooks_deleted(id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL)')
+            deleted = {r[0] for r in c.execute('SELECT id FROM playbooks_deleted')}
             # The first playbooks, made once. A database from before playbooks kept its instructions in a
             # `profiles` table; the text edited there is carried over, and that table is left as it was.
             first = dict(DEFAULT_CONTEXT)
             if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='profiles'").fetchone():
                 first.update(c.execute('SELECT module, context FROM profiles ORDER BY rowid').fetchall())
             for module, context in first.items():
+                if module in deleted:
+                    continue
                 made = c.execute(
                     'INSERT OR IGNORE INTO playbooks VALUES (?,?,?)', (module, MODULE_LABELS.get(module, module), now())
                 ).rowcount
@@ -35,6 +40,24 @@ class Playbooks(Versioned):
                         (module, 1, now(), 'created', '', context, '{}'),
                     )
         self.skills = Skills(self, store.root)
+
+    def delete(self, playbook_id: str) -> dict:
+        """Remove a playbook for good: its instructions and their history, its skills, past corrections, checks and
+        proposals (all under its folder) and the tally of its replayed tests. Its runs stay and still open: each run
+        keeps its own copy of what it was given. The only playbook stays, so New run always has one. Returns what
+        was removed, for the screen's message."""
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            gone = self._latest(c, playbook_id)  # KeyError when there is no such playbook
+            if c.execute('SELECT COUNT(*) FROM playbooks').fetchone()[0] <= 1:
+                raise ValueError('The only playbook cannot be deleted.')
+            for table in ('playbook_versions', 'playbook_events'):
+                c.execute(f'DELETE FROM {table} WHERE playbook_id=?', (playbook_id,))
+            c.execute('DELETE FROM playbooks WHERE id=?', (playbook_id,))
+            c.execute('DELETE FROM replay_spend WHERE playbook_id=?', (playbook_id,))
+            c.execute('INSERT OR REPLACE INTO playbooks_deleted VALUES (?,?)', (playbook_id, now()))
+        self.skills.discard(playbook_id)  # its whole folder: skills, cases, checks and tuning
+        return {'id': playbook_id, 'name': gone['name']}
 
     def create(self, name: str, copy_of: str | None = None) -> dict:
         """A blank playbook, or one that starts from another's latest instructions and skills."""

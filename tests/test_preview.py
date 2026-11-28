@@ -294,6 +294,23 @@ def text_pdf(pages: list[list[str]]) -> bytes:
 INVOICE = text_pdf([['Cover letter for invoice SC26100217'], ['Tax invoice SC26100217', 'Licences 2,315.60', 'Service tax 185.25', 'Total due 2,500.85']])  # fmt: skip
 
 
+def test_a_search_in_an_older_version_of_a_pdf_looks_in_that_version(client):
+    job = create_job(client)
+    folder = client.root / 'jobs' / job['id']
+    (folder / 'outputs').mkdir(exist_ok=True)
+    (folder / 'outputs' / 'report.pdf').write_bytes(text_pdf([['Total due 900.00']]))
+    kept = folder / 'versions' / 'v0001' / 'files'
+    kept.mkdir(parents=True)
+    (kept / 'report.pdf').write_bytes(INVOICE)
+
+    def pages(**more):
+        params = {'path': 'outputs/report.pdf', 'q': 'SC26100217', **more}
+        return [h['page'] for h in client.get(f'/api/jobs/{job["id"]}/find', params=params).json()['hits']]
+
+    assert pages() == []
+    assert pages(version=1) == [1, 2]
+
+
 def test_a_search_finds_each_match_in_a_pdf_with_its_page_and_box(client):
     job, path = upload(client, 'invoice.pdf', INVOICE)
     found = client.get(f'/api/jobs/{job["id"]}/find', params={'path': path, 'q': 'sc26100217'}).json()
@@ -322,11 +339,12 @@ def test_a_row_is_found_on_the_page_holding_most_of_its_values(client):
     assert len(found['boxes']) == 4
     assert found['wanted'] == ['Selatan Courier', 'SC26100217', '2,315.60', '2315.60', '185.25', '2,500.85', '2500.85']
     none = client.post(f'/api/jobs/{job["id"]}/locate', json={'path': path, 'values': ['Nobody']}).json()
-    assert none == {'page': None, 'boxes': [], 'wanted': ['Nobody'], 'values': {}}
+    assert none == {'page': None, 'boxes': [], 'wanted': ['Nobody'], 'values': {}, 'spots': {}}
     # Another kind of source is not searched here; the page outlines the values in it from `wanted`.
     sheet_job, sheet = upload(client, 'vendors.csv', b'vendor,amount\nSelatan Courier,2500.85\n')
     other = client.post(f'/api/jobs/{sheet_job["id"]}/locate', json={'path': sheet, 'values': ['2500.85']}).json()
-    assert other == {'page': None, 'boxes': [], 'wanted': ['2,500.85', '2500.85'], 'values': {'2500.85': 'row 2'}}
+    assert other == {'page': None, 'boxes': [], 'wanted': ['2,500.85', '2500.85'], 'values': {'2500.85': 'row 2'},
+                     'spots': {'2500.85': {'cell': 'B2'}}}  # fmt: skip
     too_long = client.post(f'/api/jobs/{job["id"]}/locate', json={'path': path, 'values': ['x' * 201]})
     assert too_long.status_code == 422
 
@@ -337,6 +355,7 @@ def test_each_value_of_a_row_says_where_it_was_found_in_a_source(client):
     row = ['SC26100217', '2,315.60', '2315.60', 'Selatan Courier']
     found = client.post(f'/api/jobs/{job["id"]}/locate', json={'path': path, 'values': row}).json()
     assert found['values'] == {'SC26100217': 'page 1', '2,315.60': 'page 2', '2315.60': 'page 2'}
+    assert found['spots']['SC26100217'] == {'page': 1}  # a link to the source opens that page
     # A workbook names the sheet and row, and matches a number as a number: 4500 in a cell is 4,500.00.
     book = Workbook()
     book.active.title = 'Employees'
@@ -348,10 +367,16 @@ def test_each_value_of_a_row_says_where_it_was_found_in_a_source(client):
     values = ['EMP001', 'Alex Example', '4,500.00', '12,500.00', 'Example']
     found = client.post(f'/api/jobs/{sheet_job["id"]}/locate', json={'path': sheet, 'values': values}).json()
     assert found['values'] == {'EMP001': 'Employees, row 2', 'Alex Example': 'Employees, row 2', '4,500.00': 'Employees, row 2', 'Example': 'Employees, row 2'}  # fmt: skip
+    # ...and the exact cell, so a link opens that sheet with the value ringed.
+    assert found['spots']['4,500.00'] == {'sheet': 'Employees', 'cell': 'C2'}
+    # A value past what the preview shows opens its sheet, with no cell to ring that is not drawn.
+    from app.preview import MAX_ROWS, _spot
+    assert _spot(MAX_ROWS + 1, 3, 'Employees') == {'sheet': 'Employees'} and _spot(MAX_ROWS, 3) == {'cell': f'C{MAX_ROWS}'}
     # A text file names the line, and a value is found only as a whole word or number.
     text_job, text = upload(client, 'letter.txt', b'Dear Alex,\nYour salary is 14,500.00.\nFrom 1 Oct: 4,500.00\n')
     found = client.post(f'/api/jobs/{text_job["id"]}/locate', json={'path': text, 'values': ['4500']}).json()
     assert found['values'] == {'4500': 'line 3'}
+    assert found['spots'] == {'4500': {'line': 3}}
     # A picture is not searched.
     picture_job, picture = upload(client, 'letter.png', b'not really a picture')
     assert client.post(f'/api/jobs/{picture_job["id"]}/locate', json={'path': picture, 'values': ['4500']}).json()['values'] == {}

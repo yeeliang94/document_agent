@@ -1,8 +1,8 @@
 # Implementation Plan: A steadier agent, clearer runs, and client notes
 
-**Overall Progress:** `88%` (37 of 42 steps) (Phases 1-10 done; Phases 11-12 left)
+**Overall Progress:** `92%` (59 of 64 steps) (Phases 1-11 and 14-17 done; Phase 12 built, its gateway check left; Phase 13 paused; Phase 18 done)
 **Builds on:** `docs/PLAN.md` and `docs/PLAN-NEXT.md` (both built), and the chat-and-zoom branch (PR yeeliang94/document_agent#1)
-**Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7 (there is no PRD)
+**Design reference:** `prototype/improvements/index.html`, six batches, and `prototype/comment-answers/index.html`, batch 7, both on the `prototypes` branch (there is no PRD)
 **Last Updated:** 2026-11-26
 
 ## Summary
@@ -55,7 +55,7 @@ As in the earlier plans, the engine and backend are built and tested first. The 
 - [x] 🟩 The three client decisions confirmed: main form, optional, text only
 - [x] 🟩 How client folders are named: no fixed pattern, so the suggestion looks for a known client's name anywhere in folder and file names
 - [x] 🟩 An OpenAI key is set on this machine, and live steps may use it; each live run is announced with its rough cost first
-- [x] 🟩 Prototype for batch 7 approved: comments that answer back, links to the spot, versions to compare (`prototype/comment-answers/index.html`, 2026-11-26)
+- [x] 🟩 Prototype for batch 7 approved: comments that answer back, links to the spot, versions to compare (`prototype/comment-answers/index.html` on the `prototypes` branch, 2026-11-26)
 - [x] 🟩 No conflicting in-progress work: chat-and-zoom is committed (PR yeeliang94/document_agent#1), and this plan builds on that branch
 
 ## Tasks
@@ -278,11 +278,13 @@ From the study of Claude's document panel (26 Nov). A comment gets an answer, wh
 
 ### Phase 11: Keep it from drifting
 
-- [ ] 🟥 **Step 38: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
+- [x] 🟩 **Step 38: The no-hidden-settings test and rule** — a test fails when a Settings option has no control on the Settings page; the project instructions state the rule for features and limits.
   - **Verify:** I add a dummy setting, show the test failing, and remove it.
+  - **Result:** `tests/test_settings_controls.py` checks both ways (no setting without a control, no control without a setting). With a dummy setting added it failed naming it; removed again. The rule is in the new `AGENTS.md` (read by `CLAUDE.md`).
 
-- [ ] 🟥 **Step 39: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
+- [x] 🟩 **Step 39: Tidy and review** — README brought up to date (it still describes a "Remember for next time" tick), the prototype moved to its own branch, full tests and build, `ship-review`.
   - **Verify:** I report the test and build results, the review verdict, and the git state.
+  - **Result:** README now covers answers, replies, links, versions, clients and every setting. The screen designs moved to the `prototypes` branch; `prototype/sandbox_agent` stays, because it holds the engine's main tests and test packets (the review caught that moving it dropped those tests and un-hid about 5,000 local run files). 434 app tests and 102 engine tests pass; lint clean.
 
 ### Phase 12: Speak instead of type (its own branch, after Phase 11)
 
@@ -292,14 +294,143 @@ Asked for 2026-11-27. A microphone button on every box people write in, like Cod
 
 The browser never holds the key. It sends its audio to this app, which opens the session to the gateway and passes the words back.
 
-- [ ] 🟥 **Step 40: Try both through the gateway** — a short synthetic recording through the gateway: a live session with gpt-live-transcribe, and a streamed file transcription with gpt-transcribe. Confirm the aliases the gateway uses for both.
+- [ ] 🟨 **Step 40: Try both through the gateway** — a short synthetic recording through the gateway: a live session with gpt-live-transcribe, and a streamed file transcription with gpt-transcribe. Confirm the aliases the gateway uses for both.
   - **Verify:** I report which of the two the gateway passes, how soon the first words come back, and the cost of one minute of speech. If the gateway does not pass the live WebSocket, Phase 12 is built on the fallback alone and the words appear when the person stops, not while they speak; you decide before Step 41.
+  - **Result so far (2026-11-27):** this machine reaches OpenAI directly, so the gateway itself is not yet tried. Directly, both work: with a 6.5-second spoken clip, gpt-live-transcribe sent its first words about 1 second after speech began and 19-20 of its 23 pieces before the speech ended, with the final text 0.7 seconds after; gpt-transcribe returned the whole text about 2 seconds after the recording was sent. Both are billed by seconds of audio; no price is published on the pages checked. gpt-live-transcribe refuses turn detection, so a recording is one stretch of speech, finalised at Stop. Left open until it is tried through the gateway; if the gateway refuses the live connection, the page says so and points to "After you stop" in Settings.
 
-- [ ] 🟥 **Step 41: A transcription relay** — a WebSocket route on this app: the browser streams audio in, the app relays it to the gateway's live session and streams the words back. A plain `POST /api/transcribe` for the fallback. Both model aliases, the mode (live or after stopping) and a length limit are Settings values; the key stays in `.env`. No recording is kept, and the same access rules as the rest of the app apply.
+- [x] 🟩 **Step 41: A transcription relay** — a WebSocket route on this app: the browser streams audio in, the app relays it to the gateway's live session and streams the words back. A plain `POST /api/transcribe` for the fallback. Both model aliases, the mode (live or after stopping) and a length limit are Settings values; the key stays in `.env`. No recording is kept, and the same access rules as the rest of the app apply.
   - **Verify:** tests with a fake gateway: words arrive in order while audio is still being sent, the fallback returns the text, a recording past the limit is stopped with a plain sentence, a lost gateway connection says so, and nothing is written to disk.
+  - **Result:** `app/voice.py` and three routes: `/api/voice/live` (WebSocket; it checks host, origin and the access token itself, because the request boundary does not see WebSockets, and the token comes in the first message, never the address), `GET /api/voice`, and `POST /api/voice/transcribe` (the recording as the request body, held in memory up to the limit). Settings: words appear as you speak or after you stop, both model names, the longest recording (1-10 minutes, default 2). 14 tests with a fake service cover each Verify point, plus a wrong token, another site, a page that leaves, a gateway that refuses the live connection, and a key echoed in an error. Tried live through the app against OpenAI in both modes.
 
-- [ ] 🟥 **Step 42: The microphone button** (prototype first) — one shared button on every text box: the message box, comment and reply boxes, New run's goal, playbook and client notes. The words appear where the cursor was as they are spoken, then settle when the person stops. A plain message when the browser blocks the microphone, and when the app is opened over a network without HTTPS (browsers allow the microphone only on a secure address or on this computer).
+- [x] 🟩 **Step 42: The microphone button** (prototype first) — one shared button on every text box: the message box, comment and reply boxes, New run's goal, playbook and client notes. The words appear where the cursor was as they are spoken, then settle when the person stops. A plain message when the browser blocks the microphone, and when the app is opened over a network without HTTPS (browsers allow the microphone only on a secure address or on this computer).
   - **Verify:** I check each box in a browser, plus a blocked microphone and a gateway that refuses.
+  - **Result:** prototype approved 2026-11-27 (`prototype/voice-input/index.html` on the `prototypes` branch). `web/voice.js` draws one button (also Ctrl+M in the box) on the message box, the question card, comment and reply boxes, New run's goal, playbook instructions and its ask box, and client notes. Words go where the cursor was; a recording belongs to the screen it started on and stops, keeping its words, when that screen is left or the box is changed under it. Checked in a browser with a spoken clip in place of a microphone, using real clicks: each box listed except the reply box and the question card (same code, not seen), both modes, blocked and missing microphone, an insecure address, a wrong model name, a dropped connection with Try again. One difference from the prototype: words still being heard cannot be grey inside a plain text box, so they appear in the normal colour.
+
+### Phase 13: Getting to know a new client (paused 2026-11-26, more thinking first)
+
+Paused by the owner on 2026-11-26 to think it through further. Nothing here is built until it is picked up again.
+
+Asked 2026-11-27. Today a client's notes are written by hand, or grow from remembered comments. For a new client, the person often already has last month's files: the deliverables someone made before, and the inputs behind them. Those files show how this client is done, including where it differs from the playbook and from other clients. The agent should notice those differences and offer them, as a helpful assistant would, rather than wait to be told or apply them silently.
+
+- [ ] 🟥 **Step 43: Folder roles on New run** (prototype first) — when a folder is chosen, the person can mark parts of it: this period's inputs, earlier runs (past deliverables and the inputs behind them), and reference. The app proposes the roles from folder and file names (an earlier month, "final", "submitted") and shows them before Start; nothing is applied silently. The agent is told each folder's role, and earlier runs are never used as this period's figures.
+  - **Verify:** a folder with this month's inputs and two earlier months gets sensible roles proposed; changing a role reaches the agent; a test shows earlier-run files are not counted as inputs.
+
+- [ ] 🟥 **Step 44: A scout that studies the earlier runs** — when a run has earlier-run files and its client is new (no notes yet) or has history not yet looked at, a scout (a helper agent with its own small budget) compares the earlier deliverables with what the playbook says. It lists what this client does differently, each with the file and cell or line that shows it: layout, extra sheets, rounding, pay dates, who is left out, naming. It reads only this client's files; other clients' notes are not shown to it.
+  - **Verify:** on a test packet with three planted differences, the scout finds them with their evidence and reports nothing the playbook already says.
+
+- [ ] 🟥 **Step 45: The agent asks, the person chooses** (prototype first) — the scout's findings come to the person as a question card: "Acme's earlier runs differ from the playbook in four ways. Keep which for Acme?" Each one can be kept, changed or dropped. Kept ones are saved to the client's notes as a new version with Undo, and this run follows them. Where an earlier run contradicts this month's instructions, the agent asks instead of choosing.
+  - **Verify:** keep two of four, and see exactly those two in the client's notes, the run following them, and Undo removing them.
+
+- [ ] 🟥 **Step 46: Measure it** — the same packet run with and without the scout: accuracy against the known answer, the questions asked, and the cost. The scout stays a Settings switch (on, off, or only for new clients).
+  - **Verify:** I report the numbers and recommend the default.
+
+Open questions for you before this starts:
+- Should the scout also run for a known client whenever new earlier runs appear, or only the first time?
+- "Different from the rest of the clients": comparing against the playbook keeps each client's files private from the others. Comparing against other clients' notes as well would catch more, but lets one client's practice inform another's. I'd start with the playbook only.
+- This fits beside the existing scouts (helpers for large folders, Settings: "Helper agents for large folders"), which are off by default. The new scout would be its own switch.
+
+### Phase 14: Small wins (approved 2026-11-26)
+
+These come from `reports/Small wins - agent tools and user experience.md`. These are the first, cheapest batch. Each one is a general fix, not a rule for one kind of document.
+
+- [x] 🟩 **Step 47: Tell the person when the run needs them** (prototype first): a desktop notification and a mark on the browser tab when the agent asks a question, finishes or stops. Clicking the notification opens the run. There's a Settings switch (on by default), and the browser asks permission the first time it's switched on.
+  - **Verify:** in a browser, with the tab in the background, a question, a finish and a stop each raise one notification. With the switch off, none is raised. A blocked permission shows a plain sentence on the Settings page.
+  - **Result (2026-11-26):** built (`web/alerts.js`; Settings: Notifications). Only while the person is away from the tab; a run they paused or stopped raises nothing, a run paused by the day's limit does. Checked in a browser: a finish raised one notification with its words, the tab word and dot, and a click opened the run; switch off and a paused run raised none; the blocked sentence and the Allow button show. Then, through the running app with a test run switched from running to a question and later to a stop at its time limit: each raised one notification with the question or the reason, and the tab showed "Question ·" / "Stopped ·" with its dot; the mark cleared as soon as the page had focus again. (The browser's own notification was stood in for, as this test browser blocks them.)
+
+- [x] 🟩 **Step 48: Feedback that says where and what to do.** An audit on 2026-11-26 found that most check messages already name the cell and the fix, but some don't. Fix each of these:
+  - When a tool fails, say which tool failed and with what input, not only the error (agent.py `_tool_error`).
+  - When a file is missing, point to `/mnt/data/outputs/`, where outputs belong, not `/mnt/data/` (sandbox.py `download`).
+  - When the checks themselves crash, say the fault is in the checks, not in the agent's work. Tell it to save again once, then carry on and note it (agent.py, near the `check.crashed` event).
+  - Duplicate rows: add what to do. Remove one, or if both are real, say why in notes.md (checks.py `_duplicates`).
+  - Formulas the app can't work out: name the cells, the first 10 plus a count (checks.py summary).
+  - Every list that is cut short says how many were left out: document-map entries, used-but-not-cited files, and the issues in the resume card.
+  - The resume card says why the last run stopped: a limit reached, the service failing, or the user stopping it (service.py resume).
+  - The forced fix pass carries every part of the failed check, not only `issues` (agent.py).
+  - The reviewer is asked to name a file and cell for each doubt. The agent is told how many low-severity doubts were left out.
+  - The agent is told, in one line, when its history has been condensed, and to re-read notes.md.
+  - **Verify:** a test for each message above. One replay of a lesson test passes with the same score. Every changed message is shown here, before and after.
+  - **Result (2026-11-26):** built; 17 tests in `tests/test_feedback_messages.py`. Replayed live (2026-11-27): the Payroll lesson test (names as SURNAME, First name) passed 1 of 1, as before, using 78k tokens. Before and after:
+    - A tool fails: "The tool failed with {error}…" → "{tool} failed on the input {input, cut at 300 characters}: {error}. Fix the cause if it is yours (the input, or a file it names); otherwise try once more or carry on without it."
+    - A file is missing: "…Save it under /mnt/data/ first." → "…Outputs belong under /mnt/data/outputs/: save the file there first, or check its name."
+    - The checks crash: "The checks could not run…" → "The checks themselves crashed (…). This is a fault in the checks, not in your work. Call save_outputs once more; if they crash again, carry on without them and say in notes.md that the checks could not run." A crash no longer takes the run's one fix pass.
+    - Duplicate rows (owner's choice, 2026-11-26): no longer fail the run. They are listed as duplicate_rows: "Payroll row 9 duplicates row 5. Remove one, or if both are real records, keep both and say why in notes.md."
+    - Formulas the app can't work out: a count only → the count, the first 10 cells, and "… and N more".
+    - Lists cut short (document map, used-but-not-cited, the resume card's issues) now say how many were left out; the counts are kept as numbers, not read back from text.
+    - The resume card adds why the last run stopped: a limit, the AI service, a question waiting, the person pausing or stopping it, or a fault.
+    - The forced fix pass lists the problems to fix, then the rest of the check apart, "to handle as your instructions say (some of it may rightly stay)".
+    - The reviewer names the file and cell or row for each doubt; the agent is told how many low-severity doubts were left out.
+    - New: one line when the history is condensed: "…Re-read notes.md for the details you wrote down, then carry on."
+
+- [x] 🟩 **Step 49: Working notes from the start.** The briefing asks the agent to write what it finds into notes.md as it goes (which file wins, where each column comes from, open doubts), not only at the end. It re-reads the file after history is condensed. This is one briefing change, with no new tool.
+  - **Verify:** on a live run of the sample packet, notes.md holds findings before the first save, and the final score is unchanged.
+  - **Result (2026-11-26):** the briefing asks for notes.md from the start, before the first save (which file wins, where each column comes from, what was left out, open doubts), and for a re-read when told the history was condensed. Live run (2026-11-27) of the sample packet: 10 of 10, the same as every earlier sample run; notes.md held 5 findings at the first save and 7 one-line points at the end; 133k tokens against about 233k before, 3.5 minutes. The duplicate-rows, crashed-checks and condensed-history messages did not come up in it.
+
+- [x] 🟩 **Step 50: Offer to keep what a client's first run learned** (prototype first; changed 2026-11-26): when a run finishes for a client with no notes yet, the agent lists the few things from this run worth following next time (which file wins, cut-off dates, rates, what was left out). A slim strip at the top of the run offers them: "First run for Northwind Trading: 4 things worth keeping for next time", folded until opened. One button saves them all to the client's notes as a new version, with Undo; "Not now" hides it for this run. A client with no notes shows a plain notes box, with no explanation around it.
+  - **Verify:** tests that the offer appears only for a client without notes, that saving adds exactly the listed items as a version, and that Undo removes them; in a browser: folded, open, saved, Not now, and the empty notes box, at 642 and 1440 wide.
+  - **Result (2026-11-26):** built. The goal card asks the agent, only for a client with no notes, to list a few lines in its final answer (for_next_time; no cap since the PR 4 review); the run shows "Keep 4 things for Bluefin Foods' next run?" at the top (`web/clients.js` offerHtml); Save adds them to the client's notes as a version (source learned), Undo restores the version before, Not now puts it away for good. 4 tests in `tests/test_first_run_offer.py`; checked in a browser at 1440, 642 and 375 wide: folded, open, saved, View notes, Undo, Not now and after a reload, and a new client's plain empty notes box. After review: Save is claimed in one write (no double lines), is made only onto the notes the run began with (else refused and hidden), and a continued run does not offer the lines again; a client followed mid-run is asked too. Not yet seen: a live run producing the list.
+
+### Phase 15: Carried over from the older plan (`docs/PLAN-NEXT.md`)
+
+Two steps from the older plan were never built. They move here so one plan holds all open work.
+
+- [x] 🟩 **Step 51: Cost per run** — a money figure for each run, from its token use and a price per million tokens (input and output, Settings values), shown on the run and summed per playbook. Time and token use are already shown in the Technical log.
+  - **Verify:** tests for the sum on a run, a replay and a playbook total; a price of 0 shows no money figure; the run and playbook screens checked in a browser.
+  - **Result so far (2026-11-27):** backend built (`app/costs.py`; `cost` on GET /api/jobs/{id} and GET /api/playbooks/{id}, replays apart; Settings panel "Cost per million tokens"). 6 tests in `tests/test_costs.py`. Screens built after the prototype was approved: the run's finish line reads "13m 1s · $0.56"; a playbook's Activity tab starts with its runs' cost and its re-checks' cost. With no prices, nothing shows. Checked in a browser.
+- [x] 🟩 **Step 52: Several runs at once** — a Settings number, default 2; runs past the limit wait in line and say so; replays share the same limit.
+  - **Verify:** tests for two runs side by side, a third that waits and then starts, pause and resume of one, and a restart with both running.
+  - **Result (2026-11-27):** a run past the limit says "Waiting for a free slot. 2 runs at once is the limit in Settings." (checked in a browser); 7 tests in `tests/test_runs_at_once.py`. After review: each run holds its share of the day's AI usage while it runs, so runs at once cannot overshoot the daily limit; a raised limit starts a waiting run at once; the queue carries on after a fault.
+  - **Result (2026-11-26):** built; "Runs at once" (1 to 6) under Limits per day, read as each run ends. A run past the limit stays queued with `waiting_for_slot` and a "Waiting for a free slot" event. tests/test_runs_at_once.py covers the Verify line, a change of the limit without a restart, and a job queued twice. The screen still says "Waiting to start" for a queued run.
+
+### Phase 16: Full-screen file panel (prototype approved 2026-11-26)
+
+The design is `prototype/full-screen-files/index.html` on the `prototypes` branch (commit dd32a0b), drawn with 240 files.
+
+- [x] 🟩 **Step 53: A file list that copes with many files** — outputs and the agent's notes on top, the checks folded into one line, then sources: a find box, filter chips with counts (all, used, reference, excluded), folders folded when there are more than 40 files, short folder paths, and long names cut in the middle so the end stays readable.
+  - **Verify:** in a browser with 240 files: find, each filter, folding and unfolding, and a run with only a few files.
+  - **Result (2026-11-26):** built; checked in a browser with a 227-source run and an 11-source run: find (with its match marked), each filter, folding, no match, the checks line, and phone width.
+- [x] 🟩 **Step 54: A one-row file bar** — back, the name, one Comment button, a More menu (find, zoom, download), full screen and close on one row; sheet tabs (scrolling), the status pill and the Changes switch on the row below.
+  - **Verify:** in a browser at 642 and 1440 wide: a long name, many sheets, a PDF, a text file, comment on and off, each More item.
+  - **Result (2026-11-26):** built; checked at 1440, 642 and 375 wide: a long name cut in the middle, many sheets, a text file, Comment on and off (and the C key), each More item.
+- [x] 🟩 **Step 55: Full screen with the file list beside it** — full screen for the list and for an open file, with a list of all files down the left (340px, can be hidden). Moving between sources, outputs and notes stays in full screen; Esc leaves it.
+  - **Verify:** in a browser: enter and leave, open three files in a row from the side list, hide the list, Esc, and a narrow window (full screen is not offered below 1000px).
+  - **Result (2026-11-26):** built; checked: full screen from the list and from a file, three files in a row from the side list, hiding it, Esc (which first clears the find box), and leaving full screen when the window narrows below 1000px.
+
+### Phase 17: Leftovers from the exploratory test (2026-11-26)
+
+The tester's first batch (source links, runs told apart, Settings errors in view, the source panel's wording, "used" counts) was fixed in commit 9bbcc64. These are the rest. Steps that change a screen get a prototype first.
+
+- [x] 🟩 **Step 56: The page address follows the screen** — each run, playbook, client and Settings has its own address, so Refresh and Back keep your place; a run that is opening shows a loading sign, not the old page.
+  - **Verify:** in a browser: Refresh and Back on each screen, an address for a run that no longer exists, and a slow run opening.
+  - **Result (2026-11-26):** each run, its Technical log, each playbook and client, the lists and Settings have their own address (`web/routes.js`). Browser Back, Forward and Refresh, the back arrows and "Back to run" all return to the page before. A deleted run's address opens New run with a sentence; an opening run fades the page. Checked in a browser; not checked: Back to a client's Runs tab (the test data had no client runs).
+- [x] 🟩 **Step 57: Delete a playbook** (prototype first) — with a confirmation that names what goes with it; its past runs stay and still open. Long names show in full on hover and are not cut mid-word. Then remove the "QA test playbook" the tester left in the scratch data.
+  - **Verify:** tests that a deleted playbook's runs still open and its clients are unaffected; the flow checked in a browser.
+  - **Result (2026-11-27):** Delete beside Rename on a playbook (off for the only one), a confirmation naming what goes and how many runs stay, then the list with a message; Back does not return to the deleted page. Everything under the playbook's folder (skills, past corrections, checks, proposals) goes; its runs stay and open. Refused while it is checking past corrections. Long names show in full on hover; an over-long name gets "Use a name of at most 80 characters" instead of being cut silently. 2 tests in `tests/test_delete_playbook.py`; checked in a browser at 1440 and 375 wide. The tester's "QA test playbook" was removed from both test data sets.
+- [x] 🟩 **Step 58: The Technical log on narrow screens** — reachable from the run's menu at 642 and 375 wide.
+  - **Verify:** in a browser at both widths.
+  - **Result (2026-11-26):** already in place: the narrow-screen menu (the select at the top) lists Technical log for the open run, at 642 and 375 wide; choosing it opens the log, and Back to run returns. Checked in a browser.
+- [x] 🟩 **Step 59: No "What should change?" on input files** (prototype first) — input files the agent does not edit get a note or a question, not a change request; the comment box no longer covers the cell it is about.
+  - **Verify:** in a browser: a comment on an input file and an output file, at 642 and 1440 wide.
+  - **Result (2026-11-27):** on a file the agent was given, the box says "Add a note or ask a question" and opens beside or above the cell, leaving it in view (a bottom sheet on a phone). The agent is told once that it changes only its outputs: a comment on a given file is a note to take into account or a question to answer, never a change. The chat counts these as notes and the comment shows Answered. Tests in `tests/test_feedback.py`; checked in a browser at 1440, 642 and 375. Not yet seen in a live run.
+- [x] 🟩 **Step 60: Look at a past playbook version before restoring it** (prototype first).
+  - **Verify:** in a browser: open two past versions, then restore one.
+  - **Result (2026-11-27):** History rows open a version (its own address), with Full text and "What Restore changes", Older and Newer, and Restore only inside. Restore is off with the reason while edits are unsaved. Undo after a Restore keeps edits typed since and never replaces a newer version. Client notes use the same view. Checked in a browser at 1440, 642 and 375, on a playbook and a client.
+- [x] 🟩 **Step 61: Polish** (one prototype for the lot) — names cut short in the chat file card, step chips and the mobile file title; long step text readable in full; the blank-rename message shown inside the dialog and cleared on Cancel; one number format per column in the workbook view; the total time moved off the Notes row; "run" used everywhere instead of "job"; plainer Settings labels; the Playbook dropdown sized like Client; one accent colour; a hint on why Start is greyed out; placeholder text for empty playbook instructions.
+  - **Verify:** each item checked in a browser at 375, 642 and 1440 wide.
+  - **Result (2026-11-27):** all 11 items as in the prototype; checked at 375, 642 and 1440. On a phone, "Test playbook changes on past corrections" is too long for its three buttons, which drop below it.
+
+### Phase 18: How a run shows its work (asked 2026-11-26)
+
+Today a run shows one line per action the agent took (20-40 in a normal run), each cut short, and none can be opened. The person can't tell at a glance what stage the run is in or what is left. Codex and similar tools fold the actions under short headings and show the agent's own checklist. Each step that changes a screen starts with a prototype.
+
+- [x] 🟩 **Step 62: Steps folded by stage, and readable in full** (prototype first) — the actions fold under each stage (Reading files, Filling in, Checking) with a one-line summary and the time it took. Clicking an action shows it in full: what it was for, the files it touched, and what came back.
+  - **Verify:** in a browser, a live run and a finished run of the sample packet: fold and unfold each stage, open three actions, at 642 and 1440 wide.
+- [x] 🟩 **Step 63: Short summaries of the agent's thinking** (prototype first) — OpenAI does not show a model's raw thinking, but can send a short summary of it. Shown as a brief heading above the actions it led to, folded by default. A Settings switch: off, short or detailed.
+  - **Verify:** a live run with each setting; I report the extra cost per run, and the switch reaches the run.
+- [x] 🟩 **Step 64: The agent keeps a plan** — a tool the agent uses to write its plan as a short checklist and tick steps off as it goes. The plan is kept with the run, survives condensed history and a picked-up run, and is shown at the top of the run (prototype first).
+  - **Verify:** tests for writing, updating and restoring the plan after a stop; a live run of the sample packet with and without the tool: the score, the cost, and whether the plan matched what it did.
+  - **Built (2026-11-27), live check left for Steps 62-64:** the agent keeps its plan with an `update_plan` tool; the plan is stored with the run, given back after condensing and on a continued run, and dropped on Start over or Continue from an earlier version. Stages fold with the plan steps ticked in them (counts when there is none); an action opens in full with its code folded. "Show the agent's thinking" (Off, Short, Detailed; Short by default) asks for summaries, and a service that refuses them is asked again once without. Tests in `tests/test_run_work.py`; screens checked at 1440, 642 and 375 on written test data. Not yet known: whether the gateway sends summaries, their cost, and the score with the plan tool.
+  - **Live check (2026-11-27), direct OpenAI (gpt-6-luna), sample packet, one run per thinking setting:** every run scored 10 of 10 and kept a five-step plan, ticked as it went (3-4 plan updates). Off: 97k tokens, 2m 40s. Short: 91k tokens, 2m 40s, 8 thinking headings (about 3,900 characters in all). Detailed: 125k tokens, 3m 20s, 14 headings (about 7,500 characters). The earlier sample run without the plan tool used 133k tokens and 3.5 minutes, so the plan adds no visible cost. Short costs about the same as Off within run-to-run noise; Detailed cost about 30% more in this run. Not checked: the enterprise gateway (it may not send summaries; the run then carries on without them).
+  - **Step 62 fix (2026-11-27):** a stage's one-line summary listed plan steps from a later stage, because the agent marks a step as started just before it starts, while the stage still names the one before. A step now counts towards the stage of the first script or save after it was started; status lines do not count, and each new run starts afresh. Checked on the live Detailed run: Reading files lists the two reading steps, Filling in the three after. The stages, timings and opened actions read correctly at 1440 and 642.
 
 ## Risks
 

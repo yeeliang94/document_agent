@@ -131,7 +131,11 @@ def test_a_job_is_offered_finished_runs_of_its_own_playbook_and_keeps_that_list(
         assert [(r['label'], r['title']) for r in spec.past_runs] == [
             ('earlier-1', '2026-05 - Run 5'), ('earlier-2', '2026-04 - Run 4'), ('earlier-3', '2026-03 - Run 3'),
         ]  # fmt: skip
-        assert spec.past_runs[0]['outputs'] == store.path(old[4]['id']) / 'outputs'
+        # Read from this job's own copy, taken while that run was finished: a change to it later does not reach here.
+        copy = spec.past_runs[0]['outputs']
+        assert copy == store.path(job['id']) / 'past' / 'earlier-1' and (copy / 'out.xlsx').read_bytes() == b'x'
+        (store.path(old[4]['id']) / 'outputs' / 'out.xlsx').write_bytes(b'changed after')
+        assert (service.job_spec(store, store.get(job['id'])).past_runs[0]['outputs'] / 'out.xlsx').read_bytes() == b'x'
         assert spec.past_runs[0]['goal'] == 'Run 5'
         # The list is kept on the job: a run finished later does not shift the labels, a deleted run drops out.
         finished(upload(client, goal='Later'))

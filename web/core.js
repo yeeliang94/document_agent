@@ -15,6 +15,7 @@ const icons = {
   x: 'M6 6l12 12M18 6L6 18',
   back: 'M15 6l-6 6 6 6',
   chev: 'M9 6l6 6-6 6',
+  tick: 'M5 12.5l4.5 4.5L19 7',
   down: 'M12 4v12M7 11l5 5 5-5M5 20h14',
   clip: 'M20 11l-8.5 8.5a5 5 0 01-7-7L13 4a3.5 3.5 0 015 5l-8.5 8.5a2 2 0 01-3-3L14 7',
   up: 'M12 20V8M7 13l5-5 5 5M5 4h14',
@@ -26,15 +27,69 @@ const icons = {
   down1: 'M6 9l6 6 6-6',
   more: 'M7 12a1 1 0 11-2 0 1 1 0 012 0zM13 12a1 1 0 11-2 0 1 1 0 012 0zM19 12a1 1 0 11-2 0 1 1 0 012 0z',
   side: 'M4 5h16v14H4zM9 5v14',
+  comment: 'M4 5h16v11h-9l-5 4v-4H4z',
+  mic: 'M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4',
+  stop: 'M8 8h8v8H8z',
+  spin: 'M12 4a8 8 0 108 8',
 };
 export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"/></svg>`;
 export const btn = (action, label, kind = 'quiet', disabled = false, glyph = '') =>
   `<button class="btn ${kind}" data-action="${action}" ${attr('disabled', disabled)}>${glyph ? icon(glyph) : ''}${esc(label)}</button>`;
+// A long name is cut in the middle, so its end (the month, the version, the file type) stays readable; CSS shrinks
+// the start only, and never below a few letters (.cut in styles.css). While a find is on, the match is marked.
+const KEEP = 12;
+export function nameHtml(name, query = '') {
+  name = String(name ?? '');
+  const at = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
+  // Marks the match within one part of the name; a match across the cut is marked in each part it touches.
+  const part = (text, from) => {
+    if (at < 0) return esc(text);
+    const a = Math.max(0, at - from);
+    const b = Math.min(text.length, at + query.length - from);
+    return a >= b ? esc(text) : `${esc(text.slice(0, a))}<mark>${esc(text.slice(a, b))}</mark>${esc(text.slice(b))}`;
+  };
+  if (name.length <= KEEP + 6) return `<span class="cut"><span class="start">${part(name, 0)}</span></span>`;
+  const cut = name.length - KEEP;
+  return `<span class="cut"><span class="start">${part(name.slice(0, cut), 0)}</span><span class="end">${part(name.slice(cut), cut)}</span></span>`;
+}
+
+// The agent's own records among a run's outputs: its notes and summary, shown apart from what it made for the person,
+// and the two files the app reads for itself, not listed at all.
+export const HIDDEN_OUTPUTS = ['document_map.json', 'provenance.json'];
+export const isNote = (name) => name === 'notes.md' || /(^|_)processing_summary\.txt$/i.test(name);
+export const isDeliverable = (name) => !HIDDEN_OUTPUTS.includes(name) && !isNote(name);
+
+// Facts read as one line, joined by commas: "Reads monthly payslips, 2 programs". A full stop ending a fact goes.
+export const facts = (...parts) =>
+  parts
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .map((part, i, all) => (i < all.length - 1 ? part.replace(/\.$/, '') : part))
+    .join(', ');
+
 export const pill = (tone, label) => `<span class="pill ${tone}">${esc(label)}</span>`;
 
 const monthParts = new Intl.DateTimeFormat('en', { year: 'numeric', month: '2-digit' }).formatToParts(new Date());
 const currentPeriod =
   monthParts.find((p) => p.type === 'year').value + '-' + monthParts.find((p) => p.type === 'month').value;
+
+// Whether the plan at the top of a run shows every step: closed unless the person opened it, kept in this browser.
+const PLAN_KEY = 'di-plan-open';
+function planKept() {
+  try {
+    return localStorage.getItem(PLAN_KEY) === '1';
+  } catch {
+    return false; // storage blocked: the plan starts folded
+  }
+}
+export function keepPlanOpen(open) {
+  state.planOpen = open;
+  try {
+    localStorage.setItem(PLAN_KEY, open ? '1' : '0');
+  } catch {
+    // storage blocked: the choice lasts this visit only
+  }
+}
 
 export const state = {
   view: 'run', // run | playbooks | playbook | clients | client | settings | log
@@ -67,7 +122,11 @@ export const state = {
   jobs: [],
   events: [],
   seen: 0, // highest event number already drawn, so only newer items animate in
-  toggled: new Set(), // work blocks the user opened or closed by hand
+  toggled: new Map(), // work blocks, stages and thinking notes the user opened or closed by hand: id to open or not
+  act: null, // the action opened in full, by its event number; see thread.js
+  actCode: false, // the opened action shows its code
+  scripts: {}, // each opened action's code and what it printed, as fetched: { code, output } or { error }
+  planOpen: planKept(), // the plan at the top of the run opened in full; kept in this browser for every run
   wrapped: new Set(), // near-limit cards answered with Let it wrap up, as "job id:event number"
   files: [],
   template: null,
@@ -90,6 +149,10 @@ export const state = {
   map: null, // the agent's decision for each file, by stored path
   mapKey: '',
   mapFilter: 'all',
+  fileQuery: '', // the find box over the source files
+  openFolders: new Set(), // folders unfolded in a long list of sources
+  checksOpen: false, // the checks, folded into one line, unfolded
+  rail: true, // at full screen with a file open, the list of files beside it
   showFiles: false,
   filter: 'all',
   search: '',
@@ -121,7 +184,7 @@ export const STATUS = {
   running: ['live', 'Working'],
   pausing: ['live', 'Pausing'],
   paused: ['', 'Paused'],
-  waiting: ['warn', 'Needs your answer'],
+  waiting: ['warn', 'Needs you'],
   completed: ['ok', 'Finished'],
   partial: ['warn', 'Partly done'],
   failed: ['bad', 'Stopped'],
@@ -139,6 +202,24 @@ export function jobTitle(job) {
   const goal = String(job.title || job.instructions || '').split('\n')[0].trim();
   if (!when && goal) return goal.length > 48 ? `${goal.slice(0, 47)}…` : goal;
   return `${when} ${label.toLowerCase()}`.trim() || 'Run';
+}
+
+// Runs that would read the same in a list get the time they were started beside the name, so each can be told
+// apart without opening it. Maps a run's id to that time, or '' when its name is already unique.
+const STARTED = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+const STARTED_EXACTLY = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); // prettier-ignore
+
+export function telling(jobs) {
+  const titles = jobs.map((j) => jobTitle(j));
+  const times = jobs.map((j) => STARTED.format(new Date(j.created_at)));
+  const count = (list, i) => list.filter((x, k) => x === list[i] && titles[k] === titles[i]).length;
+  return Object.fromEntries(
+    jobs.map((j, i) => {
+      if (titles.filter((t) => t === titles[i]).length < 2) return [j.id, ''];
+      // Two started in the same minute are told apart by the second.
+      return [j.id, count(times, i) > 1 ? STARTED_EXACTLY.format(new Date(j.created_at)) : times[i]];
+    }),
+  );
 }
 
 export const baseName = (path) => String(path || '').split('/').pop();
@@ -159,6 +240,8 @@ export function storedPath(path) {
 export const fmtTime = (t) =>
   t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 export const bytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil((n || 0) / 1024)} KB`);
+// A money figure from the cost API: cents, or less than a cent.
+export const money = (usd) => (usd >= 0.01 || !usd ? `$${usd.toFixed(2)}` : '<$0.01');
 export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export function duration(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -169,20 +252,37 @@ export function duration(ms) {
 
 // --- Network ---------------------------------------------------------------
 
-export function toast(message) {
-  $('#toast').textContent = message;
-  $('#toast').classList.add('visible');
+// A short message at the bottom of the screen. `action` is one button's HTML (an Undo), handled like any other click.
+export function toast(message, action = '') {
+  const box = $('#toast');
+  box.innerHTML = `<span>${esc(message)}</span>${action}`;
+  box.classList.toggle('acts', !!action);
+  box.classList.add('visible');
   clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 6000);
+  state.toastTimer = setTimeout(hideToast, action ? 10000 : 6000);
+}
+export const hideToast = () => $('#toast').classList.remove('visible');
+
+// One Cancel stands for the requests refused with it, so the box does not come straight back for each of them.
+let declinedAt = 0;
+function askToken() {
+  if (Date.now() - declinedAt < 2000) return null;
+  const token = window.prompt('Application access token');
+  if (!token) declinedAt = Date.now();
+  return token;
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
+  // JSON unless the body says otherwise: a form or a file (a recording) carries its own type.
+  if (options.body && !(options.body instanceof FormData) && !(options.body instanceof Blob) && !headers.has('Content-Type'))
+    headers.set('Content-Type', 'application/json');
+  const sent = state.token;
   let res = await fetch(path, { ...options, headers });
   if (res.status === 401) {
-    const token = window.prompt('Application access token');
+    // Several requests refused at once ask once: those after the first use the token it was given.
+    const token = state.token && state.token !== sent ? state.token : askToken();
     if (token) {
       state.token = token;
       sessionStorage.setItem('di-token', token);

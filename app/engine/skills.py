@@ -47,11 +47,11 @@ def load_skills(spec) -> bytes:
             files = {path: found.read_bytes() for path, found in skill_files(spec.skills_dir / name).items()}
             if MAIN not in files:
                 raise SkillsUnusable(
-                    f'The files of skill "{name}" are missing from this job. Start a new run to use it.'
+                    f'The files of skill "{name}" are missing from this run. Start a new run to use it.'
                 )
             if skill.get('sha256') and fingerprint(files) != skill['sha256']:
                 raise SkillsUnusable(
-                    f'The files of skill "{name}" changed after this job was created. Start a new run.'
+                    f'The files of skill "{name}" changed after this run was created. Start a new run.'
                 )
             for path, content in files.items():
                 if path in programs(files):  # checked above as uploaded; the sandbox's copy notes when it starts

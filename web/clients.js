@@ -3,8 +3,9 @@
 // A client's notes apply to all of their work, on top of the playbook. They are kept as versions the way a
 // playbook's instructions are, so this page reuses the playbook page's pieces (playbooks.js).
 
-import { $, api, attr, btn, esc, icon, jobTitle, plural, state, toast } from './core.js';
-import { base, dialog, historyHtml, nameField, startDraft, unsaved, versionLabel } from './playbooks.js';
+import { $, api, attr, btn, esc, icon, inGroup, jobTitle, jobUrl, plural, state, toast } from './core.js';
+import { micButton, voiceNote } from './voice.js';
+import { base, dialog, historyBody, nameField, showVersion, startDraft, unsaved, versionClick, versionLabel } from './playbooks.js';
 
 const TABS = [
   ['notes', 'Notes'],
@@ -30,7 +31,7 @@ export function clientsPage() {
       const runs = runsOf(c.id);
       const books = [...new Set(runs.map((j) => j.playbook).filter(Boolean))].join(', ');
       return `<button class="row link" data-client="${esc(c.id)}"><span class="name"><span>${esc(c.name)}</span>
-        <span class="desc">${esc([books, plural(runs.length, 'run')].filter(Boolean).join(' · '))}</span></span>${icon('chev')}</button>`;
+        <span class="desc">${esc([books, plural(runs.length, 'run')].filter(Boolean).join(', '))}</span></span>${icon('chev')}</button>`;
     })
     .join('');
   return page(`<div class="page-head"><h1>Clients</h1>${btn('new-client', 'New client', 'primary', false, 'plus')}</div>
@@ -39,12 +40,13 @@ export function clientsPage() {
 
 // --- One client -------------------------------------------------------------
 
-export async function openClient(id) {
+export async function openClient(id, { keepTab = false, version = null } = {}) {
   state.view = 'client';
   // Notes typed and not saved are kept for the visit, as a playbook's are.
-  state.client = state.clientPages[id] ||= { id, tab: 'notes', data: null, draft: null, versions: [], saved: 0 };
-  state.client.tab = 'notes'; // a client opens on its notes, from the list or from a run
+  state.client = state.clientPages[id] ||= { id, kind: 'client', tab: 'notes', data: null, draft: null, versions: [], saved: 0 };
+  if (!keepTab) state.client.tab = 'notes'; // a client opens on its notes, from the list or a run; Back keeps its tab
   await loadClient();
+  await showVersion(state.client, version); // the address names the version on show, or none
 }
 
 async function loadClient(client = state.client) {
@@ -72,7 +74,7 @@ function notesTab(client) {
     client.saved === client.data.version && client.saved > 1
       ? `<div class="saved"><span>Saved as version ${client.saved}</span><button class="btn text small" data-client-restore="${client.saved - 1}">Undo</button></div>`
       : '';
-  return `<div class="box tall book"><textarea id="client-notes" aria-label="Notes for ${esc(client.data.name)}" placeholder="What to follow for ${esc(client.data.name)}"></textarea></div>
+  return `<div class="box tall book"><textarea id="client-notes" aria-label="Notes for ${esc(client.data.name)}" placeholder="What to follow for ${esc(client.data.name)}"></textarea>${micButton('client-notes')}</div>${voiceNote('client-notes')}
     ${saved}${addedHtml(client)}
     <div class="end">${btn('client-save', 'Save', 'primary', state.busy || !unsaved(client))}</div>`;
 }
@@ -81,7 +83,7 @@ function runsTab(client) {
   const rows = runsOf(client.id)
     .map(
       (j) => `<button class="row link" data-job="${esc(j.id)}"><span class="name"><span>${esc(jobTitle(j))}</span>
-        <span class="desc">${esc([j.playbook, new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })].filter(Boolean).join(' · '))}</span></span>${icon('chev')}</button>`,
+        <span class="desc">${esc([j.playbook, new Date(j.created_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })].filter(Boolean).join(', '))}</span></span>${icon('chev')}</button>`,
     )
     .join('');
   return rows ? `<div class="rows">${rows}</div>` : '<p class="empty">No runs yet.</p>';
@@ -91,8 +93,8 @@ export function clientPage() {
   const client = state.client;
   if (!client?.data) return page('<p class="empty">Loading</p>');
   const tabs = TABS.map(([id, label]) => `<button class="${client.tab === id ? 'on' : ''}" data-client-tab="${id}">${label}</button>`).join('');
-  const body = { notes: notesTab, runs: runsTab, history: (c) => historyHtml(c, 'client-restore') }[client.tab](client);
-  return page(`<div class="page-head"><button class="icon-btn" data-view="clients" aria-label="Back to clients">${icon('back')}</button>
+  const body = { notes: notesTab, runs: runsTab, history: historyBody }[client.tab](client);
+  return page(`<div class="page-head"><button class="icon-btn" data-back="clients" aria-label="Back" title="Back">${icon('back')}</button>
       <h1>${esc(client.data.name)}</h1>${btn('rename-client', 'Rename', 'text')}</div>
     <div class="filter">${tabs}</div>${body}`);
 }
@@ -130,11 +132,12 @@ async function save(client, path, body, submitted) {
   return true;
 }
 
-async function restore(version) {
+async function restore(version, quiet = false) {
   const client = state.client;
-  if (!(await save(client, '/restore', { version, based_on: client.data.version }, client.draft))) return;
+  if (!(await save(client, '/restore', { version, based_on: client.data.version }, client.draft))) return false;
   client.saved = 0;
-  toast(`Restored version ${version}.`);
+  if (!quiet) toast(`Restored version ${version}.`);
+  return true;
 }
 
 export const clientActions = {
@@ -171,6 +174,7 @@ export async function submitClientDialog(form) {
 // Clicks on the client pages. Returns true when it handled the click.
 export async function clientClick(target, draw) {
   let el;
+  if (state.view === 'client' && state.client && (await versionClick(state.client, target, draw, restore))) return true;
   if ((el = target('[data-client]'))) {
     try {
       await openClient(el.dataset.client);
@@ -179,7 +183,7 @@ export async function clientClick(target, draw) {
       draw();
       throw error;
     }
-  } else if ((el = target('[data-client-tab]'))) state.client.tab = el.dataset.clientTab;
+  } else if ((el = target('[data-client-tab]'))) Object.assign(state.client, { tab: el.dataset.clientTab, open: null });
   else if ((el = target('[data-client-restore]'))) await restore(Number(el.dataset.clientRestore));
   else return false;
   draw();
@@ -200,7 +204,7 @@ export function clientRow(row) {
   const suggestion = hint
     ? `<span class="when">Suggested: ${esc(hint.name)}</span><button class="btn quiet small" data-use-client="${esc(hint.id)}">Use</button>`
     : '';
-  return row('Client', `<div class="val wraps">${suggestion}<select class="field" aria-label="Client" data-run-client>${options}</select></div>`);
+  return row('Client', `<div class="val wraps">${suggestion}<select class="field pick" aria-label="Client" data-run-client>${options}</select></div>`);
 }
 
 export function chooseRunClient(id) {
@@ -233,3 +237,54 @@ export function followingHtml(job) {
 
 // The run's client as listed, for its latest version.
 export const runClient = (job = state.job) => clients().find((c) => c.id === job?.client?.id);
+
+// --- After a client's first run --------------------------------------------------------------------------------
+// What the agent found worth keeping for a client with no notes yet (the run's report.for_next_time), offered in
+// one slim line at the top of the run; opened, it lists them, and one click saves them all as the client's notes.
+
+const hidden = new Set(); // runs whose "Saved" line was closed
+const opened = new Set(); // runs whose offer is open
+
+export function offerHtml() {
+  const job = state.job;
+  const keep = job?.report?.for_next_time || [];
+  const offer = job?.offer || {};
+  if (!keep.length || !job.client?.id || offer.dismissed || !inGroup('finished', job.status) || hidden.has(job.id)) return '';
+  // Offered only onto the notes the run was made with: once they changed (another run, a person), the person adds
+  // what they want by hand.
+  const now = clients().find((c) => c.id === job.client.id);
+  if (!offer.saved && now && job.client.version && now.version !== job.client.version) return '';
+  const name = esc(job.client.name) + (/s$/i.test(job.client.name) ? "'" : "'s"); // Bluefin Foods', Acme's
+  if (offer.saved) {
+    return `<div class="offer"><div class="offer-line"><span class="what">Saved to ${name} notes.</span>
+      <button class="btn text small" id="offer-undo" data-action="offer-undo" ${attr('disabled', state.busy)}>Undo</button><button class="btn text small" data-client="${esc(job.client.id)}">View notes</button>
+      <button class="icon-btn" data-action="offer-hide" aria-label="Close">${icon('x')}</button></div></div>`;
+  }
+  const open = opened.has(job.id);
+  const body = open
+    ? `<div class="offer-body"><ul>${keep.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
+        <div class="end">${btn('offer-save', 'Save to notes', 'primary small', state.busy)}</div></div>`
+    : '';
+  return `<div class="offer"><div class="offer-line">
+      <button class="open" id="offer-toggle" data-action="offer-toggle" aria-expanded="${open}">${icon('chev')}<span>Keep ${plural(keep.length, 'thing')} for ${name} next run?</span></button>
+      <button class="icon-btn" data-action="offer-dismiss" aria-label="Not now" title="Not now">${icon('x')}</button></div>${body}</div>`;
+}
+
+const keepFor = async (action) => {
+  const id = state.job.id;
+  try {
+    const job = await api(jobUrl('/keep-for-client'), { method: 'POST', body: JSON.stringify({ action }) });
+    if (state.job?.id === id) state.job = job; // another run opened meanwhile keeps its own place
+  } finally {
+    await refreshClients(); // the client's notes and version changed, or changed under it (a refused save)
+  }
+};
+export const offerLocal = {
+  'offer-toggle': () => (opened.has(state.job.id) ? opened.delete(state.job.id) : opened.add(state.job.id)),
+  'offer-hide': () => hidden.add(state.job.id),
+};
+export const offerServer = {
+  'offer-save': () => keepFor('save'),
+  'offer-undo': () => keepFor('undo'),
+  'offer-dismiss': () => keepFor('dismiss'),
+};

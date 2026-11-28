@@ -282,6 +282,13 @@ def round_message(number: int, entries: list[dict], lessons: bool = False, clien
                 '"playbook" when anyone doing this kind of work should follow it. Where the comment says where it '
                 'is remembered, that place is used.'
             )
+    if any(given(entry['path']) for entry in entries):
+        lines[0] += (
+            ' You change only your outputs. A comment on a file you were given (a source file or the template) is a '
+            'note or a question about that file, never a change to make to it, so leave that file as it is. Take a '
+            'note into account wherever it bears on your outputs, and say in its answer what you did with it. Answer '
+            'a question in its answer, from what the files show.'
+        )
     if any(entry.get('picture') for entry in entries):
         lines[0] += (
             ' The pictures that come with this message show where the pins are. They are for you to look at; they '
@@ -289,6 +296,8 @@ def round_message(number: int, entries: list[dict], lessons: bool = False, clien
         )
     for entry in entries:
         parts = [f'{number}.{entry["n"]} file: {entry["path"]}', f'spot: {entry["where"]}']
+        if given(entry['path']):
+            parts.append('a file you were given: a note or a question, not a change')
         if entry.get('picture'):
             parts.append(f'pin {entry["n"]} on picture {entry["picture"]}')
         if entry['now'] is not None:
@@ -302,6 +311,12 @@ def round_message(number: int, entries: list[dict], lessons: bool = False, clien
         parts.append(f'comment: {_quoted(entry["text"])}')
         lines.append(' | '.join(parts))
     return '\n'.join(lines)
+
+
+def given(relative: str) -> bool:
+    """Whether a commented file is one the agent was given (an upload or the template), which it never edits,
+    rather than one of its outputs."""
+    return relative.partition('/')[0] != 'outputs'
 
 
 SPOT_FIELDS = ('path', 'sheet', 'cell', 'page', 'x', 'y', 'w', 'h', 'line')
@@ -722,16 +737,17 @@ def change_report(store, job_id: str) -> dict | None:
     if not open_rounds:
         return None
     outputs = root / 'outputs'
-    changed, unchanged, touched, spots = [], [], set(), []
+    changed, unchanged, touched, spots, notes = [], [], set(), [], 0
     for entry in open_rounds:
         before_folder = _folder(root, entry['number']) / 'before'
         differs = _differences(before_folder, outputs)
         for comment in entry['comments']:
             label = f'{entry["number"]}.{comment["n"]} {comment["path"]}, {comment["where"]}'
             before = len(changed)
-            folder, _, name = comment['path'].partition('/')
-            if folder != 'outputs':
-                unchanged.append(f'{label}: a comment on a source file; there is nothing to compare')
+            name = comment['path'].partition('/')[2]
+            if given(comment['path']):
+                unchanged.append(f'{label}: a note or question on a file you were given, which you do not change')
+                notes += 1
             elif name not in differs:
                 unchanged.append(f'{label}: the file is as it was')
             elif (pair := _spot_text(before_folder / name, outputs / name, comment)) is not None:
@@ -786,6 +802,7 @@ def change_report(store, job_id: str) -> dict | None:
         'rounds': [r['number'] for r in open_rounds],
         'changed_where_asked': changed,
         'not_changed_where_asked': unchanged,
+        'notes': notes,  # of those, comments on files the agent was given: notes or questions, never changed
         'spots': spots,  # the same verdict per comment, for the screen to mark the spots that changed
         'unanswered': unanswered,  # comments the agent has not yet answered with a save
         'changed_elsewhere': elsewhere,
@@ -815,7 +832,8 @@ def close_rounds(store, job_id: str) -> dict | None:
     store.mutate(job_id, done)
     store.event(
         job_id, 'feedback.done', 'Comments checked against the saved files', type='job', rounds=report['rounds'],
-        changed=len(report['changed_where_asked']), unchanged=len(report['not_changed_where_asked']),
+        changed=len(report['changed_where_asked']), notes=report['notes'],
+        unchanged=len(report['not_changed_where_asked']) - report['notes'],
         elsewhere=report['changed_elsewhere_count'],
     )  # fmt: skip
     return report

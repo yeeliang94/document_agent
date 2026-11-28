@@ -282,7 +282,7 @@ NUMBER = re.compile(r'^\(?-?\s*(?:RM|MYR|USD|SGD|EUR|GBP|AUD|[A-Z]{0,2}\$|€|£
 
 
 def find_in_pdf(
-    root: Path, relative: str, needles: list[str], whole_words: bool = False
+    root: Path, relative: str, needles: list[str], whole_words: bool = False, version: int | None = None
 ) -> tuple[list[dict], bool, bool]:
     """Where each needle appears in a PDF, page by page: {page, x, y, w, h, needle} with the box as shares of the
     page's width and height. Also whether the search stopped before the end, and whether any page read has text: a
@@ -292,7 +292,7 @@ def find_in_pdf(
     whole app, so it is held one page at a time: page images for other people are not kept waiting for a search."""
     import pypdfium2 as pdfium
 
-    path = job_file(root, relative)
+    path = any_file(root, relative, version)
     if path.suffix.lower() != '.pdf':
         raise ValueError('Only a PDF can be searched this way')
     needles = [n.strip() for n in needles]
@@ -381,13 +381,22 @@ MAX_FORMS = 120  # ways of writing a row's values looked for in one source
 MAX_SEARCH_ROWS = 5000  # rows of each sheet, or lines of a text file, searched for a row's values
 
 
-def _where_values(path: Path, groups: list[tuple[str, ...]]) -> dict[int, str]:
+def _spot(row: int, column: int, sheet: str | None = None) -> dict:
+    """Where a link opens for a value found at this cell: the cell itself while the preview shows it, else the sheet."""
+    spot = {'sheet': sheet} if sheet else {}
+    if row <= MAX_ROWS and column <= MAX_COLUMNS:
+        spot['cell'] = f'{get_column_letter(column)}{row}'
+    return spot
+
+
+def _where_values(path: Path, groups: list[tuple[str, ...]]) -> tuple[dict[int, str], dict[int, dict]]:
     """Where each group of forms is first found in a workbook, CSV or text file, as the page names the place. A
     number is matched as a number, so 4500 in a cell is found for 4,500.00; text is matched as a whole word or
-    number, as the page outlines it (2,500.85 is in "Total 2,500.85" but not in "12,500.85")."""
+    number, as the page outlines it (2,500.85 is in "Total 2,500.85" but not in "12,500.85"). Also the exact spot of
+    each, for a link that opens the file there: {'sheet', 'cell'} in a workbook, {'cell'} in a CSV, {'line'} in text."""
     kind = path.suffix.lower()
     if kind not in SHEETS | TEXT | {'.csv', '.docx'}:
-        return {}
+        return {}, {}
     wanted = {g: set(group) for g, group in enumerate(groups) if group}
     patterns = {
         g: re.compile(
@@ -396,8 +405,9 @@ def _where_values(path: Path, groups: list[tuple[str, ...]]) -> dict[int, str]:
         for g, group in wanted.items()
     }
     places: dict[int, str] = {}
+    spots: dict[int, dict] = {}
 
-    def look(value, place: str) -> None:
+    def look(value, place: str, spot: dict) -> None:
         if value is None or value == '' or isinstance(value, bool):
             return
         numbers = set(_forms(str(value))) if isinstance(value, (int, float)) else set()
@@ -405,28 +415,29 @@ def _where_values(path: Path, groups: list[tuple[str, ...]]) -> dict[int, str]:
         for g in [g for g in wanted if g not in places]:
             if (numbers and numbers & wanted[g]) or (not numbers and patterns[g].search(text)):
                 places[g] = place
+                spots[g] = spot
 
     if kind in SHEETS:
         book = load_workbook(path, read_only=True, data_only=True)
         try:
             for ws in book.worksheets:
                 for r, cells in enumerate(ws.iter_rows(max_row=MAX_SEARCH_ROWS, values_only=True), 1):
-                    for value in cells:
-                        look(value, f'{ws.title}, row {r}')
+                    for c, value in enumerate(cells, 1):
+                        look(value, f'{ws.title}, row {r}', _spot(r, c, ws.title))
                     if len(places) == len(wanted):
-                        return places
+                        return places, spots
         finally:
             book.close()
     elif kind == '.csv':
         for r, cells in enumerate(csv.reader(io.StringIO(_text(path)[:MAX_CHARS])), 1):
             if r > MAX_SEARCH_ROWS:
                 break
-            for value in cells:
-                look(value, f'row {r}')
+            for c, value in enumerate(cells, 1):
+                look(value, f'row {r}', _spot(r, c))
     else:
         for n, line in enumerate(text_of(path)[:MAX_CHARS].split('\n')[:MAX_SEARCH_ROWS], 1):
-            look(line, f'line {n}')
-    return places
+            look(line, f'line {n}', {'line': n})
+    return places, spots
 
 
 def locate_values(root: Path, relative: str, values: list[str]) -> dict:
@@ -441,7 +452,7 @@ def locate_values(root: Path, relative: str, values: list[str]) -> dict:
         for form in group:
             forms.setdefault(form, set()).add(g)
     needles = list(forms)[:MAX_FORMS]
-    found = {'page': None, 'boxes': [], 'wanted': needles, 'values': {}}
+    found = {'page': None, 'boxes': [], 'wanted': needles, 'values': {}, 'spots': {}}
     if not needles:
         return found
     path = job_file(root, relative)
@@ -451,17 +462,19 @@ def locate_values(root: Path, relative: str, values: list[str]) -> dict:
         return {v: places[g] for v in dict.fromkeys(values) if (g := groups.index(tuple(_forms(v)))) in places}
 
     if kind != '.pdf':
-        return {**found, 'values': named(_where_values(path, groups))}
+        places, spots = _where_values(path, groups)
+        return {**found, 'values': named(places), 'spots': named(spots)}
     hits, _, _ = find_in_pdf(root, relative, needles, whole_words=True)
     pages: dict[int, set[int]] = {}
-    first: dict[int, str] = {}  # the first page each value is on
+    first: dict[int, int] = {}  # the first page each value is on
     for hit in sorted(hits, key=lambda h: h['page']):
         for g in forms[needles[hit['needle']]]:
             pages.setdefault(hit['page'], set()).add(g)
-            first.setdefault(g, f'page {hit["page"]}')
+            first.setdefault(g, hit['page'])
     if not pages:
         return found
-    found['values'] = named(first)
+    found['values'] = named({g: f'page {p}' for g, p in first.items()})
+    found['spots'] = named({g: {'page': p} for g, p in first.items()})
     page = max(pages, key=lambda p: (len(pages[p]), -p))
     boxes = list(
         {tuple(round(h[k], 5) for k in 'xywh'): {k: h[k] for k in 'xywh'} for h in hits if h['page'] == page}.values()

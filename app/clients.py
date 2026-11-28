@@ -136,6 +136,10 @@ def follow(store, job_id: str, name: str) -> dict:
     reply = (
         f'This run now follows the notes for {client["name"]}. They apply the way the house rules do; where they '
         'and the house rules disagree, follow the client notes and say so in notes.md.\n\n'
-        + (client['text'].strip() or '(No notes yet.)')
+        + (
+            client['text'].strip()
+            or '(No notes yet. In your final answer, put in for_next_time what a later run for '
+            'this client should follow, so the user can keep it as their notes.)'
+        )
     )
     return {'reply': reply, 'client': {'name': client['name'], 'notes': client['text']}}
