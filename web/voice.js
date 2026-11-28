@@ -13,7 +13,7 @@
 // is reused on every run and playbook, so a recording stops, keeping what it wrote, as soon as its screen is left or
 // the box is changed by something other than the recording (typing, or Send clearing it).
 
-import { $, api, esc, icon, request, state } from './core.js';
+import { $, api, currentPlaybook, esc, icon, request, state } from './core.js';
 
 let redraw = () => {};
 let active = null; // the recording being started or listened to; one at a time
@@ -73,10 +73,12 @@ function clock(started) {
 
 // --- Whose box ------------------------------------------------------------------------------------------------
 
-// The screen a box belongs to. Comment and reply boxes belong to the one comment or reply being written.
+// The screen a box belongs to. Comment and reply boxes belong to the one comment or reply being written, and New
+// run's goal to the playbook picked there, since each playbook keeps its own goal.
 const ownerOf = (target) => [
   state.view, state.job?.id, state.book?.id, state.client?.id,
   target === 'note' ? state.commentDraft : null, target === 'reply-text' ? state.reply : null,
+  target === 'run-instructions' ? currentPlaybook()?.id : null,
 ]; // prettier-ignore
 
 // The recording's box, if it is still on screen, still on the same screen and holds what the recording last wrote.
